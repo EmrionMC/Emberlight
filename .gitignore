@@ -1,0 +1,12 @@
+# Shaderpacks are third-party licensed: never commit
+testpacks/
+# Third-party sources used as spec (Iris etc.)
+reference/
+.gradle/
+build/
+*/build/
+run/
+mod/run/
+.idea/
+*.iml
+out/

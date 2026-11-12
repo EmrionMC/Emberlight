@@ -1,0 +1,33 @@
+plugins { id 'java'; id 'application' }
+
+repositories { mavenCentral() }
+
+def lwjglNatives = 'natives-linux'
+dependencies {
+	implementation "org.lwjgl:lwjgl:${lwjgl_version}"
+	implementation "org.lwjgl:lwjgl-shaderc:${lwjgl_version}"
+	implementation "org.lwjgl:lwjgl-spvc:${lwjgl_version}"
+	runtimeOnly "org.lwjgl:lwjgl:${lwjgl_version}:${lwjglNatives}"
+	runtimeOnly "org.lwjgl:lwjgl-shaderc:${lwjgl_version}:${lwjglNatives}"
+	runtimeOnly "org.lwjgl:lwjgl-spvc:${lwjgl_version}:${lwjglNatives}"
+	implementation 'com.google.code.gson:gson:2.11.0'
+	testImplementation platform('org.junit:junit-bom:5.11.3')
+	testImplementation 'org.junit.jupiter:junit-jupiter'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.withType(JavaCompile).configureEach { options.release = 25; options.encoding = 'UTF-8' }
+test { useJUnitPlatform(); jvmArgs '--enable-native-access=ALL-UNNAMED'; systemProperty 'emrion.testpacks', rootProject.file('testpacks').absolutePath }
+application { mainClass = 'dev.emrion.shaders.converter.cli.ConverterCli' }
+jar {
+	manifest { attributes 'Main-Class': 'dev.emrion.shaders.converter.cli.ConverterCli' }
+}
+// Fat jar for `java -jar converter.jar ...`
+tasks.register('fatJar', Jar) {
+	archiveClassifier = 'all'
+	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+	manifest { attributes 'Main-Class': 'dev.emrion.shaders.converter.cli.ConverterCli', 'Enable-Native-Access': 'ALL-UNNAMED' }
+	exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA', 'module-info.class', 'META-INF/versions/*/module-info.class'
+	from sourceSets.main.output
+	from { configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) } }
+}
