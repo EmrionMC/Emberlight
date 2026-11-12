@@ -30,7 +30,7 @@ import org.jspecify.annotations.Nullable;
  * emrion.autotest.reload=N          after joining, reload the resource packs N times and log each duration
  * emrion.autotest.resourcepacks=/abs/pack.zip[;...]   (Gradle runClient only) symlink + enable these resource packs
  * emrion.autotest.tag=name          screenshots: run/screenshots/emrion-&lt;tag&gt;[-i].png
- * emrion.autotest.commands=cmd1;cmd2   extra commands (no slash) run at every position, before the teleport
+ * emrion.autotest.commands=cmd1;cmd2   extra commands (no slash) run at every position, after the teleport (once the chunks are loaded)
  * emrion.autotest.scenes=file      scene list instead of pos/time/commands (format: mod/emrion-scenes.txt);
  *                                  screenshots: run/screenshots/&lt;tag&gt;-&lt;scene&gt;.png
  * emrion.autotest.only=a,b         only these scenes of the list (e.g. the benchmark scene)
@@ -71,6 +71,7 @@ public final class AutoTest {
 	private boolean vsync;
 	private int fpsLimit;
 	private long settleStartFrame;
+	private boolean commandsRun;
 
 	private AutoTest() {
 		String file = System.getProperty(P + "scenes");
@@ -148,13 +149,20 @@ public final class AutoTest {
 				command(mc, "gamerule advance_weather false");
 				command(mc, "time set " + scene.time());
 				command(mc, "weather " + scene.weather());
-				scene.commands().forEach(c -> command(mc, c));
+				// teleport first: the scene commands (summon, setblock) fail silently in chunks that are not loaded yet
 				if (scene.pos() != null) command(mc, "tp @a " + scene.pos());
+				commandsRun = scene.commands().isEmpty();
 				go(State.WAIT_CHUNKS);
 			}
 			case WAIT_CHUNKS -> {
 				boolean built = mc.levelRenderer.hasRenderedAllSections();
 				if ((ticks >= waitTicks && built) || ticks >= 4 * waitTicks) {
+					if (!commandsRun) { // chunks are loaded now; run the commands, then wait again for the rebuilt sections
+						scenes.get(shot).commands().forEach(c -> command(mc, c));
+						commandsRun = true;
+						go(State.WAIT_CHUNKS);
+						return;
+					}
 					if (!built) EmrionShadersClient.LOG.warn("Autotest: chunk builds still pending, taking the screenshot anyway");
 					// worldgen animals in the freshly loaded chunks would wander differently in every run; scenes tag their own mobs
 					command(mc, "kill @e[type=!minecraft:player,tag=!emrion]");

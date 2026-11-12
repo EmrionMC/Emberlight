@@ -22,6 +22,9 @@ def packDir = file(findProperty('shaderPack') ?: rootProject.file('testpacks/unb
 def packSettings = file(findProperty('shaderSettings') ?: rootProject.file('testpacks/ComplementaryUnbound_r5.9.3 + EuphoriaPatches_1.10.5.txt'))
 def packName = packSettings.name - ~/\.txt$/ // same name as in the user's instance, so Iris finds <pack>.txt
 def compare = providers.gradleProperty('compare').isPresent()
+// The canonical comparison world: the one the Iris reference run created (and keeps using). runClient -Pcompare copies it
+// (read-only from the source) over its own run/saves/<world> before every start, so both runs render the same blocks.
+def sceneWorld = file(findProperty('sceneWorld') ?: 'run-iris/saves/scenes')
 configurations { irisReference { canBeConsumed = false } }
 dependencies { irisReference fileTree(irisModsDir) { include 'iris-fabric-*.jar', 'sodium-fabric-*.jar' } }
 
@@ -71,6 +74,13 @@ tasks.named('runClient') {
 	def optionsFile = file('run/options.txt')
 	doFirst {
 		if (compare) {
+			def world = emrionProps.get()['emrion.autotest.world']
+			if (world != null) {
+				if (!new File(sceneWorld, 'level.dat').isFile()) throw new GradleException("Comparison world ${sceneWorld} missing: run runIrisReference first or pass -PsceneWorld=<dir>")
+				def dst = file("run/saves/${world}")
+				project.delete(dst)
+				project.copy { from sceneWorld; into dst; exclude 'session.lock' }
+			}
 			linkPack(file('run'))
 			writeOptions(file('run'), 'vulkan')
 			args '--width', '1920', '--height', '1080'

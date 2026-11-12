@@ -31,6 +31,11 @@ public interface UniformSystem {
 
 	org.joml.Matrix4fc shadowProjection();
 
+	/** Player camera rotation and projection (gbufferModelView / gbufferProjection, GL convention), for shadow culling. */
+	org.joml.Matrix4fc gbufferModelView();
+
+	org.joml.Matrix4fc gbufferProjection();
+
 	/** Sky/fog colour for colortex0's default clear (Iris: fog colour, alpha 1). */
 	org.joml.Vector4fc clearFogColor();
 }

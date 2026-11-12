@@ -44,7 +44,17 @@ public class SectionCompilerMixin {
 	@WrapOperation(method = "compile", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/block/ModelBlockRenderer;tesselateBlock(Lnet/minecraft/client/renderer/block/BlockQuadOutput;FFFLnet/minecraft/client/renderer/block/BlockAndTintGetter;Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;Lnet/minecraft/client/renderer/block/dispatch/BlockStateModel;J)V"))
 	private void emrion$block(ModelBlockRenderer renderer, BlockQuadOutput output, float x, float y, float z, BlockAndTintGetter level, BlockPos pos,
 			BlockState state, BlockStateModel model, long seed, Operation<Void> original) {
-		if (EmrionVertexFormats.active()) BlockContext.get().block(state, pos.getX() & 15, pos.getY() & 15, pos.getZ() & 15);
-		original.call(renderer, output, x, y, z, level, pos, state, model, seed);
+		if (!EmrionVertexFormats.active()) {
+			original.call(renderer, output, x, y, z, level, pos, state, model, seed);
+			return;
+		}
+		BlockContext c = BlockContext.get();
+		c.block(state, pos.getX() & 15, pos.getY() & 15, pos.getZ() & 15);
+		c.inSection = true;
+		try {
+			original.call(renderer, output, x, y, z, level, pos, state, model, seed);
+		} finally {
+			c.inSection = false;
+		}
 	}
 }

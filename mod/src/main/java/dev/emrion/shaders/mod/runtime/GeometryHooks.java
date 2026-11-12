@@ -24,7 +24,7 @@ public final class GeometryHooks {
 	private GeometryHooks() {}
 
 	/** Iris WorldRenderingPhase ordinals (iris-spec §1.4); the pack hard-codes some of them. */
-	public static final int SKY = 1, SUNSET = 2, CUSTOM_SKY = 3, SUN = 4, MOON = 5, STARS = 6, VOID = 7, TERRAIN_SOLID = 8, ENTITIES = 11,
+	public static final int SKY = 1, SUNSET = 2, CUSTOM_SKY = 3, SUN = 4, MOON = 5, STARS = 6, VOID = 7, TERRAIN_SOLID = 8, ENTITIES = 11, BLOCK_ENTITIES = 12,
 			HAND_SOLID = 16, TERRAIN_TRANSLUCENT = 17, PARTICLES = 19, RAIN_SNOW = 21, WORLD_BORDER = 22, HAND_TRANSLUCENT = 23;
 
 	private static final Set<RenderPipeline> LOGGED = Collections.newSetFromMap(new IdentityHashMap<>());
@@ -46,6 +46,7 @@ public final class GeometryHooks {
 		FrameExecutor e = exec();
 		Context c = e == null ? null : e.context();
 		if (c == null) return null;
+		if (c == Context.WORLD && blockEntityDraw) c = Context.BLOCK_ENTITY;
 		CompiledRenderPipeline ours = e.pipelines().gbuffers.get(c, p);
 		if (ours == null && LOGGED.add(p)) EmrionShadersClient.LOG.warn("Pipeline {} draws in a gbuffers phase but has no pack pipeline; it renders vanilla", p.getLocation());
 		return ours;
@@ -170,6 +171,54 @@ public final class GeometryHooks {
 		if (h == null || e == null) return null;
 		hand = null;
 		return e.beginPhase(h.command(), h.context(), UniformSystem.Phase.HAND, h.stage());
+	}
+
+	// ---- block entities (Iris BLOCK_ENTITIES phase) ----
+
+	/** Name prefix of the block-entity copies of entity render types. */
+	private static final String BLOCK_ENTITY_PREFIX = "emrion_block_entity:";
+	private static final java.util.Map<net.minecraft.client.renderer.rendertype.RenderType, net.minecraft.client.renderer.rendertype.RenderType> BLOCK_ENTITY_TYPES =
+			new IdentityHashMap<>();
+	/** True while BlockEntityRenderDispatcher.submit runs with a pack active. */
+	public static boolean submittingBlockEntity;
+	private static boolean blockEntityDraw;
+
+	/**
+	 * While a block entity submits: its entity-program render types become a distinct copy (as Iris's OuterWrappedRenderType),
+	 * so MC batches them apart from entities and {@link #blockEntityDraw} can switch the program when they draw.
+	 */
+	public static net.minecraft.client.renderer.rendertype.RenderType blockEntityType(net.minecraft.client.renderer.rendertype.RenderType t) {
+		if (!submittingBlockEntity || t.isOutline()) return t;
+		var e = dev.emrion.shaders.mod.pipeline.GbufferMapping.get(t.pipeline());
+		if (e == null || !e.program().startsWith("gbuffers_entities")) return t;
+		return BLOCK_ENTITY_TYPES.computeIfAbsent(t, x -> net.minecraft.client.renderer.rendertype.RenderType.create(
+				BLOCK_ENTITY_PREFIX + ((dev.emrion.shaders.mod.mixin.RenderTypeAccessor) x).emrion$name(), ((dev.emrion.shaders.mod.mixin.RenderTypeAccessor) x).emrion$state()));
+	}
+
+	/** PreparedRenderType.draw: a block-entity render type draws with the BLOCK_ENTITY programs and renderStage BLOCK_ENTITIES. */
+	public static void drawRenderType(String name, Runnable draw) {
+		if (!name.startsWith(BLOCK_ENTITY_PREFIX) || !inPhase()) {
+			draw.run();
+			return;
+		}
+		blockEntityDraw = true;
+		try {
+			withStage(BLOCK_ENTITIES, draw);
+		} finally {
+			blockEntityDraw = false;
+		}
+	}
+
+	/** Before MC adds its main pass (Iris renderShadows): the shadow pass, if the plan has one. */
+	public static void renderShadows(net.minecraft.client.renderer.LevelRenderer level) {
+		FrameExecutor e = exec();
+		if (e != null) e.renderShadows(level);
+	}
+
+	/** Iris turns vanilla entity (blob) shadows off when the pack renders a shadow map. */
+	public static boolean vanillaEntityShadows() {
+		FrameExecutor e = exec();
+		return e == null || !e.hasShadowPass();
 	}
 
 	/** After the level's frame graph ran: composites and final. */

@@ -834,7 +834,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 			return new Manifest.Shadow(shadowRender, (int) num("shadowMapResolution", 1024), num("shadowDistance", 160),
 					num("shadowDistanceRenderMul", -1), num("entityShadowDistanceMul", 1), num("shadowNearPlane", -100.05f),
 					num("shadowFarPlane", 156), fov == null ? null : num("shadowMapFov", 0), num("shadowIntervalSize", 2),
-					num("sunPathRotation", 0), new boolean[]{hw(0), hw(1)}, culling);
+					num("sunPathRotation", 0), new boolean[]{hw(0), hw(1)}, culling, num("voxelDistance", 0));
 		}
 
 		float num(String key, float def) {

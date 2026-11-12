@@ -23,7 +23,6 @@ import dev.emrion.shaders.mod.vk.RawCommands;
 import dev.emrion.shaders.mod.vk.RawPass;
 import java.util.List;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.texture.TextureAtlas;
 import org.jspecify.annotations.Nullable;
 import org.joml.Vector4fc;
 import org.lwjgl.system.MemoryStack;
@@ -46,8 +45,10 @@ import org.lwjgl.vulkan.VkViewport;
  *       the phase's gbuffers pass with {@link #beginPhase} and MC draws into it;</li>
  *   <li>{@link #finish} (after the level's frame graph ran): the rest, i.e. composites, final and the end-of-frame copies.</li>
  * </ul>
- * Shadow phases are skipped until M4 (the plan's clears leave shadowtex at 1.0 = lit). Every raw pass declares what it reads
- * and writes to {@link Hazards}, which emits the minimal barrier.
+ * The shadow phases are drawn by {@link ShadowPass} before MC's main pass. Every raw pass declares what it reads and writes
+ * to {@link Hazards}, which emits the minimal barrier inside our command buffers; between them and MC's passes (shadow
+ * geometry → shadowcomp, shadowcomp → gbuffers) MC's global barrier at every render-pass end and our
+ * {@link dev.emrion.shaders.mod.vk.RawCommands#submit} fences everything, including the vertex-stage image/SSBO stores.
  */
 public final class FrameExecutor {
 	private static final boolean TIMINGS = Boolean.getBoolean("emrion.debug.timings");
@@ -55,8 +56,8 @@ public final class FrameExecutor {
 	private static final long SHADER_STAGES = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | FRAGMENT;
 	/** Iris WorldRenderingPhase ordinals have 24 entries (iris-spec §1.4). */
 	private static final int STAGES = 24;
-	/** EmrionPhase blocks per frame at most: FULLSCREEN plus every (WORLD/HAND, renderStage). */
-	public static final int PHASE_BLOCKS = 1 + 2 * STAGES;
+	/** EmrionPhase blocks per frame at most: FULLSCREEN plus every (WORLD/HAND/SHADOW, renderStage). */
+	public static final int PHASE_BLOCKS = 1 + 3 * STAGES;
 
 	private final PackRuntime rt;
 	private final PackPipelines pp;
@@ -68,6 +69,7 @@ public final class FrameExecutor {
 	private final String[] labels;
 	private final PackRuntime.Img mcColor = new PackRuntime.Img("minecraft main color", null);
 	private boolean oncePending = true;
+	private final boolean hasShadowPass;
 	private long lastLog = System.nanoTime();
 
 	/** Next frame command to run; -1 outside a level render. */
@@ -86,6 +88,7 @@ public final class FrameExecutor {
 		int marks = 2 * dim.frame().size() + dim.once().size() + 4;
 		labels = new String[marks];
 		timer = TIMINGS ? new GpuTimer(marks) : null;
+		hasShadowPass = dim.frame().stream().anyMatch(c -> "shadow_opaque".equals(c.phase()));
 	}
 
 	public PackPipelines pipelines() {
@@ -100,6 +103,20 @@ public final class FrameExecutor {
 		return dim;
 	}
 
+	UniformSystem uniforms() {
+		return uniforms;
+	}
+
+	/** Before MC's main pass (Iris renderShadows): the shadow geometry phases, if the plan has them. */
+	public void renderShadows(net.minecraft.client.renderer.LevelRenderer level) {
+		if (cursor >= 0) ShadowPass.render(this, level);
+	}
+
+	/** True if this dimension's plan draws a shadow pass (Iris then turns off vanilla entity shadows). */
+	public boolean hasShadowPass() {
+		return hasShadowPass;
+	}
+
 	// ---- hook entry points ---------------------------------------------------------------------------------------------
 
 	/** LevelRenderer.render HEAD: the level projection of this frame is known, no MC render pass is open. */
@@ -112,9 +129,6 @@ public final class FrameExecutor {
 		uniforms.writeFrameBlock(MemoryUtil.memByteBuffer(rt.ring.address(frameOffset), layout.size()).order(java.nio.ByteOrder.nativeOrder()));
 		dynamicOffsets[0] = GeometryPipelines.DYNAMIC_OFFSETS[0] = (int) frameOffset;
 		dynamicOffsets[1] = phaseOffset(UniformSystem.Phase.FULLSCREEN, 0);
-		var atlas = Minecraft.getInstance().getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS).getTexture();
-		GeometryPipelines.atlasWidth = atlas.getWidth(0);
-		GeometryPipelines.atlasHeight = atlas.getHeight(0);
 		var gr = Minecraft.getInstance().gameRenderer;
 		long nearest = ((VulkanGpuSampler) RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST)).vkSampler();
 		long linear = ((VulkanGpuSampler) RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR)).vkSampler();
@@ -137,13 +151,9 @@ public final class FrameExecutor {
 			oncePending = false;
 		}
 		int i = 0;
-		while (i < dim.frame().size() && !isWorldPhase(dim.frame().get(i))) run(cb, dim.frame().get(i++));
+		while (i < dim.frame().size() && !dim.frame().get(i).cmd().equals("geometry")) run(cb, dim.frame().get(i++));
 		cursor = i;
 		RawCommands.submit(rt.ctx, cb);
-	}
-
-	private static boolean isWorldPhase(Manifest.Command c) {
-		return c.cmd().equals("geometry") && !c.phase().startsWith("shadow");
 	}
 
 	/** True between {@link #levelStart} and {@link #finish}. */
@@ -193,15 +203,17 @@ public final class FrameExecutor {
 
 	/**
 	 * Opens the gbuffers render pass of a geometry command: every gbuffers target on the side the command's flip state reads
-	 * (gbuffers write the read side, iris-spec §2.2), plus depthtex0. MC draws into it; the swap picks {@code ctx}'s pipelines.
+	 * (gbuffers write the read side, iris-spec §2.2), plus depthtex0; in the SHADOW context the shadowcolor targets (main)
+	 * plus shadowtex0. MC draws into it; the swap picks {@code ctx}'s pipelines.
 	 * The caller binds MC's default uniforms if MC does not, closes the pass and calls {@link #endPhase}.
 	 */
 	public RenderPass beginPhase(Manifest.Command g, GbufferPipelines.Context ctx, UniformSystem.Phase phase, int stage) {
 		markMc(null);
 		var flip = rt.flipState(g.flipState());
 		var d = RenderPassDescriptor.builder(() -> "emrion " + g.phase());
-		for (String t : pp.gbuffers.targets) d.withColorAttachment(rt.read(t, flip).attachView);
-		d.withDepthAttachment(rt.image("depthtex0", "main").attachView);
+		boolean shadow = ctx == GbufferPipelines.Context.SHADOW;
+		for (String t : pp.gbuffers.targets(ctx)) d.withColorAttachment((shadow ? rt.image(t, "main") : rt.read(t, flip)).attachView);
+		d.withDepthAttachment(rt.image(shadow ? "shadowtex0" : "depthtex0", "main").attachView);
 		RenderPass pass = RenderSystem.getDevice().createCommandEncoder().createRenderPass(d.build());
 		GeometryPipelines.set = rt.sets[g.flipState()];
 		this.context = ctx;

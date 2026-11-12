@@ -51,6 +51,12 @@ public class LevelRendererMixin {
 		if (EmrionShadersClient.active()) PackManager.onLevelEnd();
 	}
 
+	/** Iris renders the shadow pass here, after MC prepared its own chunk draws and features, before the main pass. */
+	@Inject(method = "render", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/LevelRenderer;addMainPass(Lcom/mojang/blaze3d/framegraph/FrameGraphBuilder;Lnet/minecraft/client/renderer/feature/FeatureRenderDispatcher$PreparedFrame;Lcom/mojang/renderpearl/api/buffers/GpuBufferSlice;Lnet/minecraft/client/renderer/chunk/ChunkSectionsToRender;Z)V"))
+	private void emrion$shadows(CallbackInfo ci) {
+		if (EmrionShadersClient.active()) GeometryHooks.renderShadows((LevelRenderer) (Object) this);
+	}
+
 	@WrapOperation(method = "lambda$addMainPass$0", at = @At(value = "INVOKE", target = "Lcom/mojang/renderpearl/api/commands/CommandEncoder;createRenderPass(Ljava/util/function/Supplier;Lcom/mojang/renderpearl/api/textures/GpuTextureView;Ljava/util/Optional;Lcom/mojang/renderpearl/api/textures/GpuTextureView;Ljava/util/OptionalDouble;)Lcom/mojang/renderpearl/api/commands/RenderPass;"))
 	private RenderPass emrion$opaquePass(CommandEncoder encoder, Supplier<String> label, GpuTextureView color, Optional<Vector4fc> clearColor,
 			GpuTextureView depth, OptionalDouble clearDepth, Operation<RenderPass> original) {

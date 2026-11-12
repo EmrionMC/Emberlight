@@ -219,6 +219,16 @@ public final class IrisUniformSystem implements UniformSystem, HostValues {
 	}
 
 	@Override
+	public Matrix4fc gbufferModelView() {
+		return b.modelView;
+	}
+
+	@Override
+	public Matrix4fc gbufferProjection() {
+		return b.projection;
+	}
+
+	@Override
 	public Vector4fc clearFogColor() {
 		return clearColor;
 	}

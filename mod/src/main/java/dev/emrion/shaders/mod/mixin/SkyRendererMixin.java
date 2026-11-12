@@ -10,11 +10,13 @@ import com.mojang.renderpearl.api.textures.GpuTextureView;
 import dev.emrion.shaders.mod.EmrionShadersClient;
 import dev.emrion.shaders.mod.pipeline.GbufferPipelines;
 import dev.emrion.shaders.mod.runtime.GeometryHooks;
+import dev.emrion.shaders.mod.runtime.HorizonBox;
 import dev.emrion.shaders.mod.uniforms.UniformSystem;
 import java.util.Optional;
 import java.util.OptionalDouble;
 import java.util.function.Supplier;
 import net.minecraft.client.renderer.SkyRenderer;
+import org.joml.Vector3fc;
 import org.joml.Vector4fc;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -24,7 +26,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 /**
  * Why: the sky phase (iris-spec §0 step 4): MC's "Sky" render pass becomes our gbuffers pass; each sky part sets Iris's
  * renderStage (the pack branches on SKY/SUNSET/SUN/MOON/STARS); shaders.properties sun/moon/stars can turn parts off; the
- * celestial bodies are tilted by sunPathRotation, as Iris does.
+ * celestial bodies are tilted by sunPathRotation, as Iris does; Iris's horizon cone is drawn before the sky disc.
  */
 @Mixin(SkyRenderer.class)
 public class SkyRendererMixin {
@@ -42,8 +44,9 @@ public class SkyRendererMixin {
 	}
 
 	@Inject(method = "renderSkyDisc", at = @At("HEAD"))
-	private void emrion$disc(CallbackInfo ci) {
+	private void emrion$disc(RenderPass pass, Vector3fc skyColor, CallbackInfo ci) {
 		GeometryHooks.stage(GeometryHooks.SKY);
+		if (GeometryHooks.inPhase() && GeometryHooks.draws("sky")) HorizonBox.draw(pass); // Iris draws it before the sky
 	}
 
 	@Inject(method = "renderDarkDisc", at = @At("HEAD"))

@@ -190,6 +190,7 @@ with their attributes in canonical location order, are:
 | `terrain_ubo` | `EMRION_BLOCK` (ChunkSection UBO) | same, without the two instanced ones |
 | `entity` | `EMRION_ENTITY` (`ENTITY` + derived mc_midTexCoord, at_tangent + iris_Entity) | Position, Color, UV0, UV1, UV2, Normal, mc_midTexCoord, at_tangent, iris_Entity |
 | `particle` | `PARTICLE` | Position, UV0, Color, UV2 |
+| `block` | `BLOCK` outside chunk meshes (block items, moving blocks, `CRUMBLING`, `BEACON_BEAM_*`; DynamicTransforms) | Position, Color, UV0, UV2 |
 | `position_color` | `POSITION_COLOR` | Position, Color |
 | `position_tex` | `POSITION_TEX` | Position, UV0 |
 | `position_tex_color` | `POSITION_TEX_COLOR` | Position, UV0, Color |
@@ -293,7 +294,7 @@ The planner reproduces Iris's order (iris-spec §0) and flip rules (iris-spec §
 ```jsonc
 "shadow": { "enabled": true, "resolution": 2048, "distance": 256.0, "distanceRenderMul": 1.0, "entityDistanceMul": 0.125,
             "nearPlane": -100.05, "farPlane": 156.0, "fov": null, "intervalSize": 2.0, "sunPathRotation": -40.0,
-            "hardwareFiltering": [true, true], "culling": "reversed" }
+            "hardwareFiltering": [true, true], "culling": "reversed", "voxelDistance": 64.0 }
 ```
 
 ## 8. idMaps

@@ -163,5 +163,5 @@ public record Manifest(
 
 	public record Shadow(boolean enabled, int resolution, float distance, float distanceRenderMul, float entityDistanceMul,
 	                     float nearPlane, float farPlane, Float fov, float intervalSize, float sunPathRotation,
-	                     boolean[] hardwareFiltering, String culling) {}
+	                     boolean[] hardwareFiltering, String culling, float voxelDistance) {}
 }

@@ -220,12 +220,16 @@ Planned set; each mixin class carries a comment explaining why it is needed.
 | `LevelRenderer.executeSolid/executeClassicTransparency` | wrap draw groups | Iris renderStage per group (terrain 8/17, entities 11, particles 19, weather 21, border 22); vanilla clouds skipped when `clouds=off`. |
 | `SkyRenderer` | wrap `createRenderPass`, HEAD of each sky part | Sky phase into our pass; renderStage SKY/SUNSET/SUN/MOON/STARS/VOID; `sun`/`moon`/`stars=false`; sunPathRotation tilt. |
 | `GameRenderer.renderItemInHand` (invoked from the level) | invoker + wraps | The hand is drawn inside the level (Iris order) with the HAND projection and its own FeatureRenderDispatcher; MC's own hand call in `render3dHud` is skipped while a pack renders. |
+| `LevelExtractor.applyFrustum` TAIL | inject | While a pack renders, drop visible sections outside Sodium's cylindrical render distance (`HorizonCull`), so the pack's border fog meets the same terrain edge as under Iris. |
 | `GameRenderer.useImprovedTransparency` | HEAD | Force the classic transparency path while a pack is active (OIT changes the pass structure). |
 | `VulkanRenderPass.setPipeline` TAIL | inject | Bind descriptor set 1 for our pipelines. |
 | `VulkanConst.textureUsageToVk` | return | Add the STORAGE usage bit for our custom usage flag. |
 | `VulkanFeatureSets.optionalFeatureSets` | return | Enable `fragmentStoresAndAtomics`, `vertexPipelineStoresAndAtomics`, `geometryShader`, `shaderStorageImageWriteWithoutFormat` (only those the pack needs). |
 | `SectionCompiler` / `BufferBuilder` | wrap | Extended terrain vertex format plus per-quad attributes. |
 | `FrontendGpuDevice.backend` | accessor | Get the `VulkanDevice` for raw calls. |
+| `LevelRenderer.render` before `addMainPass` | inject | Iris's renderShadows point: `ShadowPass` swaps `visibleSections` for the shadow-culled sections (Iris SAFE_ZONE/advanced culling, `ShadowCuller`), lets MC prepare the chunk draws with the shadow model-view (MDI or not, `LevelRendererAccessor`), re-extracts and submits entities into its own SubmitNodeStorage/FeatureRenderDispatcher, then draws shadow_opaque/entities/translucent with the SHADOW pipelines (no backface culling) into shadowcolor0/1 + shadowtex0. |
+| `EntityRenderDispatcher.submit` → `submitShadow` | wrap with condition | Vanilla blob shadows off while the plan draws a shadow map (Iris). |
+| `SubmitNodeCollection.submitModel/submitCustomGeometry`, `PreparedRenderType.draw`, `RenderType` accessor | modify arg / wrap | Block entities get render-type copies (separate batches); drawing one switches to gbuffers_block/block_translucent and renderStage BLOCK_ENTITIES (Iris). |
 
 ## 7. Threading and lifecycle
 

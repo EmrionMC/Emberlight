@@ -3,6 +3,7 @@ package dev.emrion.shaders.mod.mixin;
 import com.mojang.blaze3d.systems.RenderSystem;
 import dev.emrion.shaders.mod.EmrionShadersClient;
 import dev.emrion.shaders.mod.pbr.PbrAtlases;
+import dev.emrion.shaders.mod.pipeline.GeometryPipelines;
 import net.minecraft.client.renderer.texture.AbstractTexture;
 import net.minecraft.client.renderer.texture.SpriteLoader;
 import net.minecraft.client.renderer.texture.TextureAtlas;
@@ -14,7 +15,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 /**
  * Why: the PBR atlases mirror the block atlas. {@code upload} RETURN is where a reload's stitched block atlas layout becomes
  * final; {@code cycleAnimationFrames} TAIL is the block atlas's animation tick (PBR frames advance in the same tick);
- * {@code createTexture} TAIL fills a new PBR atlas with Iris's default before MC blits the sprites into it.
+ * {@code createTexture} TAIL fills a new PBR atlas with Iris's default before MC blits the sprites into it, and records every
+ * atlas texture so atlasSize can tell atlases from plain textures.
  */
 @Mixin(TextureAtlas.class)
 public abstract class TextureAtlasMixin extends AbstractTexture {
@@ -30,6 +32,7 @@ public abstract class TextureAtlasMixin extends AbstractTexture {
 
 	@Inject(method = "createTexture", at = @At("TAIL"))
 	private void emrion$created(CallbackInfo ci) {
+		GeometryPipelines.ATLAS_TEXTURES.add(getTexture()); // atlasSize is non-zero only for atlas textures (Iris)
 		if ((Object) this instanceof PbrAtlases.PbrAtlas pbr) RenderSystem.getDevice().createCommandEncoder().clearColorTexture(getTexture(), pbr.clear);
 	}
 

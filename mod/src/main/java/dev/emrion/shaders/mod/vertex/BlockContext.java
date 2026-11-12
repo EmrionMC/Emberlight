@@ -12,6 +12,8 @@ public final class BlockContext {
 
 	/** mc_Entity.x, mc_Entity.y (0 = block, 1 = fluid), at_midBlock.w, block position inside the section. */
 	int id = -1, renderType, emission, x, y, z;
+	/** True while a section compile tesselates a block model on this thread (separateAo applies to chunk meshes only). */
+	public boolean inSection;
 
 	public static BlockContext get() { return CURRENT.get(); }
 

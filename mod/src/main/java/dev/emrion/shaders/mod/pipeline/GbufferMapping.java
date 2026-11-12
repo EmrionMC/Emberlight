@@ -95,6 +95,37 @@ public final class GbufferMapping {
 		};
 	}
 
+	/**
+	 * The shadow pass ShaderKey of a main-pass entry (iris-spec §1.3 "Shadow pass program"): program and default alpha test.
+	 * Terrain and entity-like draws test alpha > 0.1, also solid terrain (Iris SHADOW_TERRAIN_CUTOUT).
+	 */
+	public static Entry shadow(Entry e) {
+		String program = switch (e.program()) {
+			case "gbuffers_terrain_solid", "gbuffers_terrain_cutout" -> "shadow_cutout";
+			case "gbuffers_water" -> "shadow_water";
+			case "gbuffers_block" -> e.translucent() ? "shadow_water" : "shadow_block"; // TRANSLUCENT_BLOCK vs END_PORTAL/END_GATEWAY
+			case "gbuffers_entities", "gbuffers_entities_translucent", "gbuffers_spidereyes", "gbuffers_armor_glint", "gbuffers_beaconbeam"
+					-> "shadow_entities";
+			case "gbuffers_lightning" -> "shadow_lightning";
+			default -> "shadow";
+		};
+		float alpha = switch (program) {
+			case "shadow_lightning" -> OFF;
+			case "shadow" -> e.program().equals("gbuffers_line") || e.program().equals("gbuffers_basic") ? OFF : NON_ZERO;
+			default -> e.program().equals("gbuffers_beaconbeam") ? OFF : ONE_TENTH;
+		};
+		return new Entry(program, alpha, e.translucent());
+	}
+
+	/** In Iris's BLOCK_ENTITIES phase entity draws use gbuffers_block / gbuffers_block_translucent, alpha > 0.1 (ShaderKey BLOCK_ENTITY*, BE_TRANSLUCENT, TEXT_BE). */
+	public static Entry blockEntity(Entry e) {
+		return switch (e.program()) {
+			case "gbuffers_entities" -> new Entry("gbuffers_block", ONE_TENTH, false);
+			case "gbuffers_entities_translucent" -> new Entry("gbuffers_block_translucent", ONE_TENTH, true);
+			default -> e;
+		};
+	}
+
 	/** Iris's gbuffers fallback chain (iris-spec §1.2), starting at {@code program} itself. */
 	public static List<String> chain(String program) {
 		List<String> out = new ArrayList<>();
@@ -115,5 +146,7 @@ public final class GbufferMapping {
 			Map.entry("gbuffers_particles_translucent", "gbuffers_particles"), Map.entry("gbuffers_entities_glowing", "gbuffers_entities"),
 			Map.entry("gbuffers_armor_glint", "gbuffers_textured"), Map.entry("gbuffers_spidereyes", "gbuffers_textured"),
 			Map.entry("gbuffers_hand", "gbuffers_textured_lit"), Map.entry("gbuffers_weather", "gbuffers_textured_lit"),
-			Map.entry("gbuffers_water", "gbuffers_terrain"), Map.entry("gbuffers_hand_water", "gbuffers_hand"));
+			Map.entry("gbuffers_water", "gbuffers_terrain"), Map.entry("gbuffers_hand_water", "gbuffers_hand"),
+			Map.entry("shadow_solid", "shadow"), Map.entry("shadow_cutout", "shadow"), Map.entry("shadow_water", "shadow"),
+			Map.entry("shadow_entities", "shadow"), Map.entry("shadow_block", "shadow"), Map.entry("shadow_lightning", "shadow_entities"));
 }

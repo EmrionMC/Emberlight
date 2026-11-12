@@ -28,7 +28,7 @@ final class IrisPrograms {
 
 	static {
 		String tm = "terrain_mdi", tu = "terrain_ubo", e = "entity", pa = "particle", pc = "position_color", pt = "position_tex",
-				ptc = "position_tex_color", po = "position", pctl = "position_color_tex_lightmap", li = "lines";
+				ptc = "position_tex_color", po = "position", pctl = "position_color_tex_lightmap", li = "lines", bl = "block";
 		id("gbuffers_basic", null, po, pc, pctl);
 		id("gbuffers_line", "gbuffers_basic", li);
 		id("gbuffers_textured", "gbuffers_basic", pt, ptc);
@@ -37,12 +37,12 @@ final class IrisPrograms {
 		id("gbuffers_skytextured", "gbuffers_textured", pt, ptc);
 		id("gbuffers_clouds", "gbuffers_textured", pc);
 		id("gbuffers_terrain", "gbuffers_textured_lit");
-		id("gbuffers_terrain_solid", "gbuffers_terrain", tm, tu);
-		id("gbuffers_terrain_cutout", "gbuffers_terrain", tm, tu);
-		id("gbuffers_damagedblock", "gbuffers_terrain", tu);
-		id("gbuffers_block", "gbuffers_terrain", e, tu, po);
+		id("gbuffers_terrain_solid", "gbuffers_terrain", tm, tu, bl);
+		id("gbuffers_terrain_cutout", "gbuffers_terrain", tm, tu, bl);
+		id("gbuffers_damagedblock", "gbuffers_terrain", tu, bl);
+		id("gbuffers_block", "gbuffers_terrain", e, tu, po, bl);
 		id("gbuffers_block_translucent", "gbuffers_block", e, tu, pctl);
-		id("gbuffers_beaconbeam", "gbuffers_textured", e);
+		id("gbuffers_beaconbeam", "gbuffers_textured", e, bl);
 		id("gbuffers_item", "gbuffers_textured_lit");
 		id("gbuffers_entities", "gbuffers_textured_lit", e);
 		id("gbuffers_entities_translucent", "gbuffers_entities", e, pctl, pc);

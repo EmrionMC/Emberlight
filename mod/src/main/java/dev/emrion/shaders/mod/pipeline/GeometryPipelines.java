@@ -3,6 +3,8 @@ package dev.emrion.shaders.mod.pipeline;
 import static org.lwjgl.vulkan.VK10.*;
 
 import com.mojang.renderpearl.api.pipeline.BindGroupLayout;
+import com.mojang.renderpearl.api.textures.GpuTexture;
+import com.mojang.renderpearl.api.textures.GpuTextureView;
 import com.mojang.renderpearl.api.pipeline.BlendFunction;
 import com.mojang.renderpearl.api.pipeline.ColorTargetState;
 import com.mojang.renderpearl.api.pipeline.DepthStencilState;
@@ -12,6 +14,7 @@ import com.mojang.renderpearl.api.vertex.VertexFormatElement;
 import com.mojang.renderpearl.backend.vulkan.VulkanConst;
 import com.mojang.renderpearl.backend.vulkan.VulkanRenderPipeline;
 import com.mojang.renderpearl.frontend.FrontendRenderPipeline;
+import com.mojang.renderpearl.util.TextureViewAndSampler;
 import dev.emrion.shaders.format.VertexLayouts;
 import dev.emrion.shaders.mod.vk.Blend;
 import dev.emrion.shaders.mod.vk.Descriptors;
@@ -19,9 +22,13 @@ import dev.emrion.shaders.mod.vk.GraphicsPipelineBuilder;
 import dev.emrion.shaders.mod.vk.VulkanContext;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
 import java.nio.ByteBuffer;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
+import org.jspecify.annotations.Nullable;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.KHRPushDescriptor;
@@ -38,7 +45,8 @@ public final class GeometryPipelines {
 	private GeometryPipelines() {}
 
 	/**
-	 * Per-pipeline draw constants: the alpha-test reference, whether atlasSize is the block atlas (else 0), and the extra
+	 * Per-pipeline draw constants: the alpha-test reference, {@code blockAtlas} (unused: atlasSize now follows the bound
+	 * Sampler0, see {@link #sampler0}; shortcut: kept so the m4 branches that build Draw still merge, drop it after), and the extra
 	 * set-0 samplers (bindings {@code firstExtra + i}, kind {@code extras[i]}: 0 white albedo, 1 overlay, 2 lightmap) that
 	 * the pack reads but the vanilla pipeline does not push.
 	 */
@@ -71,7 +79,10 @@ public final class GeometryPipelines {
 	/** Set 1 of the phase's flip state, and the dynamic offsets of EmrionUniforms / EmrionPhase. */
 	public static long set;
 	public static final int[] DYNAMIC_OFFSETS = new int[2];
-	public static int atlasWidth, atlasHeight;
+	/** Textures of every TextureAtlas (TextureAtlasMixin); weak, atlases recreate their texture on reload. */
+	public static final Set<GpuTexture> ATLAS_TEXTURES = Collections.synchronizedSet(Collections.newSetFromMap(new WeakHashMap<>()));
+	/** atlasSize of the current Sampler0 (Iris: the bound albedo texture's size if it is a TextureAtlas, else 0). */
+	private static int atlasWidth, atlasHeight;
 	private static VkCommandBuffer boundCb;
 	private static VulkanRenderPipeline bound;
 	/** EmrionDraw (FORMAT §6 pushConstants): entityColor, entityId, blockEntityId, currentRenderedItemId, alphaTestRef, atlasSize. */
@@ -98,6 +109,7 @@ public final class GeometryPipelines {
 	public static void unbind() {
 		boundCb = null;
 		bound = null;
+		atlasWidth = atlasHeight = 0; // a new pass starts with no Sampler0
 	}
 
 	private static void bind(VkCommandBuffer cb, VulkanRenderPipeline pipeline, Draw d) {
@@ -110,8 +122,21 @@ public final class GeometryPipelines {
 				vkCmdBindVertexBuffers(cb, DEFAULTS_BINDING, stack.longs(defaultsBuffer), stack.longs(0));
 			}
 		}
-		PUSH.putFloat(28, d.alphaRef).putInt(32, d.blockAtlas ? atlasWidth : 0).putInt(36, d.blockAtlas ? atlasHeight : 0);
+		PUSH.putFloat(28, d.alphaRef).putInt(32, atlasWidth).putInt(36, atlasHeight);
 		vkCmdPushConstants(cb, pipeline.pipelineLayout(), VK_SHADER_STAGE_ALL, 0, PUSH);
+	}
+
+	/** FrontendRenderPass set Sampler0 (also replayed after every setPipeline): update atlasSize, pushed at once if ours is bound. */
+	public static void sampler0(@Nullable Object value) {
+		GpuTextureView view = value instanceof TextureViewAndSampler t ? t.view() : null;
+		boolean atlas = view != null && ATLAS_TEXTURES.contains(view.texture());
+		int w = atlas ? view.getWidth(0) : 0, h = atlas ? view.getHeight(0) : 0;
+		if (w == atlasWidth && h == atlasHeight) return;
+		atlasWidth = w;
+		atlasHeight = h;
+		if (boundCb == null) return;
+		PUSH.putInt(32, w).putInt(36, h);
+		vkCmdPushConstants(boundCb, bound.pipelineLayout(), VK_SHADER_STAGE_ALL, 0, PUSH);
 	}
 
 	/** Incremental push of the extra samplers; MC pushes its own bindings later, before the draw (push descriptors merge). */

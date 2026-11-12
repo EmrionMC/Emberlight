@@ -13,9 +13,17 @@ import net.minecraft.client.renderer.entity.state.AvatarRenderState;
 import net.minecraft.client.renderer.entity.state.EntityRenderState;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
 import net.minecraft.world.entity.Entity;
+import com.llamalad7.mixinextras.injector.WrapWithCondition;
+import dev.emrion.shaders.mod.EmrionShadersClient;
+import dev.emrion.shaders.mod.runtime.GeometryHooks;
+import java.util.List;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.injection.At;
 
-/** Why: the one point where each entity's features are submitted; its entity.properties id is stamped into those submits. */
+/**
+ * Why: the one point where each entity's features are submitted; its entity.properties id is stamped into those submits.
+ * Vanilla blob shadows are dropped while the pack draws a shadow map (Iris shouldDisableVanillaEntityShadows).
+ */
 @Mixin(EntityRenderDispatcher.class)
 public class EntityRenderDispatcherMixin {
 	@WrapMethod(method = "submit")
@@ -35,5 +43,10 @@ public class EntityRenderDispatcherMixin {
 		} finally {
 			EntityIds.entity = previous;
 		}
+	}
+
+	@WrapWithCondition(method = "submit", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/SubmitNodeCollector;submitShadow(Lcom/mojang/blaze3d/vertex/PoseStack;FLjava/util/List;)V"))
+	private boolean emrion$vanillaShadow(SubmitNodeCollector collector, PoseStack poseStack, float radius, List<?> pieces) {
+		return !EmrionShadersClient.active() || GeometryHooks.vanillaEntityShadows();
 	}
 }

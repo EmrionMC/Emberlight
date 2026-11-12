@@ -82,7 +82,7 @@ public final class UniformDebug {
 				Std140LayoutBuilder.PHASE, Std140LayoutBuilder.PUSH);
 		// Both wetness halflives 300, as in the target pack, so wetness smoothing matches it.
 		return new IrisUniformSystem(layout, new Manifest.Shadow(true, 2048, 256, 1, 0.125f, -100.05f, 156, null, 2, -40,
-				new boolean[]{true, true}, "reversed"), null, IrisUniformSystem.Directives.fromConsts(300f, 300f, null, true, false));
+				new boolean[]{true, true}, "reversed", 64), null, IrisUniformSystem.Directives.fromConsts(300f, 300f, null, true, false));
 	}
 
 	private static void log(Minecraft mc) {

@@ -48,6 +48,8 @@ public final class EmrionVertexFormats {
 			.build();
 
 	private static volatile boolean active;
+	/** shaders.properties separateAo / oldLighting of the active pack (set before the chunk rebuild of {@link #setActive}). */
+	private static volatile boolean separateAo, oldLighting = true;
 	private static volatile BlockIdTable ids = BlockIdTable.EMPTY;
 	private static boolean tagListener;
 
@@ -62,6 +64,18 @@ public final class EmrionVertexFormats {
 
 	/** ENTITY draws use EMRION_ENTITY: while active, except in the terrain-only debug view (no entity pipelines swapped there). */
 	public static boolean entitiesActive() { return active && (!DebugVertex.ENABLED || DebugVertex.ENTITIES); }
+
+	/** Iris separateAo: chunk vertex colour = tint, alpha = AO (Sodium's XHFPTerrainVertex), instead of AO baked into rgb. */
+	public static boolean separateAo() { return active && separateAo; }
+
+	/** Iris oldLighting=false disables MC's directional face shading (CardinalLighting.byFace → UP). */
+	public static boolean directionalShadingOff() { return active && !oldLighting; }
+
+	/** Render thread, before {@link #setActive}: the pack's lighting directives (they change how chunks are meshed). */
+	public static void setLighting(boolean separateAo, boolean oldLighting) {
+		EmrionVertexFormats.separateAo = separateAo;
+		EmrionVertexFormats.oldLighting = oldLighting;
+	}
 
 	/** Current id tables (never null; {@link BlockIdTable#EMPTY} when no pack is loaded). */
 	public static BlockIdTable ids() { return ids; }

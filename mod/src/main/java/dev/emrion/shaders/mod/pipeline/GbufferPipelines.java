@@ -45,34 +45,38 @@ import java.util.concurrent.ExecutorService;
  * shared gbuffers attachment list. Nothing is created in a frame.
  */
 public final class GbufferPipelines {
-	/** Draw contexts: the hand phases pick other programs and hide the other half of the hand's draws. */
-	public enum Context { WORLD, HAND_SOLID, HAND_TRANSLUCENT }
+	/**
+	 * Draw contexts: the hand phases pick other programs and hide the other half of the hand's draws; SHADOW draws with the
+	 * shadow programs into the shadowcolor attachments, without backface culling (Iris ShadowRenderer); BLOCK_ENTITY is the
+	 * world context while block-entity render types draw (Iris BLOCK_ENTITIES phase: entity programs become gbuffers_block).
+	 */
+	public enum Context { WORLD, HAND_SOLID, HAND_TRANSLUCENT, SHADOW, BLOCK_ENTITY }
 
 	/** The attachment list of every gbuffers pass: colortex targets written by any gbuffers program, by index. */
 	public final List<String> targets;
 	public final List<ColorTargetState> targetStates;
+	/** The same for the shadow passes: shadowcolor targets written by any shadow program. */
+	public final List<String> shadowTargets;
+	public final List<ColorTargetState> shadowTargetStates;
 	private final Map<RenderPipeline, FrontendRenderPipeline>[] byContext;
 	private final List<FrontendRenderPipeline> all = new ArrayList<>();
 
-	private record Key(String program, String variant, RenderPipeline vanilla, boolean hidden) {}
+	private record Key(String program, String variant, RenderPipeline vanilla, boolean hidden, boolean shadow) {}
 
 	@SuppressWarnings("unchecked")
 	public GbufferPipelines(VulkanContext ctx, Path cacheDir, Manifest manifest, Manifest.Dimension dim, long set1Layout,
 			Map<RenderPipeline, FrontendRenderPipeline> vanilla, ExecutorService pool) {
-		Map<Integer, String> union = new TreeMap<>();
-		for (var p : dim.programs().values()) {
-			if (!p.kind().equals("gbuffers")) continue;
-			for (var o : p.outputs()) union.put(Integer.parseInt(o.target().replace("colortex", "")), o.target());
-		}
-		targets = List.copyOf(union.values());
+		targets = outputUnion(dim, "gbuffers", "colortex");
+		shadowTargets = outputUnion(dim, "shadow", "shadowcolor");
 		Map<String, GpuFormat> formats = new HashMap<>();
-		for (var t : dim.targets()) if (targets.contains(t.name())) formats.put(t.name(), Formats.gpu(t.format()));
+		for (var t : dim.targets()) if (targets.contains(t.name()) || shadowTargets.contains(t.name())) formats.put(t.name(), Formats.gpu(t.format()));
 		targetStates = targets.stream().map(t -> new ColorTargetState(Optional.empty(), formats.get(t), ColorTargetState.WRITE_ALL)).toList();
+		shadowTargetStates = shadowTargets.stream().map(t -> new ColorTargetState(Optional.empty(), formats.get(t), ColorTargetState.WRITE_ALL)).toList();
 
 		// Iris program name → the pack program that serves it (the converter resolved file fallbacks into fallbackFor).
 		Map<String, String> serving = new HashMap<>();
 		for (var e : dim.programs().entrySet()) {
-			if (!e.getValue().kind().equals("gbuffers")) continue;
+			if (!e.getValue().kind().equals("gbuffers") && !e.getValue().kind().equals("shadow")) continue;
 			serving.put(e.getKey(), e.getKey());
 			for (String f : e.getValue().fallbackFor()) serving.putIfAbsent(f, e.getKey());
 		}
@@ -85,12 +89,17 @@ public final class GbufferPipelines {
 		List<String> table = new ArrayList<>();
 		for (Context c : Context.values()) {
 			keys[c.ordinal()] = new IdentityHashMap<>();
+			boolean shadow = c == Context.SHADOW;
+			if (shadow && !serving.containsKey("shadow")) continue; // no shadow program: no shadow pass in this dimension
 			for (var raw : vanilla.entrySet()) {
 				var v = Map.entry(raw.getKey(), extended(raw.getValue()));
 				GbufferMapping.Entry e = GbufferMapping.get(v.getKey());
 				List<String> variants = variants(v.getValue());
 				if (e == null) e = new GbufferMapping.Entry(hasUv0(v.getValue()) ? "gbuffers_textured" : "gbuffers_basic", GbufferMapping.OFF, true);
-				String iris = c == Context.WORLD ? e.program() : GbufferMapping.handProgram(e);
+				String world = e.program();
+				if (shadow) e = GbufferMapping.shadow(e);
+				if (c == Context.BLOCK_ENTITY) e = GbufferMapping.blockEntity(e);
+				String iris = c == Context.WORLD || c == Context.BLOCK_ENTITY || shadow ? e.program() : GbufferMapping.handProgram(e);
 				boolean hidden = c == Context.HAND_SOLID && e.translucent() || c == Context.HAND_TRANSLUCENT && !e.translucent();
 				String program = null, variant = null, why = variants.isEmpty() ? "no vertex variant for " + v.getValue().vertexFormats() : null;
 				search:
@@ -109,12 +118,12 @@ public final class GbufferPipelines {
 					}
 					if (why == null) why = p + " has none of " + variants;
 				}
-				Key k = new Key(program, variant, v.getKey(), hidden);
+				Key k = new Key(program, variant, v.getKey(), hidden, shadow);
 				keys[c.ordinal()].put(v.getKey(), k);
 				final GbufferMapping.Entry entry = e;
 				jobs.computeIfAbsent(k, kk -> CompletableFuture.supplyAsync(() ->
 						build(ctx, cacheDir, spv, dim, kk, entry, v.getValue(), set1Layout, pushSize), pool));
-				if (c == Context.WORLD || !iris.equals(e.program()))
+				if (c == Context.WORLD || shadow || !iris.equals(world))
 					table.add(c + " " + v.getKey().getLocation() + " -> " + iris + " => " + (program == null ? "(nothing drawn: " + why + ")" : program + "[" + variant + "]"));
 			}
 		}
@@ -131,6 +140,21 @@ public final class GbufferPipelines {
 
 	public FrontendRenderPipeline get(Context c, RenderPipeline vanilla) {
 		return byContext[c.ordinal()].get(vanilla);
+	}
+
+	/** The colour attachments of a pass in context {@code c}. */
+	public List<String> targets(Context c) {
+		return c == Context.SHADOW ? shadowTargets : targets;
+	}
+
+	/** Every target named {@code prefix}N that a program of {@code kind} writes, ordered by N. */
+	private static List<String> outputUnion(Manifest.Dimension dim, String kind, String prefix) {
+		Map<Integer, String> union = new TreeMap<>();
+		for (var p : dim.programs().values()) {
+			if (!p.kind().equals(kind)) continue;
+			for (var o : p.outputs()) union.put(Integer.parseInt(o.target().replace(prefix, "")), o.target());
+		}
+		return List.copyOf(union.values());
 	}
 
 	public void destroyLater() {
@@ -153,6 +177,7 @@ public final class GbufferPipelines {
 		var names = f.getElements().stream().map(VertexFormatElement::name).collect(java.util.stream.Collectors.toSet());
 		return VertexLayouts.VARIANTS.entrySet().stream()
 				.filter(v -> !v.getKey().startsWith("terrain") && !v.getValue().isEmpty() && names.containsAll(v.getValue()))
+				.filter(v -> !v.getKey().equals("block") || f == DefaultVertexFormat.BLOCK)
 				.sorted(Comparator.comparingInt((Map.Entry<String, List<String>> v) -> -v.getValue().size()).thenComparing(Map.Entry::getKey))
 				.map(Map.Entry::getKey).toList();
 	}
@@ -252,11 +277,14 @@ public final class GbufferPipelines {
 		for (int i = 0; i < extras.length; i++) extras[i] = EXTRA_SAMPLERS.indexOf(order.get(bound.size() + i));
 		long set0Layout = GeometryPipelines.set0Layout(ctx, bound, extras.length);
 		long layout = Descriptors.pipelineLayout(ctx, pushSize, set0Layout, set1Layout);
-		int n = targets.size();
+		List<String> attachments = k.shadow() ? shadowTargets : targets;
+		List<ColorTargetState> states = k.shadow() ? shadowTargetStates : targetStates;
+		int n = attachments.size();
 		int[] formats = new int[n], masks = new int[n];
 		Blend[] blends = new Blend[n];
-		for (int i = 0; i < n; i++) formats[i] = VulkanConst.toVk(targetStates.get(i).format());
+		for (int i = 0; i < n; i++) formats[i] = VulkanConst.toVk(states.get(i).format());
 		var b = GeometryPipelines.builderFor(k.vanilla(), vanilla);
+		if (k.shadow()) b.cull(VK_CULL_MODE_NONE); // Iris disables backface culling in the shadow pass
 		List<Long> modules = new ArrayList<>();
 		float alphaRef = entry.alphaRef();
 		boolean defaults = false;
@@ -273,7 +301,7 @@ public final class GbufferPipelines {
 				int[] remap = new int[p.outputs().stream().mapToInt(Manifest.Output::location).max().orElse(-1) + 1];
 				Blend vanillaBlend = GeometryPipelines.vanillaBlend(vanilla);
 				for (var o : p.outputs()) {
-					int i = targets.indexOf(o.target());
+					int i = attachments.indexOf(o.target());
 					remap[o.location()] = i;
 					masks[i] = k.hidden() ? 0 : 0xF;
 					var mode = p.blend() == null ? null : p.blend().perTarget().getOrDefault(o.target(), p.blend().defaultMode());
@@ -289,7 +317,7 @@ public final class GbufferPipelines {
 			if (k.hidden() || k.program() == null) b.depth(VK_FORMAT_D32_SFLOAT, true, false, VK_COMPARE_OP_LESS_OR_EQUAL);
 			long pipeline = b.colors(formats, blends).writeMasks(masks).layout(layout).build(ctx, ctx.pipelineCache().handle);
 			boolean atlas = k.variant() != null && k.variant().startsWith("terrain") || k.vanilla() == net.minecraft.client.renderer.RenderPipelines.CRUMBLING;
-			return GeometryPipelines.wrap(ctx, vanilla, pipeline, layout, set0Layout, targetStates, new GeometryPipelines.Draw(alphaRef, atlas, bound.size(), extras, defaults));
+			return GeometryPipelines.wrap(ctx, vanilla, pipeline, layout, set0Layout, states, new GeometryPipelines.Draw(alphaRef, atlas, bound.size(), extras, defaults));
 		} finally {
 			for (long m : modules) ShaderModules.destroy(ctx, m);
 		}

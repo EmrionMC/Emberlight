@@ -79,6 +79,16 @@ public final class StubUniformSystem implements UniformSystem {
 	}
 
 	@Override
+	public Matrix4fc gbufferModelView() {
+		return IDENTITY;
+	}
+
+	@Override
+	public Matrix4fc gbufferProjection() {
+		return IDENTITY;
+	}
+
+	@Override
 	public Vector4fc clearFogColor() {
 		return new Vector4f(0.5f, 0.7f, 1f, 1f);
 	}

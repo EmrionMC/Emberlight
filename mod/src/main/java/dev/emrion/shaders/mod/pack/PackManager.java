@@ -279,6 +279,8 @@ public final class PackManager {
 		current = p;
 		uniforms = uniformFactory.apply(l.manifest(), p.folder());
 		var ids = BlockIdTable.build(l.manifest().idMaps());
+		var props = l.manifest().properties() == null ? Map.<String, Object>of() : l.manifest().properties();
+		EmrionVertexFormats.setLighting(Boolean.TRUE.equals(props.get("separateAo")), Boolean.TRUE.equals(props.get("oldLighting")));
 		EmrionVertexFormats.setIds(ids);
 		EmrionVertexFormats.setActive(true); // rebuilds chunks in the extended terrain format
 		if (uniforms instanceof IrisUniformSystem u) u.setBlockIdLookup(ids::block);

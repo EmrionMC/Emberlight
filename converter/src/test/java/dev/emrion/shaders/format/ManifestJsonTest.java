@@ -35,7 +35,7 @@ class ManifestJsonTest {
 				List.of(new Manifest.FlipState(0, List.of())),
 				List.of(new Manifest.Command("geometry", null, 0, "opaque", null, null, null, null, null, null)),
 				List.of(),
-				new Manifest.Shadow(true, 2048, 256, 1, 0.125f, -100.05f, 156, null, 2, -40, new boolean[]{true, true}, "reversed"));
+				new Manifest.Shadow(true, 2048, 256, 1, 0.125f, -100.05f, 156, null, 2, -40, new boolean[]{true, true}, "reversed", 64));
 		var props = new LinkedHashMap<String, Object>();
 		props.put("sun", true);
 		props.put("clouds", "off");

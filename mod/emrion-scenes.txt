@@ -1,7 +1,7 @@
 # Shared comparison scenes (docs/BENCHMARK.md): world seed 2026, default world type, created by the autotest harness.
 # Used by `runIrisReference` (iris-<name>.png) and `runClient -Pcompare` (emrion-<name>.png) via -Demrion.autotest.scenes.
 #
-# name | x y z yaw pitch | time | clear|rain|thunder | commands (no slash, ';'-separated, run before the teleport)
+# name | x y z yaw pitch | time | clear|rain|thunder | commands (no slash, ';'-separated, run after the teleport once the chunks are loaded)
 #
 # Every scene also gets: spectator mode, advance_time/advance_weather off, and (after the chunks are built) a kill of all
 # entities not tagged "emrion", so wandering worldgen animals never differ between runs. Scene mobs have NoAI and the tag.

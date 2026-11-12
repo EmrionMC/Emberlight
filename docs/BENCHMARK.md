@@ -13,7 +13,7 @@ It also lists the baseline numbers.
 | Settings | `-PshaderSettings=<file>`, default `testpacks/ComplementaryUnbound_r5.9.3 + EuphoriaPatches_1.10.5.txt`. Copied to `shaderpacks/<name>.txt`, where `<name>` is the file name without `.txt` (the same name Iris uses in a launcher instance). |
 | Video options | Merged into `options.txt` at every start (`sharedOptions` in `mod/build.gradle`): the reference options (render distance 16, simulation 12, FPS cap 260 = unlimited, vsync off, GUI scale 3, FOV 70, mipmaps 4, biome blend 3, entity shadows, AO), plus sound off, FOV effects off and `pauseOnLostFocus:false`, so a stray click does not change the image. |
 | Window | `--width 1920 --height 1080` launch args (the screenshots are 1920×1080 on Wayland at scale 1). |
-| World | `-Demrion.autotest.world=scenes`: created on first use with seed **2026**, default world type, peaceful. Each run dir has its own copy, and the same seed gives the same terrain. |
+| World | `-Demrion.autotest.world=scenes`: the reference run creates it on first use (seed **2026**, default world type, peaceful) in `mod/run-iris/saves/scenes` and keeps reusing it. `runClient -Pcompare` deletes its own `mod/run/saves/scenes` and copies that world over it before every start (the source is only read; `session.lock` is skipped), so both runs render the same blocks. `-PsceneWorld=<dir>` picks another source, for example another checkout's `mod/run-iris/saves/scenes`. |
 | Scenes | `mod/emrion-scenes.txt` (see below). |
 
 Iris only (written by `runIrisReference`): `config/iris.properties` with `shaderPack=<name>`, `enableShaders=true`,
@@ -23,6 +23,11 @@ instance next to `-PirisModsDir` when it exists.
 Not reproduced in the dev runs: the user's resource packs (Prime's HD 256x, Fresh Animations and others) and the other
 mods of the instance (Sodium Extra, ImmediatelyFast, Lithium, EntityCulling, Continuity, and so on). Both dev runs use
 vanilla textures, so the comparison stays fair. The FPS numbers are not the numbers of the user's full instance.
+
+**Why the world is copied and not regenerated:** the same seed does *not* give the same world. Terrain is identical, but
+trees and other features differ between two freshly created worlds (MC places features across chunk borders in whatever
+order its worldgen threads finish). Two `runIrisReference` runs, each on a fresh world, differed by MAE 40.7 / SSIM 0.47 in
+`forest` and 6.6 / 0.82 in `overview` (other trees), against 2.3 / 0.91 and 2.0 / 0.93 on the same world.
 
 ## Commands
 
@@ -52,8 +57,8 @@ Set `JAVA_HOME=/usr/lib/jvm/java-27-temurin` first. In a checkout without `testp
   never copied into the repo. MC 26.x is unobfuscated, so the release jars run in the Loom dev environment as they are.
   Our own mod is loaded too, but on OpenGL it stays inert except for the autotest harness (`AutoTest.registerIfEnabled()`
   runs before the backend check).
-- `runClient -Pcompare` links the same pack and settings into `mod/run/shaderpacks/`, merges the same options, sets the
-  same window size, and passes `-Demrion.pack=<name>` and `-Demrion.autotest.tag=emrion`. Without `-Pcompare`,
+- `runClient -Pcompare` copies the reference world (see Inputs; run the reference first), links the same pack and settings
+  into `mod/run/shaderpacks/`, merges the same options, sets the same window size, and passes `-Demrion.pack=<name>` and `-Demrion.autotest.tag=emrion`. Without `-Pcompare`,
   `runClient` behaves as before.
 - `-Demrion.autotest.only=a,b` renders a subset of the scenes. `-Demrion.autotest.settle=<s>` and `settle.frames=<n>`
   change the settle time (defaults: 5 s and at least 200 frames after the chunks are built).
@@ -61,8 +66,9 @@ Set `JAVA_HOME=/usr/lib/jvm/java-27-temurin` first. In a checkout without `testp
 ## Scene list (`mod/emrion-scenes.txt`)
 
 Format: `name | x y z yaw pitch | time | weather | commands`. For each scene the harness sets spectator mode, turns off
-`advance_time` and `advance_weather`, sets time and weather, runs the commands, teleports, waits at least 8 s until all
-chunk sections are built, removes every entity without the tag `emrion` (worldgen animals wander differently in every run),
+`advance_time` and `advance_weather`, sets time and weather, teleports, waits at least 8 s until all chunk sections are built,
+runs the commands and waits for the sections again (a `summon` or `setblock` in a chunk that is not loaded yet fails without
+an error, which left the entities scene empty before 2026-11-13), removes every entity without the tag `emrion` (worldgen animals wander differently in every run),
 waits 5 s and 200 frames so TAA and other temporal effects settle, hides HUD/F3/screens, and takes the screenshot.
 
 | Scene | Position (x y z yaw pitch) | Time | Weather | What it covers |
@@ -104,6 +110,20 @@ Measured 2026-11-12 (two `runIrisReference` scene runs on the same world, compar
 So for the animated scenes, an MAE of 2–5 and an SSIM around 0.9 is "identical". A real rendering difference (missing
 shadows, wrong colour grading, missing reflections) shows up as a clearly higher MAE, and you can see it in the diff panel.
 Always look at the diff panel, not only at the numbers.
+
+Emrion against Iris, measured 2026-11-13 on `m4/f1-fixes` after the shadow pass merge (same canonical world, Iris
+reference re-shot in the worktree after the scene-command fix):
+
+| Scene | MAE mean | SSIM | Iris noise floor (MAE / SSIM) |
+|---|---|---|---|
+| overview | 3.02 | 0.922 | 2.03 / 0.933 |
+| forest | 5.59 | 0.820 | 2.34 / 0.907 |
+| water | 4.10 | 0.888 | 4.62 / 0.894 |
+| cave | 1.43 | 0.963 | 0.50 / 0.997 |
+| sunset | 1.69 | 0.955 | 0.77 / 0.977 |
+| night | 0.50 | 0.989 | 0.20 / 0.998 |
+| rain | 3.47 | 0.919 | 2.96 / 0.930 |
+| entities | 5.35 | 0.838 | 3.33 / 0.883 |
 
 ## Benchmark with Iris + Sodium
 

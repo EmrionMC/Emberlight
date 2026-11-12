@@ -44,6 +44,8 @@ public final class VertexLayouts {
 			Map.entry("terrain_ubo", TERRAIN),
 			Map.entry("entity", List.of("Position", "Color", "UV0", "UV1", "UV2", "Normal", "mc_midTexCoord", "at_tangent", "iris_Entity")),
 			Map.entry("particle", List.of("Position", "UV0", "Color", "UV2")),
+			// vanilla BLOCK format outside chunk meshes (block in hand/moving blocks, crumbling, beacon beam): DynamicTransforms
+			Map.entry("block", List.of("Position", "Color", "UV0", "UV2")),
 			Map.entry("position_color", List.of("Position", "Color")),
 			Map.entry("position_tex", List.of("Position", "UV0")),
 			Map.entry("position_tex_color", List.of("Position", "UV0", "Color")),

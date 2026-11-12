@@ -30,6 +30,8 @@ class TargetPackConversionTest {
 			assertTrue(result.stagesCompiled() >= 253, "stages compiled: " + result.stagesCompiled());
 			for (String dim : java.util.List.of("world0", "world-1", "world1"))
 				assertTrue(result.manifest().dimensions().get(dim).programs().containsKey("final"), dim + " has final");
+			// gbuffers_terrain.fsh: COLORED_LIGHTING with world-space reflections → Iris's shadow safe zone (shadow.culling=reversed)
+			assertEquals(64f, result.manifest().dimensions().get("world0").shadow().voxelDistance());
 		}
 	}
 }
