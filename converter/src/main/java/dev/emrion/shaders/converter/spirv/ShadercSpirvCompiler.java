@@ -26,6 +26,10 @@ public final class ShadercSpirvCompiler implements SpirvCompiler {
 		long options = shaderc_compile_options_initialize();
 		long compiler = acquire();
 		long result = 0;
+		// The CharSequence overload encodes on LWJGL's 64 KiB thread stack; real pack stages are bigger.
+		ByteBuffer source = org.lwjgl.system.MemoryUtil.memUTF8(glsl450, false);
+		ByteBuffer fileName = org.lwjgl.system.MemoryUtil.memUTF8(name);
+		ByteBuffer entry = org.lwjgl.system.MemoryUtil.memUTF8("main");
 		try {
 			shaderc_compile_options_set_target_env(options, shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_2);
 			shaderc_compile_options_set_target_spirv(options, shaderc_spirv_version_1_5);
@@ -33,7 +37,7 @@ public final class ShadercSpirvCompiler implements SpirvCompiler {
 			// The transpiler emits every set/binding/location explicitly; anything missing must fail, not be guessed.
 			shaderc_compile_options_set_auto_bind_uniforms(options, false);
 			shaderc_compile_options_set_auto_map_locations(options, false);
-			result = shaderc_compile_into_spv(compiler, glsl450, kind(stage), name, "main", options);
+			result = shaderc_compile_into_spv(compiler, source, kind(stage), fileName, entry, options);
 			if (result == 0) return new Result(null, List.of(Diagnostic.error(name, 0, "shaderc returned no result")));
 			List<Diagnostic> diagnostics = parseMessages(shaderc_result_get_error_message(result), name, lineMap);
 			if (shaderc_result_get_compilation_status(result) != shaderc_compilation_status_success) {
@@ -46,6 +50,9 @@ public final class ShadercSpirvCompiler implements SpirvCompiler {
 			bytes.get(spv);
 			return new Result(spv, diagnostics);
 		} finally {
+			org.lwjgl.system.MemoryUtil.memFree(source);
+			org.lwjgl.system.MemoryUtil.memFree(fileName);
+			org.lwjgl.system.MemoryUtil.memFree(entry);
 			if (result != 0) shaderc_result_release(result);
 			release(compiler);
 			shaderc_compile_options_release(options);

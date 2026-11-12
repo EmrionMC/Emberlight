@@ -202,7 +202,8 @@ class IrisDimensionPlannerTest {
 	@Test
 	void colortex0To3NotSamplableInGbuffers() {
 		var r = plan(props(), p("gbuffers_terrain").samplers("colortex2"));
-		assertNull(r.binding("gbuffers_terrain", "colortex2"));
+		// not a colortex binding: falls back to the unit-0 equivalent (white), and no colortex2 is allocated
+		assertEquals("white", r.binding("gbuffers_terrain", "colortex2").builtin());
 		assertNull(r.target("colortex2"));
 	}
 

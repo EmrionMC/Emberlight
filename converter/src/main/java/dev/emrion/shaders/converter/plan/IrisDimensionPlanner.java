@@ -458,8 +458,16 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 				for (var s : a.samplers()) {
 					Res r = resolveSampler(c, a.group(), s.name(), s.glslType(), water);
 					if (r == SET0) continue;
-					if (r == null) warn(name, "sampler " + s.name() + " has no Iris source; left unbound");
-					else b.put(s.name(), bind(r));
+					if (r == null) {
+						// GL reads texture unit 0 through an unbound sampler: colortex0 in composite-like passes. In gbuffers it
+						// would be the albedo; a white texture (or depth 1.0 for shadow samplers = fully lit) is the safe
+						// equivalent (e.g. shadowtex0 in the Nether, where Iris creates no shadow targets).
+						r = !a.group().isGeometry() ? resolveSampler(c, a.group(), "colortex0", "sampler2D", false)
+								: s.glslType().endsWith("Shadow") ? new Res("sampled_image", null, null, "white_depth", sampler("linear", "none", "clamp", "lequal"))
+								: new Res("sampled_image", null, null, "white", sampler("nearest", "none", "clamp", null));
+						info(name, "sampler " + s.name() + " has no Iris source; bound to the unit-0 equivalent");
+					}
+					b.put(s.name(), bind(r));
 				}
 				for (var i : a.images()) {
 					Res r = resolveImage(i.name());
@@ -478,6 +486,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 					}
 					Res r = new Res("storage_buffer", "bufferObject" + buf.declaredBinding(), null, null, null);
 					b.put(buf.blockName(), bind(r));
+					b.put("bufferObject" + buf.declaredBinding(), bind(r)); // the transpiler resolves SSBOs by this name
 					if (!buf.readonly()) storage.add(b.get(buf.blockName()));
 				}
 				bindings.put(name, b);

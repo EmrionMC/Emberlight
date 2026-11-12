@@ -3,6 +3,10 @@ package dev.emrion.shaders.converter.cli;
 import dev.emrion.shaders.converter.Converter;
 import dev.emrion.shaders.converter.DefaultConverter;
 import dev.emrion.shaders.converter.expr.CustomUniformParser;
+import dev.emrion.shaders.converter.glsl.GlslTranspiler;
+import dev.emrion.shaders.converter.pack.DefaultPackLoader;
+import dev.emrion.shaders.converter.plan.IrisDimensionPlanner;
+import dev.emrion.shaders.converter.plan.Std140LayoutBuilder;
 import dev.emrion.shaders.converter.pack.PackSource;
 import dev.emrion.shaders.converter.pack.StandardMacros;
 import dev.emrion.shaders.converter.report.Diagnostic;
@@ -33,8 +37,8 @@ public final class ConverterCli {
 
 	static Converter defaultConverter(SpirvCompiler compiler) {
 		var env = StandardMacros.Environment.DEFAULT;
-		// shortcut: the four nulls are PackLoader, Transpiler, UniformLayoutBuilder, DimensionPlanner; the lead wires them once agents a/b/c2 merge
-		return new DefaultConverter(PackSource::open, null, CustomUniformParser::parse, null, null, null, compiler,
+		return new DefaultConverter(PackSource::open, new DefaultPackLoader(), CustomUniformParser::parse, new GlslTranspiler(),
+				new Std140LayoutBuilder(), new IrisDimensionPlanner(), compiler,
 				new Manifest.Environment(env.mcVersion(), StandardMacros.build(env)), Runtime.getRuntime().availableProcessors());
 	}
 

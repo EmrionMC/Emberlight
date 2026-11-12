@@ -9,6 +9,7 @@ import dev.emrion.shaders.converter.pack.PackLoader;
 import dev.emrion.shaders.converter.pack.PackSource;
 import dev.emrion.shaders.converter.pack.ResolvedPack;
 import dev.emrion.shaders.converter.plan.DimensionPlanner;
+import dev.emrion.shaders.converter.plan.PackProperties;
 import dev.emrion.shaders.converter.plan.UniformLayoutBuilder;
 import dev.emrion.shaders.converter.report.Diagnostic;
 import dev.emrion.shaders.converter.report.Diagnostics;
@@ -177,7 +178,7 @@ public final class DefaultConverter implements Converter {
 				else failed[0]++;
 			}
 			Manifest manifest = new Manifest(Manifest.FORMAT_VERSION, VERSION, key, new Manifest.PackInfo(source.name(), packHash),
-					environment, pack.options(), Map.of(), layout, pack.idMaps(), copyTextures(plans, tmp),
+					environment, pack.options(), PackProperties.from(pack.properties()), layout, pack.idMaps(), copyTextures(plans, tmp),
 					pack.dimensionMap(), dimensions);
 			ManifestJson.write(tmp.resolve(CacheDir.MANIFEST), manifest);
 			List<Diagnostic> all = diagnostics.all();

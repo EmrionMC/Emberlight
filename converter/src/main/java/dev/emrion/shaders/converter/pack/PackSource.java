@@ -27,8 +27,9 @@ public interface PackSource extends AutoCloseable {
 	/** SHA-256 over (path, bytes) of every file, sorted by path — part of the cache key. */
 	String contentHash() throws IOException;
 
+	/** Opens a zip (pack root may sit one folder deep) or a pack folder. The whole pack is read into memory. */
 	static PackSource open(Path zipOrDir) throws IOException {
-		throw new UnsupportedOperationException("implemented by agent (a)");
+		return MemoryPackSource.open(zipOrDir);
 	}
 
 	@Override
