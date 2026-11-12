@@ -136,7 +136,13 @@ that implements `CompiledRenderPipeline`. So:
 | `EmrionDraw` | push constants (≤128 B) | `entityId`, `blockEntityId`, `currentRenderedItemId`, `entityColor`, `alphaTestRef`, `iris_NormalMat` (when not derivable) | per draw from hooks |
 
 Set-0 bindings in our SPIR-V are **patched at load time** to the binding order of the vanilla pipeline we replace (its
-`uniforms()` list). That is exactly the set MC pushes for that draw. Global MC state (fog, camera, projection) is never read
+**backend** `VulkanRenderPipeline.uniforms()` list, which equals the frontend's `uniformIndices()`: only the uniforms the
+vanilla shaders really use, in first-use order. The frontend `uniforms()` list includes unused declarations and gives the wrong
+order; agent (d) found this through a crash. That is exactly the set MC pushes for that draw, so **a pack stage may only use set-0
+resources the vanilla pipeline also uses**. Example: terrain on the multidraw-indirect path pushes `Globals, Projection,
+TerrainUniform, Fog, Sampler2, Sampler0` and has no `DynamicTransforms` and no `ChunkSection`.
+Our pipeline layout uses a push-constant range with stage `VK_SHADER_STAGE_ALL`, because MC pushes with all stage bits.
+A wrapped `VulkanRenderPipeline` destroys its set-0 layout, pipeline layout and modules itself, so the mod owns set-1 layouts separately. Global MC state (fog, camera, projection) is never read
 from set 0. It always comes from `EmrionUniforms` or `EmrionPhase`, so a vanilla pipeline missing e.g. `Projection` cannot break us.
 
 ### 5.3 Resources (set 1)

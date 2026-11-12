@@ -210,7 +210,8 @@ single source of truth for both sides.
 `Binding` equal to the index in this canonical table:
 `0 DynamicTransforms, 1 TerrainUniform, 2 ChunkSection, 3 Sampler0, 4 Sampler1, 5 Sampler2, 6 CloudInfo, 7 CloudFaces`.
 At pipeline creation the mod rewrites each `Binding` word to the index of that name in the replaced vanilla pipeline's
-`uniforms()` list. The mod parses `OpDecorate` itself, so no spvc is needed at runtime.
+**backend** `uniforms()` list (= frontend `uniformIndices()`; ARCHITECTURE §5.2). On this NVIDIA machine, terrain uses the
+multidraw-indirect path: `terrain_mdi`, set 0 = `[Globals, Projection, TerrainUniform, Fog, Sampler2, Sampler0]`. The mod parses `OpDecorate` itself, so no spvc is needed at runtime.
 
 ### 7.2 Resources (descriptor set 1)
 

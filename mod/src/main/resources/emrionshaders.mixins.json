@@ -2,6 +2,11 @@
   "required": true,
   "package": "dev.emrion.shaders.mod.mixin",
   "compatibilityLevel": "JAVA_25",
-  "client": [],
+  "client": [
+    "FrontendGpuDeviceAccessor",
+    "GameRendererMixin",
+    "RenderSystemMixin",
+    "VulkanRenderPassMixin"
+  ],
   "injectors": { "defaultRequire": 1 }
 }

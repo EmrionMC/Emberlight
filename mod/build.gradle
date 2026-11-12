@@ -10,6 +10,51 @@ dependencies {
 	include project(':converter')
 }
 
+// Forward every -Demrion.* given to Gradle (`./gradlew :mod:runClient -Demrion.autotest.world=w`) to the game JVM,
+// and force the Vulkan backend (the launch arg wins over options.txt and MC's crash guard).
+def emrionProps = providers.systemPropertiesPrefixedBy('emrion.')
+loom {
+	runs {
+		client {
+			programArgs '--graphicsBackend', 'vulkan'
+		}
+	}
+}
+tasks.named('runClient') {
+	def props = emrionProps
+	def optionsFile = file('run/options.txt')
+	doFirst {
+		props.get().each { k, v -> jvmArgs "-D${k}=${v}" }
+		// Also persist the in-game setting so the options screen shows Vulkan in dev.
+		if (!optionsFile.exists()) {
+			optionsFile.parentFile.mkdirs()
+			optionsFile.text = 'preferredGraphicsBackend:"vulkan"\nonboardAccessibility:false\n'
+		}
+	}
+}
+
+// Test/debug shaders: mod/src/main/glsl/*.{vert,frag,comp} -> assets/emrionshaders/spv/<name>.spv (glslc on PATH).
+abstract class CompileGlsl extends DefaultTask {
+	@InputDirectory abstract DirectoryProperty getSource()
+	@OutputDirectory abstract DirectoryProperty getOutput()
+	@javax.inject.Inject abstract ExecOperations getExecOps()
+
+	@TaskAction
+	void compile() {
+		def out = output.get().dir('assets/emrionshaders/spv').asFile
+		out.deleteDir()
+		out.mkdirs()
+		source.get().asFile.eachFileMatch(~/.*\.(vert|frag|comp)$/) { f ->
+			execOps.exec { commandLine 'glslc', '--target-env=vulkan1.2', '-O', f.absolutePath, '-o', new File(out, f.name + '.spv').absolutePath }
+		}
+	}
+}
+def compileGlsl = tasks.register('compileGlsl', CompileGlsl) {
+	source = layout.projectDirectory.dir('src/main/glsl')
+	output = layout.buildDirectory.dir('generated/spv')
+}
+sourceSets.main.resources.srcDir(compileGlsl)
+
 processResources {
 	def version = project.version
 	inputs.property 'version', version
@@ -18,3 +63,10 @@ processResources {
 
 tasks.withType(JavaCompile).configureEach { it.options.release = 25; it.options.encoding = 'UTF-8' }
 java { sourceCompatibility = JavaVersion.VERSION_25; targetCompatibility = JavaVersion.VERSION_25 }
+
+dependencies {
+	testImplementation platform('org.junit:junit-bom:5.11.3')
+	testImplementation 'org.junit.jupiter:junit-jupiter'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+test { useJUnitPlatform() }
