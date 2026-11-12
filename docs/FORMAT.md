@@ -188,7 +188,7 @@ with their attributes in canonical location order, are:
 |---|---|---|
 | `terrain_mdi` | `EMRION_BLOCK` + instanced `ChunkPosition`,`ChunkVisibility` | Position, Color, UV0, UV2, Normal, mc_Entity, mc_midTexCoord, at_tangent, at_midBlock + ChunkPosition, ChunkVisibility |
 | `terrain_ubo` | `EMRION_BLOCK` (ChunkSection UBO) | same, without the two instanced ones |
-| `entity` | `ENTITY` | Position, Color, UV0, UV1, UV2, Normal (+ mc_midTexCoord, at_tangent derived: see below) |
+| `entity` | `EMRION_ENTITY` (`ENTITY` + derived mc_midTexCoord, at_tangent + iris_Entity) | Position, Color, UV0, UV1, UV2, Normal, mc_midTexCoord, at_tangent, iris_Entity |
 | `particle` | `PARTICLE` | Position, UV0, Color, UV2 |
 | `position_color` | `POSITION_COLOR` | Position, Color |
 | `position_tex` | `POSITION_TEX` | Position, UV0 |
@@ -204,7 +204,26 @@ single source of truth for both sides.
 
 **Canonical vertex input locations** (all variants):
 `0 Position, 1 Color, 2 UV0, 3 UV1, 4 UV2, 5 Normal, 6 mc_Entity, 7 mc_midTexCoord, 8 at_tangent, 9 at_midBlock,
-10 ChunkPosition, 11 ChunkVisibility, 12 LineWidth`.
+10 ChunkPosition, 11 ChunkVisibility, 12 LineWidth, 13 iris_Entity`.
+
+`iris_Entity` is a `uvec3` (entityId, blockEntityId, currentRenderedItemId; vertex format RGBA16_UINT, so −1 reads as 65535
+as on Iris's USHORT attribute). Geometry programs without a geometry stage that use `entityId`/`blockEntityId`/
+`currentRenderedItemId` read them from a flat varying `emr_entityInfo` that the vertex stage fills from `iris_Entity` (variants
+that have it) or from the EmrionDraw push constants (all other variants), so the fragment stage stays variant-independent.
+
+Vertex formats the mod draws terrain and entities with while a pack is active (`EmrionVertexFormats`, 56 B each):
+
+| EMRION_BLOCK | offset | GpuFormat | | EMRION_ENTITY | offset | GpuFormat |
+|---|---|---|---|---|---|---|
+| Position | 0 | RGB32_FLOAT | | Position | 0 | RGB32_FLOAT |
+| Color | 12 | RGBA8_UNORM | | Color | 12 | RGBA8_UNORM |
+| UV0 | 16 | RG32_FLOAT | | UV0 | 16 | RG32_FLOAT |
+| UV2 | 24 | RG16_SINT | | UV1 | 24 | RG16_SINT |
+| Normal | 28 | RGBA8_SNORM (w pad) | | UV2 | 28 | RG16_SINT |
+| mc_Entity | 32 | RG16_SINT (id, 0 block / 1 fluid) | | Normal | 32 | RGBA8_SNORM (w pad) |
+| mc_midTexCoord | 36 | RG32_FLOAT | | mc_midTexCoord | 36 | RG32_FLOAT |
+| at_tangent | 44 | RGBA8_SNORM | | at_tangent | 44 | RGBA8_SNORM |
+| at_midBlock | 48 | RGBA16_FLOAT (xyz = Iris's byte (centre − vertex)·64, w = light emission) | | iris_Entity | 48 | RGBA16_UINT |
 
 **set0** lists the MC per-draw resources a stage references. In the SPIR-V they carry `DescriptorSet 0` and a placeholder
 `Binding` equal to the index in this canonical table:

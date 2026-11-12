@@ -11,11 +11,14 @@ import java.util.Map;
 public final class VertexLayouts {
 	private VertexLayouts() {}
 
-	/** Canonical vertex input locations; name = MC VertexFormatElement name or Iris attribute name. */
+	/**
+	 * Canonical vertex input locations; name = MC VertexFormatElement name or Iris attribute name. New inputs are appended so
+	 * existing locations keep their numbers. {@code iris_Entity} = (entityId, blockEntityId, currentRenderedItemId) as uvec3.
+	 */
 	public static final List<String> INPUT_LOCATIONS = List.of(
 			"Position", "Color", "UV0", "UV1", "UV2", "Normal",
 			"mc_Entity", "mc_midTexCoord", "at_tangent", "at_midBlock",
-			"ChunkPosition", "ChunkVisibility", "LineWidth");
+			"ChunkPosition", "ChunkVisibility", "LineWidth", "iris_Entity");
 
 	public static int location(String input) {
 		int i = INPUT_LOCATIONS.indexOf(input);
@@ -39,7 +42,7 @@ public final class VertexLayouts {
 	public static final Map<String, List<String>> VARIANTS = Map.ofEntries(
 			Map.entry("terrain_mdi", concat(TERRAIN, List.of("ChunkPosition", "ChunkVisibility"))),
 			Map.entry("terrain_ubo", TERRAIN),
-			Map.entry("entity", List.of("Position", "Color", "UV0", "UV1", "UV2", "Normal")),
+			Map.entry("entity", List.of("Position", "Color", "UV0", "UV1", "UV2", "Normal", "mc_midTexCoord", "at_tangent", "iris_Entity")),
 			Map.entry("particle", List.of("Position", "UV0", "Color", "UV2")),
 			Map.entry("position_color", List.of("Position", "Color")),
 			Map.entry("position_tex", List.of("Position", "UV0")),

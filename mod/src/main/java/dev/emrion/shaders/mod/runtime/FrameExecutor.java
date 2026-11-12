@@ -5,17 +5,26 @@ import static org.lwjgl.vulkan.VK10.*;
 import static org.lwjgl.vulkan.VK13.*;
 
 import com.mojang.blaze3d.pipeline.RenderTarget;
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.renderpearl.api.commands.RenderPass;
+import com.mojang.renderpearl.api.commands.RenderPassDescriptor;
+import com.mojang.renderpearl.api.textures.FilterMode;
 import com.mojang.renderpearl.backend.vulkan.VulkanConst;
+import com.mojang.renderpearl.backend.vulkan.VulkanGpuSampler;
 import com.mojang.renderpearl.backend.vulkan.VulkanGpuTexture;
 import com.mojang.renderpearl.backend.vulkan.VulkanGpuTextureView;
 import dev.emrion.shaders.format.Manifest;
 import dev.emrion.shaders.mod.EmrionShadersClient;
+import dev.emrion.shaders.mod.pipeline.GbufferPipelines;
+import dev.emrion.shaders.mod.pipeline.GeometryPipelines;
 import dev.emrion.shaders.mod.uniforms.UniformSystem;
 import dev.emrion.shaders.mod.vk.GpuTimer;
 import dev.emrion.shaders.mod.vk.RawCommands;
 import dev.emrion.shaders.mod.vk.RawPass;
 import java.util.List;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.texture.TextureAtlas;
+import org.jspecify.annotations.Nullable;
 import org.joml.Vector4fc;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -29,27 +38,31 @@ import org.lwjgl.vulkan.VkRect2D;
 import org.lwjgl.vulkan.VkViewport;
 
 /**
- * Runs a dimension's {@code once} and {@code frame} commands (FORMAT §7.4) on a {@link PackRuntime}. M2 split of the frame:
+ * Runs a dimension's {@code once} and {@code frame} commands (FORMAT §7.4) on a {@link PackRuntime}, in plan order, split at
+ * the {@code geometry} phases that MC's own draw code renders (ARCHITECTURE §5.5):
  * <ul>
- *   <li>{@link #frameStart} (GameRenderer.renderLevel HEAD): uniforms, then {@code once} and every command before the first
- *       {@code geometry} phase, in one command buffer;</li>
- *   <li>{@link #beforeHud} (before render3dHud clears MC's depth): MC's reverse-Z depth → depthtex0 as GL depth;</li>
- *   <li>{@link #afterLevel} (renderLevel TAIL): MC's colour → colortex0 (both sides), then the rest of the plan with the
- *       {@code geometry} phases skipped (MC rendered the world normally), in one command buffer.</li>
+ *   <li>{@link #levelStart} (LevelRenderer.render HEAD): uniforms, {@code once}, every command before the first world phase;</li>
+ *   <li>{@link #advanceTo} (from the hooks, outside MC render passes): the raw commands up to a phase, then the hook opens
+ *       the phase's gbuffers pass with {@link #beginPhase} and MC draws into it;</li>
+ *   <li>{@link #finish} (after the level's frame graph ran): the rest, i.e. composites, final and the end-of-frame copies.</li>
  * </ul>
- * Every pass declares what it reads and writes to {@link Hazards}, which emits the minimal barrier.
+ * Shadow phases are skipped until M4 (the plan's clears leave shadowtex at 1.0 = lit). Every raw pass declares what it reads
+ * and writes to {@link Hazards}, which emits the minimal barrier.
  */
 public final class FrameExecutor {
 	private static final boolean TIMINGS = Boolean.getBoolean("emrion.debug.timings");
 	private static final long TIMINGS_INTERVAL_NS = Long.getLong("emrion.debug.timings.seconds", 5) * 1_000_000_000L;
 	private static final long SHADER_STAGES = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | FRAGMENT;
+	/** Iris WorldRenderingPhase ordinals have 24 entries (iris-spec §1.4). */
+	private static final int STAGES = 24;
+	/** EmrionPhase blocks per frame at most: FULLSCREEN plus every (WORLD/HAND, renderStage). */
+	public static final int PHASE_BLOCKS = 1 + 2 * STAGES;
 
 	private final PackRuntime rt;
 	private final PackPipelines pp;
 	private final Manifest.Dimension dim;
 	private final UniformSystem uniforms;
 	private final Hazards hazards = new Hazards();
-	private final int firstGeometry;
 	private final int[] dynamicOffsets = new int[2];
 	private final GpuTimer timer;
 	private final String[] labels;
@@ -57,33 +70,64 @@ public final class FrameExecutor {
 	private boolean oncePending = true;
 	private long lastLog = System.nanoTime();
 
+	/** Next frame command to run; -1 outside a level render. */
+	private int cursor = -1;
+	/** Per frame: EmrionPhase ring offset per (phase, renderStage), -1 = not written yet. */
+	private final int[][] phaseOffsets = new int[UniformSystem.Phase.values().length][STAGES];
+	private GbufferPipelines.@Nullable Context context;
+	private UniformSystem.Phase phase = UniformSystem.Phase.WORLD;
+	private int stage;
+
 	public FrameExecutor(PackRuntime rt) {
 		this.rt = rt;
 		this.pp = rt.pipelines;
 		this.dim = rt.dim;
 		this.uniforms = rt.uniforms;
-		int g = 0;
-		while (g < dim.frame().size() && !dim.frame().get(g).cmd().equals("geometry")) g++;
-		firstGeometry = g;
-		int marks = dim.frame().size() + dim.once().size() + 4;
+		int marks = 2 * dim.frame().size() + dim.once().size() + 4;
 		labels = new String[marks];
 		timer = TIMINGS ? new GpuTimer(marks) : null;
 	}
 
+	public PackPipelines pipelines() {
+		return pp;
+	}
+
+	public Manifest manifest() {
+		return rt.manifest;
+	}
+
+	public Manifest.Dimension dimension() {
+		return dim;
+	}
+
 	// ---- hook entry points ---------------------------------------------------------------------------------------------
 
-	public void frameStart(float partialTick) {
+	/** LevelRenderer.render HEAD: the level projection of this frame is known, no MC render pass is open. */
+	public void levelStart(float partialTick) {
 		uniforms.beginFrame(partialTick);
 		rt.ring.nextFrame();
+		for (int[] p : phaseOffsets) java.util.Arrays.fill(p, -1);
 		var layout = rt.manifest.uniforms();
-		long frameOffset = rt.ring.alloc(layout.size()), phaseOffset = rt.ring.alloc(layout.phase().size());
-		uniforms.writeFrameBlock(MemoryUtil.memByteBuffer(rt.ring.address(frameOffset), layout.size()));
-		uniforms.writePhaseBlock(MemoryUtil.memByteBuffer(rt.ring.address(phaseOffset), layout.phase().size()), UniformSystem.Phase.FULLSCREEN);
-		dynamicOffsets[0] = (int) frameOffset;
-		dynamicOffsets[1] = (int) phaseOffset;
+		long frameOffset = rt.ring.alloc(layout.size());
+		uniforms.writeFrameBlock(MemoryUtil.memByteBuffer(rt.ring.address(frameOffset), layout.size()).order(java.nio.ByteOrder.nativeOrder()));
+		dynamicOffsets[0] = GeometryPipelines.DYNAMIC_OFFSETS[0] = (int) frameOffset;
+		dynamicOffsets[1] = phaseOffset(UniformSystem.Phase.FULLSCREEN, 0);
+		var atlas = Minecraft.getInstance().getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS).getTexture();
+		GeometryPipelines.atlasWidth = atlas.getWidth(0);
+		GeometryPipelines.atlasHeight = atlas.getHeight(0);
+		var gr = Minecraft.getInstance().gameRenderer;
+		long nearest = ((VulkanGpuSampler) RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST)).vkSampler();
+		long linear = ((VulkanGpuSampler) RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR)).vkSampler();
+		GeometryPipelines.EXTRA_VIEWS[0] = rt.whiteView();
+		GeometryPipelines.EXTRA_VIEWS[1] = ((VulkanGpuTextureView) gr.overlayTexture().getTextureView()).vkImageView();
+		GeometryPipelines.EXTRA_VIEWS[2] = ((VulkanGpuTextureView) gr.lightmap()).vkImageView();
+		GeometryPipelines.EXTRA_SAMPLERS[0] = GeometryPipelines.EXTRA_SAMPLERS[1] = nearest;
+		GeometryPipelines.EXTRA_SAMPLERS[2] = linear;
+		GeometryPipelines.defaultsBuffer = pp.defaults.handle;
 		if (timer != null) {
 			timer.beginFrame();
 			logTimings();
+			marks = 0;
 		}
 
 		VkCommandBuffer cb = begin();
@@ -92,40 +136,115 @@ public final class FrameExecutor {
 			for (var c : dim.once()) run(cb, c);
 			oncePending = false;
 		}
-		for (int i = 0; i < firstGeometry; i++) run(cb, dim.frame().get(i));
+		int i = 0;
+		while (i < dim.frame().size() && !isWorldPhase(dim.frame().get(i))) run(cb, dim.frame().get(i++));
+		cursor = i;
 		RawCommands.submit(rt.ctx, cb);
 	}
 
-	public void beforeHud() {
-		PackRuntime.Img depth = rt.image("depthtex0", "main");
-		if (depth == null) return;
-		RenderTarget main = Minecraft.getInstance().gameRenderer.mainRenderTarget();
-		long mcDepth = ((VulkanGpuTextureView) main.getDepthTextureView()).vkImageView();
-		VkCommandBuffer cb = begin();
-		hazards.write(depth, DEPTH, DEPTH_WRITE);
-		hazards.flush(cb);
-		RawPass.beginDepth(cb, depth.width, depth.height, depth.attach);
-		helper(cb, pp.depthConvert, mcDepth);
-		RawPass.end(cb);
-		mark(cb, "MC world + import depth");
-		RawCommands.submit(rt.ctx, cb);
+	private static boolean isWorldPhase(Manifest.Command c) {
+		return c.cmd().equals("geometry") && !c.phase().startsWith("shadow");
 	}
 
-	public void afterLevel() {
+	/** True between {@link #levelStart} and {@link #finish}. */
+	public boolean inLevel() {
+		return cursor >= 0;
+	}
+
+	/**
+	 * Runs the raw commands up to the geometry command of {@code phase} and returns it; null (nothing run) if the rest of the
+	 * plan has no such phase. Phases whose hook did not fire this frame (e.g. no sky in the Nether) are passed over.
+	 */
+	public Manifest.@Nullable Command advanceTo(String phaseName) {
+		if (cursor < 0) return null;
+		int j = cursor;
+		while (j < dim.frame().size() && !(dim.frame().get(j).cmd().equals("geometry") && dim.frame().get(j).phase().equals(phaseName))) j++;
+		if (j == dim.frame().size()) return null;
+		runRange(cursor, j);
+		cursor = j + 1;
+		return dim.frame().get(j);
+	}
+
+	/** After the level's frame graph: composites, final (into MC's main colour target) and the end-of-frame copies. */
+	public void finish() {
+		if (cursor < 0) return;
 		RenderTarget main = Minecraft.getInstance().gameRenderer.mainRenderTarget();
 		mcColor.attach = mcColor.sampled = ((VulkanGpuTextureView) main.getColorTextureView()).vkImageView();
 		mcColor.image = ((VulkanGpuTexture) main.getColorTexture()).vkImage();
 		mcColor.width = main.width;
 		mcColor.height = main.height;
 		mcColor.vkFormat = VulkanConst.toVk(PackPipelines.SCREEN_FORMAT);
-		VkCommandBuffer cb = begin();
-		PackRuntime.Img[] colortex0 = rt.images.get("colortex0");
-		if (colortex0 != null) {
-			for (var img : colortex0) if (img != null) blit(cb, mcColor, img);
-			mark(cb, "import color");
+		runRange(cursor, dim.frame().size());
+		cursor = -1;
+	}
+
+	private void runRange(int from, int to) {
+		VkCommandBuffer cb = null;
+		for (int i = from; i < to; i++) {
+			var c = dim.frame().get(i);
+			if (c.cmd().equals("geometry")) continue;
+			if (cb == null) cb = begin();
+			run(cb, c);
 		}
-		for (int i = firstGeometry; i < dim.frame().size(); i++) run(cb, dim.frame().get(i));
-		RawCommands.submit(rt.ctx, cb);
+		if (cb != null) RawCommands.submit(rt.ctx, cb);
+	}
+
+	// ---- geometry phases -----------------------------------------------------------------------------------------------
+
+	/**
+	 * Opens the gbuffers render pass of a geometry command: every gbuffers target on the side the command's flip state reads
+	 * (gbuffers write the read side, iris-spec §2.2), plus depthtex0. MC draws into it; the swap picks {@code ctx}'s pipelines.
+	 * The caller binds MC's default uniforms if MC does not, closes the pass and calls {@link #endPhase}.
+	 */
+	public RenderPass beginPhase(Manifest.Command g, GbufferPipelines.Context ctx, UniformSystem.Phase phase, int stage) {
+		markMc(null);
+		var flip = rt.flipState(g.flipState());
+		var d = RenderPassDescriptor.builder(() -> "emrion " + g.phase());
+		for (String t : pp.gbuffers.targets) d.withColorAttachment(rt.read(t, flip).attachView);
+		d.withDepthAttachment(rt.image("depthtex0", "main").attachView);
+		RenderPass pass = RenderSystem.getDevice().createCommandEncoder().createRenderPass(d.build());
+		GeometryPipelines.set = rt.sets[g.flipState()];
+		this.context = ctx;
+		this.phase = phase;
+		this.stage = -1;
+		setStage(stage);
+		phaseLabel = "geometry " + g.phase();
+		return pass;
+	}
+
+	/** The draw context of the open phase (which pipelines the swap returns); null outside a phase. */
+	public GbufferPipelines.@Nullable Context context() {
+		return context;
+	}
+
+	/** Iris renderStage of the following draws (EmrionPhase.renderStage); re-binds set 1 if one of our pipelines is bound. */
+	public void setStage(int s) {
+		if (context == null || s == stage) return;
+		stage = s;
+		GeometryPipelines.DYNAMIC_OFFSETS[1] = phaseOffset(phase, s);
+		GeometryPipelines.rebind();
+	}
+
+	public int stage() {
+		return stage;
+	}
+
+	/** The phase's render pass is closed. */
+	public void endPhase() {
+		if (context == null) return;
+		context = null;
+		GeometryPipelines.unbind();
+		markMc(phaseLabel);
+	}
+
+	private int phaseOffset(UniformSystem.Phase p, int s) {
+		int off = phaseOffsets[p.ordinal()][s];
+		if (off >= 0) return off;
+		int size = rt.manifest.uniforms().phase().size();
+		uniforms.setRenderStage(s);
+		long o = rt.ring.alloc(size);
+		uniforms.writePhaseBlock(MemoryUtil.memByteBuffer(rt.ring.address(o), size).order(java.nio.ByteOrder.nativeOrder()), p);
+		return phaseOffsets[p.ordinal()][s] = (int) o;
 	}
 
 	private VkCommandBuffer begin() {
@@ -137,7 +256,7 @@ public final class FrameExecutor {
 
 	private void run(VkCommandBuffer cb, Manifest.Command c) {
 		switch (c.cmd()) {
-			case "geometry" -> { return; } // M3: MC renders the world normally
+			case "geometry" -> { return; } // drawn by MC through the hooks (advanceTo / beginPhase)
 			case "clear" -> clear(cb, c.targets());
 			case "compute" -> compute(cb, c);
 			case "fullscreen" -> fullscreen(cb, c);
@@ -340,11 +459,18 @@ public final class FrameExecutor {
 	// ---- GPU timings ---------------------------------------------------------------------------------------------------
 
 	private int marks;
+	private String phaseLabel;
 
 	private void mark(VkCommandBuffer cb, String label) {
 		if (timer == null) return;
-		if (label == null) marks = 0;
 		labels[timer.mark(cb)] = label;
+		marks++;
+	}
+
+	/** Timestamp through MC's encoder (outside render passes), around the geometry phases MC records. */
+	private void markMc(String label) {
+		if (timer == null) return;
+		labels[timer.mark()] = label;
 		marks++;
 	}
 
@@ -356,10 +482,10 @@ public final class FrameExecutor {
 		for (int i = 1; i < marks; i++) {
 			long t = timer.nanosSinceFirst(i);
 			if (t < 0) return; // not available yet
-			if (labels[i] != null && !labels[i].startsWith("geometry")) sb.append("\n  ").append(String.format("%8.1f  %s", (t - prev) / 1000.0, labels[i]));
+			sb.append("\n  ").append(String.format("%8.1f  %s", (t - prev) / 1000.0, labels[i] == null ? "(MC, outside our passes)" : labels[i]));
 			prev = t;
 		}
-		sb.append(String.format("%n  %8.1f  total (frame start to end of plan, includes MC's world rendering in between)", prev / 1000.0));
+		sb.append(String.format("%n  %8.1f  total (level start to end of plan)", prev / 1000.0));
 		EmrionShadersClient.LOG.info(sb.toString());
 	}
 

@@ -38,6 +38,7 @@ public final class GraphicsPipelineBuilder {
 	private final List<Attribute> attributes = new ArrayList<>();
 	private int[] colorFormats = new int[0];
 	private Blend[] blends = new Blend[0];
+	private int[] writeMasks;
 	private int depthFormat = VK_FORMAT_UNDEFINED;
 	private boolean depthTest, depthWrite;
 	private int depthCompare = VK_COMPARE_OP_ALWAYS;
@@ -62,6 +63,12 @@ public final class GraphicsPipelineBuilder {
 	public GraphicsPipelineBuilder colors(int[] formats, Blend... blends) {
 		this.colorFormats = formats.clone();
 		this.blends = java.util.Arrays.copyOf(blends, formats.length);
+		return this;
+	}
+
+	/** Per-attachment colour write mask (default 0xF everywhere); 0 leaves an attachment untouched. */
+	public GraphicsPipelineBuilder writeMasks(int[] masks) {
+		this.writeMasks = masks.clone();
 		return this;
 	}
 
@@ -135,7 +142,7 @@ public final class GraphicsPipelineBuilder {
 
 			var blendStates = VkPipelineColorBlendAttachmentState.calloc(colorFormats.length, stack);
 			for (int i = 0; i < colorFormats.length; i++) {
-				var att = blendStates.get(i).colorWriteMask(0xF);
+				var att = blendStates.get(i).colorWriteMask(writeMasks == null ? 0xF : writeMasks[i]);
 				Blend b = blends[i];
 				if (b != null) {
 					att.blendEnable(true).srcColorBlendFactor(b.srcColor()).dstColorBlendFactor(b.dstColor()).colorBlendOp(b.colorOp())

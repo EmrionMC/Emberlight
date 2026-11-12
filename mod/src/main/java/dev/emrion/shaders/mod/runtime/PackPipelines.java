@@ -4,7 +4,10 @@ import static org.lwjgl.vulkan.VK10.*;
 
 import com.mojang.renderpearl.api.GpuFormat;
 import com.mojang.renderpearl.backend.vulkan.VulkanConst;
+import com.mojang.renderpearl.api.pipeline.RenderPipeline;
+import com.mojang.renderpearl.frontend.FrontendRenderPipeline;
 import dev.emrion.shaders.format.Manifest;
+import dev.emrion.shaders.mod.pipeline.GbufferPipelines;
 import dev.emrion.shaders.mod.vk.Blend;
 import dev.emrion.shaders.mod.vk.ComputePipelines;
 import dev.emrion.shaders.mod.vk.Descriptors;
@@ -27,8 +30,7 @@ import java.util.concurrent.Executors;
  * Everything of a pack dimension that does not depend on the window size, built on background threads (ARCHITECTURE §5.7):
  * the set-1 layout, the shared pipeline layout, one VkPipeline per composite-like or compute program (created in parallel
  * with the persisted VkPipelineCache) and the runtime's own helper pipelines. Nothing is ever created lazily in a frame.
- * Geometry programs (kind gbuffers/shadow) are M3: they need the vanilla pipeline they replace (GeometryPipelines.builderFor),
- * so they are built at the swap point from {@link #setLayout} and the program's per-variant modules.
+ * Gbuffers programs are built per vanilla pipeline they replace ({@link GbufferPipelines}); shadow programs are M4.
  */
 public final class PackPipelines {
 	/** MC's main render target format (MainTarget): what final writes. */
@@ -41,12 +43,18 @@ public final class PackPipelines {
 	public final Map<String, Long> pipelines = new HashMap<>();
 	/** VkFormat → texel copy pipeline into that format. */
 	public final Map<Integer, Long> blit = new HashMap<>();
-	public final long depthConvert;
+	public final GbufferPipelines gbuffers;
+	/** Constant default vertex attributes for gbuffers inputs the vanilla formats lack (GeometryPipelines.DEFAULTS). */
+	public final dev.emrion.shaders.mod.vk.RawBuffer defaults;
 
 	private final VulkanContext ctx;
 
-	public PackPipelines(VulkanContext ctx, Path cacheDir, Manifest manifest, Manifest.Dimension dim) {
+	/** {@code vanilla}: every vanilla pipeline that may draw in a world phase, compiled (collected on the render thread). */
+	public PackPipelines(VulkanContext ctx, Path cacheDir, Manifest manifest, Manifest.Dimension dim,
+			Map<RenderPipeline, FrontendRenderPipeline> vanilla) {
 		this.ctx = ctx;
+		defaults = new dev.emrion.shaders.mod.vk.RawBuffer(ctx, 32, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true);
+		dev.emrion.shaders.mod.pipeline.GeometryPipelines.writeDefaults(defaults.mapped);
 		var set1 = new Descriptors.LayoutBuilder();
 		for (var r : dim.resources()) set1.add(r.binding(), descriptorType(r.kind()), VK_SHADER_STAGE_ALL);
 		setLayout = set1.build(ctx, false);
@@ -73,12 +81,10 @@ public final class PackPipelines {
 			var ct0 = targets.get("colortex0");
 			if (ct0 != null) blitFormats.add(VulkanConst.toVk(Formats.gpu(ct0.format())));
 			for (int f : blitFormats.stream().distinct().toList()) jobs.add(CompletableFuture.runAsync(() -> blits.put(f, helper("emrion_blit", f)), pool));
-			CompletableFuture<Long> depth = CompletableFuture.supplyAsync(() -> helper("emrion_depth", VK_FORMAT_UNDEFINED), pool);
-			jobs.add(depth.thenAccept(x -> {}));
+			gbuffers = new GbufferPipelines(ctx, cacheDir, manifest, dim, setLayout, vanilla, pool);
 			CompletableFuture.allOf(jobs.toArray(CompletableFuture[]::new)).join();
 			pipelines.putAll(built);
 			blit.putAll(blits);
-			depthConvert = depth.join();
 		}
 		ctx.pipelineCache().save();
 	}
@@ -130,22 +136,20 @@ public final class PackPipelines {
 		}
 	}
 
-	/** Helper fullscreen pass from the mod jar; {@code VK_FORMAT_UNDEFINED} = depth-only (writes gl_FragDepth). */
+	/** Helper fullscreen pass from the mod jar. */
 	private long helper(String frag, int colorFormat) {
 		long vs = ShaderModules.create(ctx, ShaderModules.resource("/assets/emrionshaders/spv/fullscreen.vert.spv"));
 		long fs = ShaderModules.create(ctx, ShaderModules.resource("/assets/emrionshaders/spv/" + frag + ".frag.spv"));
 		try {
-			var b = new GraphicsPipelineBuilder().stage(VK_SHADER_STAGE_VERTEX_BIT, vs).stage(VK_SHADER_STAGE_FRAGMENT_BIT, fs).layout(helperLayout);
-			if (colorFormat == VK_FORMAT_UNDEFINED) b.depth(VK_FORMAT_D32_SFLOAT, true, true, VK_COMPARE_OP_ALWAYS);
-			else b.colors(new int[] {colorFormat});
-			return b.build(ctx, ctx.pipelineCache().handle);
+			return new GraphicsPipelineBuilder().stage(VK_SHADER_STAGE_VERTEX_BIT, vs).stage(VK_SHADER_STAGE_FRAGMENT_BIT, fs).layout(helperLayout)
+					.colors(new int[] {colorFormat}).build(ctx, ctx.pipelineCache().handle);
 		} finally {
 			ShaderModules.destroy(ctx, vs);
 			ShaderModules.destroy(ctx, fs);
 		}
 	}
 
-	static Blend blend(Manifest.BlendMode m) {
+	public static Blend blend(Manifest.BlendMode m) {
 		if (m == null || m.mode().equals("off")) return null;
 		if (m.mode().equals("vanilla")) return Blend.ALPHA;
 		return Blend.of(factor(m.src()), factor(m.dst()), factor(m.srcA()), factor(m.dstA()));
@@ -177,11 +181,13 @@ public final class PackPipelines {
 		}
 	}
 
+	/** Render thread only (the gbuffers pipelines are MC pipelines). */
 	public void destroyLater() {
+		gbuffers.destroyLater();
+		defaults.destroyLater();
 		ctx.destroyLater(() -> {
 			pipelines.values().forEach(p -> vkDestroyPipeline(ctx.vk, p, null));
 			blit.values().forEach(p -> vkDestroyPipeline(ctx.vk, p, null));
-			vkDestroyPipeline(ctx.vk, depthConvert, null);
 			vkDestroyPipelineLayout(ctx.vk, layout, null);
 			vkDestroyPipelineLayout(ctx.vk, helperLayout, null);
 			vkDestroyDescriptorSetLayout(ctx.vk, setLayout, null);

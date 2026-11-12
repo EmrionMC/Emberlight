@@ -3,6 +3,7 @@ package dev.emrion.shaders.mod;
 import com.mojang.blaze3d.systems.RenderSystem;
 import dev.emrion.shaders.mod.autotest.AutoTest;
 import dev.emrion.shaders.mod.pack.PackManager;
+import dev.emrion.shaders.mod.vertex.DebugVertex;
 import dev.emrion.shaders.mod.pack.PackScreen;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
@@ -45,6 +46,7 @@ public final class EmrionShadersClient implements ClientModInitializer {
 			ClientLifecycleEvents.CLIENT_STOPPING.register(c -> VulkanContext.onShutdown());
 			VulkanContext.get().pipelineCache(); // render thread: background pipeline builds only read these
 			PackManager.init();
+			if (DebugVertex.ENABLED) DebugVertex.init();
 			LOG.info("Emrion Shaders active on Vulkan ({})", RenderSystem.getDevice().getDeviceInfo().name());
 		});
 	}

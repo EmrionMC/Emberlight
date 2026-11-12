@@ -1,0 +1,15 @@
+# Shared comparison scenes (docs/BENCHMARK.md): world seed 2026, default world type, created by the autotest harness.
+# Used by `runIrisReference` (iris-<name>.png) and `runClient -Pcompare` (emrion-<name>.png) via -Demrion.autotest.scenes.
+#
+# name | x y z yaw pitch | time | clear|rain|thunder | commands (no slash, ';'-separated, run before the teleport)
+#
+# Every scene also gets: spectator mode, advance_time/advance_weather off, and (after the chunks are built) a kill of all
+# entities not tagged "emrion", so wandering worldgen animals never differ between runs. Scene mobs have NoAI and the tag.
+overview | 90.5 105 -190.5 180 25 | 6000 | clear |
+forest   | 4.5 119 10.5 45 5 | 6000 | clear |
+water    | 64.5 68 -260.5 180 15 | 6000 | clear |
+cave     | 0.5 -37 -5.5 0 15 | 6000 | clear | fill -8 -40 -8 8 -32 8 minecraft:cobbled_deepslate hollow; setblock -6 -39 -6 minecraft:torch; setblock 6 -39 6 minecraft:torch; setblock -6 -39 6 minecraft:torch; setblock 6 -39 -6 minecraft:torch; setblock 0 -39 3 minecraft:lantern; setblock 2 -37 8 minecraft:deepslate_diamond_ore; setblock -3 -36 8 minecraft:deepslate_copper_ore; setblock 8 -38 2 minecraft:deepslate_gold_ore
+sunset   | 40.5 105 -59.5 90 5 | 12500 | clear |
+night    | 40.5 105 -59.5 90 -70 | 18000 | clear |
+rain     | 64.5 70 110.5 0 25 | 6000 | rain |
+entities | 110.5 69 -199.5 180 15 | 6000 | clear | kill @e[tag=emrion]; execute positioned 108 0 -205 positioned over motion_blocking run summon minecraft:cow ~ ~ ~ {NoAI:1b,Tags:["emrion"],Rotation:[90f,0f]}; execute positioned 112 0 -206 positioned over motion_blocking run summon minecraft:sheep ~ ~ ~ {NoAI:1b,Tags:["emrion"],Rotation:[30f,0f]}; execute positioned 110 0 -209 positioned over motion_blocking run summon minecraft:pig ~ ~ ~ {NoAI:1b,Tags:["emrion"],Rotation:[0f,0f]}; execute positioned 106 0 -210 positioned over motion_blocking run summon minecraft:villager ~ ~ ~ {NoAI:1b,Tags:["emrion"],Rotation:[0f,0f]}; execute positioned 115 0 -211 positioned over motion_blocking run summon minecraft:horse ~ ~ ~ {NoAI:1b,Tags:["emrion"],Rotation:[120f,0f]}; execute positioned 113 0 -203 positioned over motion_blocking run summon minecraft:chicken ~ ~ ~ {NoAI:1b,Tags:["emrion"],Rotation:[200f,0f]}

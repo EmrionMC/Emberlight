@@ -1,0 +1,180 @@
+package dev.emrion.shaders.mod.runtime;
+
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.renderpearl.api.commands.RenderPass;
+import com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline;
+import com.mojang.renderpearl.api.pipeline.RenderPipeline;
+import dev.emrion.shaders.mod.EmrionShadersClient;
+import dev.emrion.shaders.mod.mixin.GameRendererAccessor;
+import dev.emrion.shaders.mod.pack.PackManager;
+import dev.emrion.shaders.mod.pipeline.GbufferPipelines.Context;
+import dev.emrion.shaders.mod.uniforms.UniformSystem;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.Set;
+import net.minecraft.client.Minecraft;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * What the geometry mixins do while a pack renders a level: open our gbuffers passes in place of MC's, split MC's main pass
+ * into opaque and translucent with the hand and the deferred passes in between (iris-spec §0 steps 4-7), and set Iris's
+ * renderStage per draw group. Every method is a no-op (returns null/false) when no pack is rendering the level.
+ */
+public final class GeometryHooks {
+	private GeometryHooks() {}
+
+	/** Iris WorldRenderingPhase ordinals (iris-spec §1.4); the pack hard-codes some of them. */
+	public static final int SKY = 1, SUNSET = 2, CUSTOM_SKY = 3, SUN = 4, MOON = 5, STARS = 6, VOID = 7, TERRAIN_SOLID = 8, ENTITIES = 11,
+			HAND_SOLID = 16, TERRAIN_TRANSLUCENT = 17, PARTICLES = 19, RAIN_SNOW = 21, WORLD_BORDER = 22, HAND_TRANSLUCENT = 23;
+
+	private static final Set<RenderPipeline> LOGGED = Collections.newSetFromMap(new IdentityHashMap<>());
+	private static HandDraw hand;
+
+	private record HandDraw(dev.emrion.shaders.format.Manifest.Command command, Context context, int stage) {}
+
+	private static @Nullable FrameExecutor exec() {
+		return PackManager.levelExecutor();
+	}
+
+	/** True while a pack renders levels (MC's own hand rendering after the level is then skipped: we drew it). */
+	public static boolean packRendering() {
+		return PackManager.running();
+	}
+
+	/** RenderSystem.getCompiledPipelineNullable: our pipeline while a phase pass is open, else null (vanilla). */
+	public static @Nullable CompiledRenderPipeline swap(RenderPipeline p) {
+		FrameExecutor e = exec();
+		Context c = e == null ? null : e.context();
+		if (c == null) return null;
+		CompiledRenderPipeline ours = e.pipelines().gbuffers.get(c, p);
+		if (ours == null && LOGGED.add(p)) EmrionShadersClient.LOG.warn("Pipeline {} draws in a gbuffers phase but has no pack pipeline; it renders vanilla", p.getLocation());
+		return ours;
+	}
+
+	/** Opens the pass of {@code phaseName} (after running the raw commands before it); null if no pack phase applies. */
+	public static @Nullable RenderPass openPhase(String phaseName, Context ctx, UniformSystem.Phase phase, int stage) {
+		FrameExecutor e = exec();
+		if (e == null) return null;
+		var cmd = e.advanceTo(phaseName);
+		return cmd == null ? null : e.beginPhase(cmd, ctx, phase, stage);
+	}
+
+	public static void closePhase() {
+		FrameExecutor e = exec();
+		if (e != null) e.endPhase();
+	}
+
+	public static void stage(int stage) {
+		FrameExecutor e = exec();
+		if (e != null) e.setStage(stage);
+	}
+
+	/** Runs {@code body} with renderStage {@code stage}, then restores the previous one. */
+	public static void withStage(int stage, Runnable body) {
+		FrameExecutor e = exec();
+		if (e == null || e.context() == null) {
+			body.run();
+			return;
+		}
+		int before = e.stage();
+		e.setStage(stage);
+		body.run();
+		e.setStage(before);
+	}
+
+	public static boolean inPhase() {
+		FrameExecutor e = exec();
+		return e != null && e.context() != null;
+	}
+
+	/** shaders.properties sun/moon/stars/clouds (FORMAT §5): false if the pack turns this vanilla sky part off. */
+	public static boolean draws(String property) {
+		FrameExecutor e = exec();
+		if (e == null) return true;
+		Object v = e.manifest().properties() == null ? null : e.manifest().properties().get(property);
+		return !(Boolean.FALSE.equals(v) || "off".equals(v));
+	}
+
+	public static float sunPathRotation() {
+		FrameExecutor e = exec();
+		return e == null || e.dimension().shadow() == null ? 0 : e.dimension().shadow().sunPathRotation();
+	}
+
+	/**
+	 * Replaces the rest of MC's main pass after the opaque draws: closes the opaque pass, draws the solid hand, runs the plan
+	 * up to the translucent phase (depthtex1 copy, deferred), lets MC draw translucents into a new pass, then the
+	 * translucent hand. Returns false (MC continues normally) when no pack phase is open.
+	 */
+	public static boolean splitMainPass(RenderPass opaque, java.util.function.Consumer<RenderPass> translucents) {
+		FrameExecutor e = exec();
+		if (e == null || e.context() == null) return false;
+		opaque.close();
+		e.endPhase();
+		renderHand("hand_solid", Context.HAND_SOLID, HAND_SOLID);
+		RenderPass pass = openPhase("translucent", Context.WORLD, UniformSystem.Phase.WORLD, ENTITIES);
+		if (pass == null) { // no translucent phase in the plan: MC's own pass, vanilla pipelines
+			var main = Minecraft.getInstance().gameRenderer.mainRenderTarget();
+			pass = RenderSystem.getDevice().createCommandEncoder().createRenderPass(() -> "Main (translucent)", main.getColorTextureView(),
+					java.util.Optional.empty(), main.getDepthTextureView(), java.util.OptionalDouble.empty());
+		}
+		try (RenderPass p = pass) {
+			RenderSystem.bindDefaultUniforms(p);
+			translucents.accept(p);
+		}
+		e.endPhase();
+		renderHand("hand_translucent", Context.HAND_TRANSLUCENT, HAND_TRANSLUCENT);
+		return true;
+	}
+
+	/** Renders MC's first-person hand into the gbuffers (Iris HandRenderer): our pass, hand projection, no depth clear. */
+	private static void renderHand(String phaseName, Context ctx, int stage) {
+		FrameExecutor e = exec();
+		var cmd = e.advanceTo(phaseName);
+		if (cmd == null) return;
+		var mc = Minecraft.getInstance();
+		var level = mc.gameRenderer.gameRenderState().levelRenderState;
+		hand = new HandDraw(cmd, ctx, stage);
+		// inside LevelRenderer.render the model-view stack still holds the camera rotation; renderItemInHand adds its own
+		var modelView = RenderSystem.getModelViewStack();
+		modelView.pushMatrix().identity();
+		try {
+			((GameRendererAccessor) mc.gameRenderer).emrion$renderItemInHand(level.cameraRenderState, level.playerRenderState,
+					mc.gameRenderer.mainRenderTarget().getDepthTextureView());
+		} finally {
+			modelView.popMatrix();
+			hand = null;
+			e.endPhase();
+		}
+	}
+
+	private static net.minecraft.client.renderer.feature.@Nullable FeatureRenderDispatcher handDispatcher;
+
+	/**
+	 * GameRenderer.renderItemInHand's feature dispatcher while {@link #renderHand} runs: our own (with its own staged vertex
+	 * buffer, as Iris's HandRenderer), because MC's single dispatcher is still in use by the level frame. Else null.
+	 */
+	public static net.minecraft.client.renderer.feature.@Nullable FeatureRenderDispatcher handDispatcher() {
+		if (hand == null) return null;
+		if (handDispatcher == null) {
+			var mc = Minecraft.getInstance();
+			handDispatcher = new net.minecraft.client.renderer.feature.FeatureRenderDispatcher(new net.minecraft.client.renderer.RenderBuffers(0),
+					mc.getModelManager(), mc.getAtlasManager(), mc.font, mc.gameRenderer.gameRenderState());
+		}
+		return handDispatcher;
+	}
+
+	/** GameRenderer.renderItemInHand's render pass: ours while {@link #renderHand} runs, else null (vanilla). */
+	public static @Nullable RenderPass handPass() {
+		HandDraw h = hand;
+		FrameExecutor e = exec();
+		if (h == null || e == null) return null;
+		hand = null;
+		return e.beginPhase(h.command(), h.context(), UniformSystem.Phase.HAND, h.stage());
+	}
+
+	/** After the level's frame graph ran: composites and final. */
+	public static void levelEnd() {
+		FrameExecutor e = exec();
+		if (e != null) e.finish();
+	}
+}

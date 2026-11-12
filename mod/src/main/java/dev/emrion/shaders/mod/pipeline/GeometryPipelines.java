@@ -18,30 +18,113 @@ import dev.emrion.shaders.mod.vk.Descriptors;
 import dev.emrion.shaders.mod.vk.GraphicsPipelineBuilder;
 import dev.emrion.shaders.mod.vk.VulkanContext;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
-import java.util.IdentityHashMap;
+import java.nio.ByteBuffer;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.MemoryUtil;
+import org.lwjgl.vulkan.KHRPushDescriptor;
 import org.lwjgl.vulkan.VkCommandBuffer;
+import org.lwjgl.vulkan.VkDescriptorImageInfo;
+import org.lwjgl.vulkan.VkWriteDescriptorSet;
 
 /**
  * Raw geometry pipelines that MC draws with unchanged (ARCHITECTURE §5.1): same vertex formats, same set-0 push
- * descriptors (binding = index in the vanilla {@code uniforms()} list), plus our descriptor set 1, bound when MC sets the pipeline.
+ * descriptors (binding = index in the vanilla {@code uniforms()} list), plus our descriptor set 1 and the EmrionDraw push
+ * constants, both written when MC binds one of our pipelines ({@code VulkanRenderPass.setPipeline} TAIL).
  */
 public final class GeometryPipelines {
 	private GeometryPipelines() {}
 
-	/** Set 1 of one of our pipelines. {@code dynamicOffsets} is updated in place each frame. */
-	public record Set1(long pipelineLayout, long set, int[] dynamicOffsets) {}
+	/**
+	 * Per-pipeline draw constants: the alpha-test reference, whether atlasSize is the block atlas (else 0), and the extra
+	 * set-0 samplers (bindings {@code firstExtra + i}, kind {@code extras[i]}: 0 white albedo, 1 overlay, 2 lightmap) that
+	 * the pack reads but the vanilla pipeline does not push.
+	 */
+	public record Draw(float alphaRef, boolean blockAtlas, int firstExtra, int[] extras, boolean defaults) {}
 
-	private static final Map<VulkanRenderPipeline, Set1> OURS = new IdentityHashMap<>();
+	/** Vertex buffer slot of the constant default attributes (MC uses slots 0 and 1). */
+	public static final int DEFAULTS_BINDING = 15;
+	/** Canonical input → {VkFormat, offset} in {@link #defaultsBuffer}, formats as in EMRION_BLOCK (FORMAT §7.1). */
+	public static final Map<String, int[]> DEFAULTS = Map.of(
+			"Normal", new int[] {VK_FORMAT_R8G8B8A8_SNORM, 0}, "mc_Entity", new int[] {VK_FORMAT_R16G16_SINT, 4},
+			"mc_midTexCoord", new int[] {VK_FORMAT_R32G32_SFLOAT, 8}, "at_tangent", new int[] {VK_FORMAT_R8G8B8A8_SNORM, 16},
+			"at_midBlock", new int[] {VK_FORMAT_R16G16B16A16_SFLOAT, 20});
+	/** Normal up, mc_Entity (-1, 0) as Iris for unmapped blocks, midTexCoord 0, tangent +X (w 1), midBlock 0. */
+	public static void writeDefaults(long address) {
+		MemoryUtil.memSet(address, 0, 32);
+		MemoryUtil.memPutByte(address + 1, (byte) 127);
+		MemoryUtil.memPutShort(address + 4, (short) -1);
+		MemoryUtil.memPutByte(address + 16, (byte) 127);
+		MemoryUtil.memPutByte(address + 19, (byte) 127);
+	}
+	/** The defaults vertex buffer (32 bytes, see {@link #writeDefaults}); set by the executor. */
+	public static long defaultsBuffer;
+
+	/** Image views and samplers of the extra set-0 samplers, by kind; refreshed per frame by the executor. */
+	public static final long[] EXTRA_VIEWS = new long[3], EXTRA_SAMPLERS = new long[3];
+
+	private static final Map<VulkanRenderPipeline, Draw> OURS = new ConcurrentHashMap<>();
+
+	// Render-thread state of the active geometry phase, set by the frame executor.
+	/** Set 1 of the phase's flip state, and the dynamic offsets of EmrionUniforms / EmrionPhase. */
+	public static long set;
+	public static final int[] DYNAMIC_OFFSETS = new int[2];
+	public static int atlasWidth, atlasHeight;
+	private static VkCommandBuffer boundCb;
+	private static VulkanRenderPipeline bound;
+	/** EmrionDraw (FORMAT §6 pushConstants): entityColor, entityId, blockEntityId, currentRenderedItemId, alphaTestRef, atlasSize. */
+	private static final ByteBuffer PUSH = MemoryUtil.memCalloc(40);
 
 	/** Called from {@code VulkanRenderPass.setPipeline} TAIL. */
 	public static void onSetPipeline(VkCommandBuffer cb, VulkanRenderPipeline pipeline) {
-		Set1 s = OURS.get(pipeline);
-		if (s == null) return;
+		Draw d = OURS.get(pipeline);
+		if (d == null) {
+			boundCb = null;
+			return;
+		}
+		boundCb = cb;
+		bound = pipeline;
+		bind(cb, pipeline, d);
+	}
+
+	/** Re-binds set 1 of the currently bound pipeline (after the EmrionPhase offset changed for a new renderStage). */
+	public static void rebind() {
+		if (boundCb != null) bind(boundCb, bound, OURS.get(bound));
+	}
+
+	/** The render pass ended: nothing of ours is bound any more. */
+	public static void unbind() {
+		boundCb = null;
+		bound = null;
+	}
+
+	private static void bind(VkCommandBuffer cb, VulkanRenderPipeline pipeline, Draw d) {
 		try (MemoryStack stack = MemoryStack.stackPush()) {
-			vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s.pipelineLayout, 1, stack.longs(s.set), stack.ints(s.dynamicOffsets));
+			vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.pipelineLayout(), 1, stack.longs(set), stack.ints(DYNAMIC_OFFSETS));
+		}
+		if (d.extras.length > 0) pushExtras(cb, pipeline.pipelineLayout(), d);
+		if (d.defaults) {
+			try (MemoryStack stack = MemoryStack.stackPush()) {
+				vkCmdBindVertexBuffers(cb, DEFAULTS_BINDING, stack.longs(defaultsBuffer), stack.longs(0));
+			}
+		}
+		PUSH.putFloat(28, d.alphaRef).putInt(32, d.blockAtlas ? atlasWidth : 0).putInt(36, d.blockAtlas ? atlasHeight : 0);
+		vkCmdPushConstants(cb, pipeline.pipelineLayout(), VK_SHADER_STAGE_ALL, 0, PUSH);
+	}
+
+	/** Incremental push of the extra samplers; MC pushes its own bindings later, before the draw (push descriptors merge). */
+	private static void pushExtras(VkCommandBuffer cb, long layout, Draw d) {
+		try (MemoryStack stack = MemoryStack.stackPush()) {
+			var writes = VkWriteDescriptorSet.calloc(d.extras.length, stack);
+			for (int i = 0; i < d.extras.length; i++) {
+				var info = VkDescriptorImageInfo.calloc(1, stack).imageView(EXTRA_VIEWS[d.extras[i]]).sampler(EXTRA_SAMPLERS[d.extras[i]])
+						.imageLayout(VK_IMAGE_LAYOUT_GENERAL);
+				writes.get(i).sType$Default().dstBinding(d.firstExtra + i).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+						.pImageInfo(info);
+			}
+			KHRPushDescriptor.vkCmdPushDescriptorSetKHR(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, writes);
 		}
 	}
 
@@ -49,7 +132,7 @@ public final class GeometryPipelines {
 	 * Push-descriptor layout identical to MC's for the vanilla <em>backend</em> pipeline's {@code uniforms()} (binding = index,
 	 * VS|FS). That list holds only what the vanilla shaders use, in first-use order; the frontend record's list differs.
 	 */
-	public static long set0Layout(VulkanContext ctx, List<BindGroupLayout.UniformDescription> uniforms) {
+	public static long set0Layout(VulkanContext ctx, List<BindGroupLayout.UniformDescription> uniforms, int extraSamplers) {
 		var b = new Descriptors.LayoutBuilder();
 		for (int i = 0; i < uniforms.size(); i++) {
 			int type = switch (uniforms.get(i).type()) {
@@ -59,14 +142,21 @@ public final class GeometryPipelines {
 			};
 			b.add(i, type, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
 		}
+		for (int i = 0; i < extraSamplers; i++) b.add(uniforms.size() + i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
 		return b.build(ctx, true);
 	}
 
 	/**
-	 * Builder preset from the vanilla pipeline: vertex input (canonical locations, VertexLayouts), raster, depth and
-	 * color-target state. The caller adds shader stages and the layout.
+	 * Builder preset from the vanilla pipeline: vertex input (canonical locations, VertexLayouts), raster state and depth
+	 * state converted to our forward-Z depth (ARCHITECTURE §4.1 step 8: compare mirrored, bias negated). The caller adds
+	 * shader stages, colour targets and the layout.
 	 */
 	public static GraphicsPipelineBuilder builderFor(RenderPipeline vanilla, FrontendRenderPipeline compiled) {
+		return builderFor(vanilla, compiled, true);
+	}
+
+	/** {@code forwardZ = false}: keep MC's reverse-Z depth state (for pipelines drawn in MC's own passes). */
+	public static GraphicsPipelineBuilder builderFor(RenderPipeline vanilla, FrontendRenderPipeline compiled, boolean forwardZ) {
 		var b = new GraphicsPipelineBuilder()
 				.cull(vanilla.isCull() ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE)
 				.polygonMode(VulkanConst.toVk(vanilla.getPolygonMode()))
@@ -76,25 +166,38 @@ public final class GeometryPipelines {
 			VertexFormat f = formats.get(slot);
 			if (f == null) continue;
 			b.vertexBinding(slot, f.getVertexSize(), f.getStepRate());
-			for (VertexFormatElement e : f.getElements()) b.attribute(VertexLayouts.location(e.name()), slot, VulkanConst.toVk(e.format()), e.offset());
+			for (VertexFormatElement e : f.getElements()) {
+				if (VertexLayouts.INPUT_LOCATIONS.contains(e.name())) b.attribute(VertexLayouts.location(e.name()), slot, VulkanConst.toVk(e.format()), e.offset());
+			}
 		}
 		DepthStencilState depth = vanilla.getDepthStencilState();
 		// Pipelines without depth state still render in passes with depth (MC builds that variant with depth format D32).
 		if (depth != null) {
-			b.depth(VK_FORMAT_D32_SFLOAT, true, depth.writeDepth(), VulkanConst.toVk(depth.depthTest()))
-					.depthBias(depth.depthBiasConstant(), depth.depthBiasScaleFactor());
+			int op = VulkanConst.toVk(depth.depthTest());
+			float sign = forwardZ ? -1 : 1;
+			b.depth(VK_FORMAT_D32_SFLOAT, true, depth.writeDepth(), forwardZ ? forwardZ(op) : op)
+					.depthBias(sign * depth.depthBiasConstant(), sign * depth.depthBiasScaleFactor());
 		} else {
 			b.depth(VK_FORMAT_D32_SFLOAT, false, false, VK_COMPARE_OP_ALWAYS);
 		}
-		List<ColorTargetState> targets = compiled.colorTargetStates();
-		int[] formatsVk = new int[targets.size()];
-		Blend[] blends = new Blend[targets.size()];
-		for (int i = 0; i < targets.size(); i++) {
-			ColorTargetState t = targets.get(i);
-			formatsVk[i] = t == null ? VK_FORMAT_UNDEFINED : VulkanConst.toVk(t.format());
-			blends[i] = t == null ? null : t.blendFunction().map(GeometryPipelines::blend).orElse(null);
-		}
-		return b.colors(formatsVk, blends);
+		return b;
+	}
+
+	/** MC's reverse-Z compare op as the same test on forward-Z depth. */
+	static int forwardZ(int op) {
+		return switch (op) {
+			case VK_COMPARE_OP_GREATER -> VK_COMPARE_OP_LESS;
+			case VK_COMPARE_OP_GREATER_OR_EQUAL -> VK_COMPARE_OP_LESS_OR_EQUAL;
+			case VK_COMPARE_OP_LESS -> VK_COMPARE_OP_GREATER;
+			case VK_COMPARE_OP_LESS_OR_EQUAL -> VK_COMPARE_OP_GREATER_OR_EQUAL;
+			default -> op;
+		};
+	}
+
+	/** The vanilla pipeline's blend function on colour target 0 (gbuffers "vanilla" blend), null if blending is off. */
+	public static Blend vanillaBlend(FrontendRenderPipeline compiled) {
+		ColorTargetState t = compiled.colorTargetStates().isEmpty() ? null : compiled.colorTargetStates().getFirst();
+		return t == null ? null : t.blendFunction().map(GeometryPipelines::blend).orElse(null);
 	}
 
 	private static Blend blend(BlendFunction f) {
@@ -103,15 +206,22 @@ public final class GeometryPipelines {
 	}
 
 	/**
-	 * Wraps a raw pipeline so MC can draw with it in place of {@code vanilla}. The returned pipeline owns
-	 * {@code pipeline}, {@code layout}, {@code set0Layout} and {@code modules} (MC destroys them on close).
+	 * Wraps a raw pipeline so MC can draw with it in place of {@code vanilla}, in passes whose colour attachments are
+	 * {@code targets}. The returned pipeline owns {@code pipeline}, {@code layout} and {@code set0Layout} (MC destroys them on
+	 * close); shader modules are not kept.
 	 */
 	public static FrontendRenderPipeline wrap(VulkanContext ctx, FrontendRenderPipeline vanilla, long pipeline, long layout, long set0Layout,
-			LongArrayList modules, Set1 set1) {
-		var bound = ((VulkanRenderPipeline) vanilla.backendRenderPipeline()).uniforms();
-		var backend = new VulkanRenderPipeline(ctx.device, pipeline, 0L, layout, set0Layout, modules, bound);
-		OURS.put(backend, set1);
+			List<ColorTargetState> targets, Draw draw) {
+		var uniforms = ((VulkanRenderPipeline) vanilla.backendRenderPipeline()).uniforms();
+		var backend = new VulkanRenderPipeline(ctx.device, pipeline, 0L, layout, set0Layout, new LongArrayList(), uniforms);
+		OURS.put(backend, draw);
 		return new FrontendRenderPipeline("emrion/" + vanilla.name(), backend, vanilla.vertexFormats(), vanilla.uniformIndices(), vanilla.uniforms(),
-				vanilla.colorTargetStates(), vanilla.wantsDepthTexture(), vanilla.pushConstantSize());
+				targets, vanilla.wantsDepthTexture(), vanilla.pushConstantSize());
+	}
+
+	/** Closes a wrapped pipeline (destroyed by MC after the frames in flight) and forgets it. */
+	public static void close(FrontendRenderPipeline p) {
+		OURS.remove((VulkanRenderPipeline) p.backendRenderPipeline());
+		p.close();
 	}
 }

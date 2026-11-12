@@ -450,17 +450,51 @@ class GlslTranspilerTest {
 
 	@Test
 	void perDrawUniformsComeFromPushConstantsAndRenderStageFromPhase() throws Exception {
-		Out o = run("gbuffers_entities", ProgramGroup.GBUFFERS, "entity", null, null, VS, """
+		String fs = """
 				#version 130
 				uniform int entityId;
 				uniform int blockEntityId;
 				uniform int renderStage;
 				varying vec2 texCoord;
 				void main() { gl_FragData[0] = vec4(float(entityId + blockEntityId + renderStage), texCoord, 1.0); }
-				""");
-		assertTrue(o.fs().contains("float(emr_draw.entityId + emr_draw.blockEntityId + emr_phase.renderStage)"));
-		assertTrue(o.fs().contains("layout(push_constant) uniform EmrionDraw { layout(offset = 0) vec4 entityColor; layout(offset = 16) int entityId;"));
+				""";
+		Out o = run("gbuffers_entities", ProgramGroup.GBUFFERS, "entity", null, null, VS, fs);
+		// ids travel VS → FS in a flat varying; the entity variant fills it from iris_Entity, others from the push constants
+		assertTrue(o.fs().contains("float(emr_entityInfo.x + emr_entityInfo.y + emr_phase.renderStage)"));
+		assertTrue(o.fs().contains("flat in ivec3 emr_entityInfo;"));
 		assertFalse(o.fs().contains("uniform int entityId"));
+		assertTrue(o.vs().contains("layout(location = 13) in uvec3 emr_in_iris_Entity;"));
+		assertTrue(o.vs().contains("emr_entityInfo = ivec3(emr_in_iris_Entity);"));
+		assertFalse(o.vs().contains("emr_draw"));
+		assertTrue(o.analysis().vertexInputs().contains("iris_Entity"));
+		Out p = run("gbuffers_entities", ProgramGroup.GBUFFERS, "position_color", null, null, VS, fs);
+		assertTrue(p.vs().contains("emr_entityInfo = ivec3(emr_draw.entityId, emr_draw.blockEntityId, emr_draw.currentRenderedItemId);"));
+		assertTrue(p.vs().contains("layout(push_constant) uniform EmrionDraw { layout(offset = 0) vec4 entityColor; layout(offset = 16) int entityId;"));
+		assertEquals(o.fs(), p.fs(), "fragment stage must not depend on the vertex variant");
+	}
+
+	@Test
+	void programsWithAGeometryStageKeepIdsInPushConstants() throws Exception {
+		List<PreprocessedStage> st = List.of(
+				TranspilerTestSupport.stage("gbuffers_entities", ProgramGroup.GBUFFERS, StageType.VERTEX, VS),
+				TranspilerTestSupport.stage("gbuffers_entities", ProgramGroup.GBUFFERS, StageType.GEOMETRY, """
+						#version 150
+						layout(triangles) in;
+						layout(triangle_strip, max_vertices = 3) out;
+						in vec2 texCoord[];
+						out vec2 tc;
+						void main() { for (int i = 0; i < 3; i++) { tc = texCoord[i]; gl_Position = gl_in[i].gl_Position; EmitVertex(); } }
+						"""),
+				TranspilerTestSupport.stage("gbuffers_entities", ProgramGroup.GBUFFERS, StageType.FRAGMENT, """
+						#version 150
+						uniform int entityId;
+						in vec2 tc;
+						void main() { gl_FragData[0] = vec4(float(entityId), tc, 1.0); }
+						"""));
+		Transpiler.ProgramAnalysis a = TR.analyze(st);
+		String fs = TR.emit(a, new Transpiler.EmitContext(Map.of(), n -> 2, Map.of(0, 0), null), "entity").glsl().get(StageType.FRAGMENT);
+		assertTrue(fs.contains("float(emr_draw.entityId)"), fs);
+		assertFalse(a.vertexInputs().contains("iris_Entity"));
 	}
 
 	@Test

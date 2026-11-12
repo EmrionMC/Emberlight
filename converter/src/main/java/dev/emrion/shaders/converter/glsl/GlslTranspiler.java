@@ -39,7 +39,11 @@ public final class GlslTranspiler implements Transpiler {
 			Map.entry("Position", "vec3"), Map.entry("Color", "vec4"), Map.entry("UV0", "vec2"), Map.entry("UV1", "ivec2"),
 			Map.entry("UV2", "ivec2"), Map.entry("Normal", "vec3"), Map.entry("mc_Entity", "ivec2"),
 			Map.entry("mc_midTexCoord", "vec2"), Map.entry("at_tangent", "vec4"), Map.entry("at_midBlock", "vec4"),
-			Map.entry("ChunkPosition", "ivec3"), Map.entry("ChunkVisibility", "float"), Map.entry("LineWidth", "float"));
+			Map.entry("ChunkPosition", "ivec3"), Map.entry("ChunkVisibility", "float"), Map.entry("LineWidth", "float"),
+			Map.entry("iris_Entity", "uvec3"));
+
+	/** Per-draw ids that Iris reads from the iris_Entity attribute (EntityPatcher): name → component of emr_entityInfo. */
+	static final Map<String, String> ENTITY_IDS = Map.of("entityId", "x", "blockEntityId", "y", "currentRenderedItemId", "z");
 
 	/** Pack attribute name → canonical input (core-profile va* names, Iris attributes, MC element names). */
 	static final Map<String, String> ATTRIBUTE_ALIAS = Map.ofEntries(
@@ -241,7 +245,7 @@ public final class GlslTranspiler implements Transpiler {
 		final ProgramGroup group;
 		final List<Stage> stages = new ArrayList<>();
 		final Map<String, Integer> locations = new LinkedHashMap<>();
-		final boolean geometry, core, fogVarying, entityColorVarying;
+		final boolean geometry, core, fogVarying, entityColorVarying, entityIdVarying;
 		final List<Diagnostic> diagnostics = new ArrayList<>();
 
 		Program(List<PreprocessedStage> src) {
@@ -258,6 +262,10 @@ public final class GlslTranspiler implements Transpiler {
 			boolean gs = stage(StageType.GEOMETRY) != null;
 			fogVarying = fs != null && vs != null && !gs && fs.used("gl_FogFragCoord");
 			entityColorVarying = geometry && fs != null && vs != null && !gs && fs.used("entityColor");
+			// Iris EntityPatcher: ids come from iris_Entity via a flat varying (programs with a geometry stage keep push constants)
+			boolean usesIds = false;
+			for (Stage s : stages) for (String n : ENTITY_IDS.keySet()) usesIds |= s.used(n);
+			entityIdVarying = geometry && vs != null && !gs && usesIds;
 			assignLocations();
 		}
 
@@ -274,6 +282,7 @@ public final class GlslTranspiler implements Transpiler {
 			}
 			if (fogVarying) size.put("emr_FogFragCoord", 1);
 			if (entityColorVarying) size.put("emr_entityColor", 1);
+			if (entityIdVarying) size.put("emr_entityInfo", 1);
 			int next = 0;
 			for (var e : size.entrySet()) {
 				locations.put(e.getKey(), next);
@@ -371,6 +380,7 @@ public final class GlslTranspiler implements Transpiler {
 				if (s.used("gl_MultiTexCoord3")) inputs.add("mc_midTexCoord");
 				if (s.used("mc_chunkFade")) inputs.add("ChunkVisibility");
 				if (p.entityColorVarying || s.used("vaUV1")) inputs.add("UV1");
+				if (p.entityIdVarying) inputs.add("iris_Entity");
 				for (Var a : s.attributes) {
 					String c = ATTRIBUTE_ALIAS.get(a.name());
 					if (c != null && s.used(a.name())) inputs.add(c);
@@ -535,6 +545,11 @@ public final class GlslTranspiler implements Transpiler {
 			}
 			if (p.geometry) geometryTable(vs);
 			else compositeTable(vs);
+			if (p.entityIdVarying && (st == StageType.FRAGMENT || vs)) {
+				for (var e : ENTITY_IDS.entrySet()) repl.put(e.getKey(), "emr_entityInfo." + e.getValue());
+				if (vs) prologue.add("emr_entityInfo = " + (has("iris_Entity") ? "ivec3(" + in("iris_Entity") + ")"
+						: "ivec3(emr_draw.entityId, emr_draw.blockEntityId, emr_draw.currentRenderedItemId)") + ";");
+			}
 			// pack-declared uniforms that map to push constants / phase block
 			for (Var u : s.uniforms) {
 				String n = u.name();
@@ -920,7 +935,9 @@ public final class GlslTranspiler implements Transpiler {
 
 		String alphaTest() {
 			Manifest.AlphaTest a = ctx.alphaTest();
-			if (a == null || !p.geometry || p.core) return "";
+			if (!p.geometry || p.core) return "";
+			// no alphaTest.<program>: Iris's per-geometry default (ShaderKey) is always "greater"; the mod pushes its ref (-1 = off)
+			if (a == null) a = new Manifest.AlphaTest("greater", 0);
 			String op = switch (a.func()) {
 				case "never" -> null;
 				case "less" -> "<";
@@ -1008,12 +1025,13 @@ public final class GlslTranspiler implements Transpiler {
 				if (ids.contains(in(c))) h.append("layout(location = ").append(VertexLayouts.location(c)).append(") in ")
 						.append(CANON_TYPE.get(c)).append(' ').append(in(c)).append(";\n");
 			}
-			for (String v : List.of("emr_FogFragCoord", "emr_entityColor")) {
-				Integer loc = p.locations.get(v);
-				if (loc == null || !ids.contains(v) || s.type == StageType.GEOMETRY) continue;
+			for (String[] v : List.of(new String[] {"emr_FogFragCoord", "", "float"}, new String[] {"emr_entityColor", "", "vec4"},
+					new String[] {"emr_entityInfo", "flat ", "ivec3"})) {
+				Integer loc = p.locations.get(v[0]);
+				if (loc == null || !ids.contains(v[0]) || s.type == StageType.GEOMETRY) continue;
 				String dir = s.type == StageType.VERTEX ? "out" : "in";
-				h.append("layout(location = ").append(loc).append(") ").append(dir).append(' ')
-						.append(v.equals("emr_entityColor") ? "vec4 " : "float ").append(v).append(";\n");
+				h.append("layout(location = ").append(loc).append(") ").append(v[1]).append(dir).append(' ').append(v[2]).append(' ')
+						.append(v[0]).append(";\n");
 			}
 			for (int i : fragData) {
 				Integer loc = ctx.outputLocations() == null ? null : ctx.outputLocations().get(i);

@@ -1,0 +1,39 @@
+package dev.emrion.shaders.mod.mixin;
+
+import com.mojang.blaze3d.systems.RenderSystem;
+import dev.emrion.shaders.mod.EmrionShadersClient;
+import dev.emrion.shaders.mod.pbr.PbrAtlases;
+import net.minecraft.client.renderer.texture.AbstractTexture;
+import net.minecraft.client.renderer.texture.SpriteLoader;
+import net.minecraft.client.renderer.texture.TextureAtlas;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+
+/**
+ * Why: the PBR atlases mirror the block atlas. {@code upload} RETURN is where a reload's stitched block atlas layout becomes
+ * final; {@code cycleAnimationFrames} TAIL is the block atlas's animation tick (PBR frames advance in the same tick);
+ * {@code createTexture} TAIL fills a new PBR atlas with Iris's default before MC blits the sprites into it.
+ */
+@Mixin(TextureAtlas.class)
+public abstract class TextureAtlasMixin extends AbstractTexture {
+	@Inject(method = "upload", at = @At("RETURN"))
+	private void emrion$upload(SpriteLoader.Preparations preparations, CallbackInfo ci) {
+		if (EmrionShadersClient.active() && emrion$isBlocks()) PbrAtlases.onBlockAtlasUpload((TextureAtlas) (Object) this, preparations);
+	}
+
+	@Inject(method = "cycleAnimationFrames", at = @At("TAIL"))
+	private void emrion$tick(CallbackInfo ci) {
+		if (EmrionShadersClient.active() && emrion$isBlocks()) PbrAtlases.onBlockAtlasTick();
+	}
+
+	@Inject(method = "createTexture", at = @At("TAIL"))
+	private void emrion$created(CallbackInfo ci) {
+		if ((Object) this instanceof PbrAtlases.PbrAtlas pbr) RenderSystem.getDevice().createCommandEncoder().clearColorTexture(getTexture(), pbr.clear);
+	}
+
+	private boolean emrion$isBlocks() {
+		return ((TextureAtlas) (Object) this).location().equals(TextureAtlas.LOCATION_BLOCKS);
+	}
+}

@@ -17,6 +17,7 @@ public final class FrameTimeLogger {
 	private int count;
 	private long last;
 	private boolean recording;
+	private long frames;
 
 	public FrameTimeLogger(int capacity) {
 		this.nanos = new long[capacity];
@@ -30,10 +31,16 @@ public final class FrameTimeLogger {
 
 	/** Call once per frame, at the same point every frame. */
 	public void frame() {
+		frames++;
 		if (!recording) return;
 		long now = System.nanoTime();
 		if (last != 0) nanos[count++ % nanos.length] = now - last;
 		last = now;
+	}
+
+	/** Frames rendered since start-up (counted even when not recording). */
+	public long frames() {
+		return frames;
 	}
 
 	public record Stats(int frames, double avgFps, double low1Fps, double avgMs, double maxMs) {}

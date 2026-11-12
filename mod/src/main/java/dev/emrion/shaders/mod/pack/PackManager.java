@@ -14,12 +14,20 @@ import dev.emrion.shaders.converter.report.Diagnostic;
 import dev.emrion.shaders.converter.spirv.ShadercSpirvCompiler;
 import dev.emrion.shaders.format.Manifest;
 import dev.emrion.shaders.format.ManifestJson;
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.renderpearl.api.pipeline.RenderPipeline;
+import com.mojang.renderpearl.frontend.FrontendRenderPipeline;
 import dev.emrion.shaders.mod.EmrionShadersClient;
+import dev.emrion.shaders.mod.pbr.PbrAtlases;
+import dev.emrion.shaders.mod.pipeline.GbufferMapping;
 import dev.emrion.shaders.mod.runtime.FrameExecutor;
 import dev.emrion.shaders.mod.runtime.PackPipelines;
 import dev.emrion.shaders.mod.runtime.PackRuntime;
 import dev.emrion.shaders.mod.uniforms.StubUniformSystem;
+import dev.emrion.shaders.mod.uniforms.IrisUniformSystem;
 import dev.emrion.shaders.mod.uniforms.UniformSystem;
+import dev.emrion.shaders.mod.vertex.BlockIdTable;
+import dev.emrion.shaders.mod.vertex.EmrionVertexFormats;
 import dev.emrion.shaders.mod.vk.VulkanContext;
 import java.io.IOException;
 import java.io.Reader;
@@ -27,7 +35,9 @@ import java.io.Writer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -194,8 +204,19 @@ public final class PackManager {
 
 	// ---- render-thread hooks ------------------------------------------------------------------------------------------
 
-	/** GameRenderer.renderLevel HEAD. */
-	public static void onFrameStart(float partialTick) {
+	/** The executor while it renders a level (between LevelRenderer.render HEAD and the end of the plan), else null. */
+	public static @Nullable FrameExecutor levelExecutor() {
+		FrameExecutor e = executor;
+		return e != null && e.inLevel() ? e : null;
+	}
+
+	/** True while a pack is installed and renders the world. */
+	public static boolean running() {
+		return executor != null;
+	}
+
+	/** LevelRenderer.render HEAD (the level projection is known; Iris: beginLevelRendering). */
+	public static void onLevelStart(float partialTick) {
 		try {
 			var mc = Minecraft.getInstance();
 			Loaded l = loaded;
@@ -208,29 +229,20 @@ public final class PackManager {
 			}
 			if (runtime != null) {
 				var main = mc.gameRenderer.mainRenderTarget();
-				if (main.width != runtime.width || main.height != runtime.height) resize(l, main.width, main.height);
-				executor.frameStart(partialTick);
+				if (main.width != runtime.width || main.height != runtime.height || runtime.atlasGeneration != PbrAtlases.generation()) resize(l, main.width, main.height);
+				executor.levelStart(partialTick);
 			}
 		} catch (Throwable t) {
 			fail("Shader pack " + selected + " failed", t);
 		}
 	}
 
-	/** Before render3dHud clears MC's depth. */
-	public static void onBeforeHud() {
-		if (executor == null) return;
+	/** After the level's frame graph: composites and final. */
+	public static void onLevelEnd() {
+		FrameExecutor e = levelExecutor();
+		if (e == null) return;
 		try {
-			executor.beforeHud();
-		} catch (Throwable t) {
-			fail("Shader pack " + selected + " failed", t);
-		}
-	}
-
-	/** GameRenderer.renderLevel TAIL. */
-	public static void onAfterLevel() {
-		if (executor == null) return;
-		try {
-			executor.afterLevel();
+			e.finish();
 		} catch (Throwable t) {
 			fail("Shader pack " + selected + " failed", t);
 		}
@@ -242,13 +254,18 @@ public final class PackManager {
 		int gen = generation;
 		VulkanContext ctx = VulkanContext.get();
 		status = selected + ": building pipelines (" + folder + ")";
+		// render thread: MC compiles a vanilla pipeline here if it has not yet (the gbuffers copy needs its formats and bindings)
+		Map<RenderPipeline, FrontendRenderPipeline> vanilla = new IdentityHashMap<>();
+		for (RenderPipeline p : GbufferMapping.worldPipelines()) {
+			if (RenderSystem.getCompiledPipelineNullable(p) instanceof FrontendRenderPipeline f) vanilla.put(p, f);
+		}
 		WORKER.execute(() -> {
 			try {
 				long start = System.nanoTime();
-				var pipelines = new PackPipelines(ctx, l.dir(), l.manifest(), l.manifest().dimensions().get(folder));
+				var pipelines = new PackPipelines(ctx, l.dir(), l.manifest(), l.manifest().dimensions().get(folder), vanilla);
 				EmrionShadersClient.LOG.info("Built {} pipelines for {}/{} in {} ms", pipelines.pipelines.size(), selected, folder, (System.nanoTime() - start) / 1_000_000);
 				if (gen == generation) prepared = new Prepared(gen, folder, pipelines);
-				else pipelines.destroyLater();
+				else Minecraft.getInstance().execute(pipelines::destroyLater);
 			} catch (Throwable t) {
 				if (gen == generation) fail("Could not build pipelines for " + selected, t);
 			} finally {
@@ -261,6 +278,10 @@ public final class PackManager {
 		prepared = null;
 		current = p;
 		uniforms = uniformFactory.apply(l.manifest(), p.folder());
+		var ids = BlockIdTable.build(l.manifest().idMaps());
+		EmrionVertexFormats.setIds(ids);
+		EmrionVertexFormats.setActive(true); // rebuilds chunks in the extended terrain format
+		if (uniforms instanceof IrisUniformSystem u) u.setBlockIdLookup(ids::block);
 		var main = mc.gameRenderer.mainRenderTarget();
 		resize(l, main.width, main.height);
 		status = selected + ": active (" + p.folder() + ")";
@@ -280,6 +301,7 @@ public final class PackManager {
 	}
 
 	private static void deactivate() {
+		if (current != null) EmrionVertexFormats.setActive(false);
 		if (executor != null) executor.close();
 		if (runtime != null) runtime.destroyLater();
 		if (current != null) current.pipelines().destroyLater();

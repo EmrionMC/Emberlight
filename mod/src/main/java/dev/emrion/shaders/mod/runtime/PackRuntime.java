@@ -11,6 +11,7 @@ import com.mojang.renderpearl.backend.vulkan.VulkanConst;
 import com.mojang.renderpearl.backend.vulkan.VulkanGpuTexture;
 import com.mojang.renderpearl.backend.vulkan.VulkanGpuTextureView;
 import dev.emrion.shaders.format.Manifest;
+import dev.emrion.shaders.mod.pbr.PbrAtlases;
 import dev.emrion.shaders.mod.uniforms.UniformSystem;
 import dev.emrion.shaders.mod.vk.DescriptorPool;
 import dev.emrion.shaders.mod.vk.Descriptors;
@@ -40,6 +41,9 @@ public final class PackRuntime {
 	private static final Pattern COLORTEX = Pattern.compile("colortex(\\d+)");
 	private static final int MC_USAGE = GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_COPY_SRC | GpuTexture.USAGE_TEXTURE_BINDING
 			| GpuTexture.USAGE_RENDER_ATTACHMENT;
+	/** Atlases as Iris samples them: MC's terrain sampler (linear, linear mips); labPBR specular nearest (no value blending). */
+	private static final Manifest.SamplerDef ATLAS_SAMPLER = new Manifest.SamplerDef("linear", "linear", "clamp", null);
+	private static final Manifest.SamplerDef LABPBR_SPECULAR_SAMPLER = new Manifest.SamplerDef("nearest", "nearest", "clamp", null);
 
 	/** One physical image: an MC texture (attachable by geometry passes later) or a raw VMA image. */
 	public static final class Img extends Hazards.Tracked {
@@ -82,9 +86,11 @@ public final class PackRuntime {
 	private final List<GpuTexture> ownedTextures = new ArrayList<>();
 	private final List<GpuTextureView> ownedViews = new ArrayList<>();
 	private final Img dummy;
-	/** FORMAT builtin resources; the atlases are neutral 1×1 stand-ins until M3/M4. */
+	/** FORMAT builtin resources; the PBR atlases are Iris's 1×1 defaults until {@link PbrAtlases} built them. */
 	private final Map<String, Img> builtins = new HashMap<>();
 	private final DescriptorPool pool;
+	/** {@link PbrAtlases#generation()} of the bound atlas views; the runtime must be rebuilt when it changes. */
+	public final int atlasGeneration = PbrAtlases.generation();
 	/** flip state id → descriptor set. */
 	final long[] sets;
 	/** flip state id → binding → resource the binding reads (for barriers); null for UBOs and unresolved bindings. */
@@ -101,16 +107,20 @@ public final class PackRuntime {
 		this.width = width;
 		this.height = height;
 		long align = ctx.limits().minUniformBufferOffsetAlignment();
-		ring = new UboRing(ctx, manifest.uniforms().size() + manifest.uniforms().phase().size() + 2 * align);
+		ring = new UboRing(ctx, manifest.uniforms().size() + FrameExecutor.PHASE_BLOCKS * (manifest.uniforms().phase().size() + align) + align);
 
 		java.util.Set<String> storage = new java.util.HashSet<>();
 		for (var r : dim.resources()) if (r.kind().equals("storage_image")) storage.add(r.target());
 		for (var t : dim.targets()) createTarget(t, storage.contains(t.name()));
 		dummy = mcTexture("emrion white", solid(0xFFFFFFFF));
 		builtins.put("white", dummy);
-		builtins.put("block_atlas", dummy); // shortcut: MC's block atlas binds in M3 with the geometry passes; composites do not sample it
-		builtins.put("normals_atlas", mcTexture("emrion flat normals", solid(0xFFFF8080))); // ABGR: (0.5, 0.5, 1, 1)
-		builtins.put("specular_atlas", mcTexture("emrion no specular", solid(0)));
+		PbrAtlases.request();
+		var atlas = PbrAtlases.blockAtlas();
+		var normals = PbrAtlases.normals();
+		var specular = PbrAtlases.specular();
+		builtins.put("block_atlas", atlas != null ? view("block atlas", atlas) : dummy);
+		builtins.put("normals_atlas", normals != null ? view("normals atlas", normals) : mcTexture("emrion flat normals", solid(0xFFFF7F7F))); // ABGR: Iris's (127, 127, 255, 255)
+		builtins.put("specular_atlas", specular != null ? view("specular atlas", specular) : mcTexture("emrion no specular", solid(0)));
 		builtins.put("white_depth", whiteDepth());
 		for (var tex : manifest.textures()) textures.put(tex.name(), loadTexture(cacheDir, tex));
 
@@ -195,6 +205,11 @@ public final class PackRuntime {
 		return image(target, alt ? "alt" : "main");
 	}
 
+	/** 1×1 white RGBA8 view (unbound albedo). */
+	long whiteView() {
+		return dummy.sampled;
+	}
+
 	Manifest.FlipState flipState(int id) {
 		for (var f : dim.flipStates()) if (f.id() == id) return f;
 		throw new IllegalArgumentException("unknown flip state " + id);
@@ -235,6 +250,13 @@ public final class PackRuntime {
 		ownedTextures.add(tex);
 		ownedViews.add(view);
 		Img img = new Img("emrion white depth", null);
+		img.sampled = ((VulkanGpuTextureView) view).vkImageView();
+		return img;
+	}
+
+	/** A view MC owns (the atlases). */
+	private static Img view(String label, GpuTextureView view) {
+		Img img = new Img("emrion " + label, null);
 		img.sampled = ((VulkanGpuTextureView) view).vkImageView();
 		return img;
 	}
@@ -283,6 +305,8 @@ public final class PackRuntime {
 					if (img == null) img = dummy;
 					if (img.target != null) res[r.binding()] = img;
 					Manifest.SamplerDef def = r.sampler();
+					if (def == null && r.builtin() != null && r.builtin().endsWith("_atlas")) // shortcut: no anisotropy (MC's terrain sampler has it)
+						def = r.builtin().equals("specular_atlas") && PbrAtlases.labPbr() ? LABPBR_SPECULAR_SAMPLER : ATLAS_SAMPLER;
 					if (def == null) {
 						var tex = r.texture() == null ? null : manifest.textures().stream().filter(t -> t.name().equals(r.texture())).findFirst().orElse(null);
 						def = new Manifest.SamplerDef(tex == null ? "nearest" : tex.filter(), "none", tex == null ? "repeat" : tex.wrap(), null);

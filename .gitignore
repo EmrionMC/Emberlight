@@ -10,3 +10,7 @@ mod/run/
 .idea/
 *.iml
 out/
+mod/logs/
+mod/run-iris/
+mod/run-compare/
+/testpacks

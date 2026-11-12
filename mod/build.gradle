@@ -13,23 +13,117 @@ dependencies {
 // Forward every -Demrion.* given to Gradle (`./gradlew :mod:runClient -Demrion.autotest.world=w`) to the game JVM,
 // and force the Vulkan backend (the launch arg wins over options.txt and MC's crash guard).
 def emrionProps = providers.systemPropertiesPrefixedBy('emrion.')
+
+// Iris reference run (docs/BENCHMARK.md): the user's Iris + Sodium jars, loaded at runtime from their directory (never
+// copied into the repo), plus the shared pack, settings and options for side-by-side comparisons with runClient -Pcompare.
+// -PirisModsDir=<launcher instance>/mods; default: mod/run-iris/mods (untracked).
+def irisModsDir = file(findProperty('irisModsDir') ?: 'run-iris/mods')
+def packDir = file(findProperty('shaderPack') ?: rootProject.file('testpacks/unbound-euphoria'))
+def packSettings = file(findProperty('shaderSettings') ?: rootProject.file('testpacks/ComplementaryUnbound_r5.9.3 + EuphoriaPatches_1.10.5.txt'))
+def packName = packSettings.name - ~/\.txt$/ // same name as in the user's instance, so Iris finds <pack>.txt
+def compare = providers.gradleProperty('compare').isPresent()
+configurations { irisReference { canBeConsumed = false } }
+dependencies { irisReference fileTree(irisModsDir) { include 'iris-fabric-*.jar', 'sodium-fabric-*.jar' } }
+
+// Same options for both runs: the user's video settings, except sound off and FOV effects off (deterministic camera).
+// Merged into options.txt, other keys are kept.
+def sharedOptions = [renderDistance: '16', simulationDistance: '12', enableVsync: 'false', maxFps: '260', guiScale: '3', fov: '0.0',
+		fovEffectScale: '0.0', gamma: '0.5', biomeBlendRadius: '3', mipmapLevels: '4', textureFiltering: '0', ao: 'true', entityShadows: 'true',
+		entityDistanceScaling: '5.0', particles: '0', chunkSectionFadeInTime: '0.0', prioritizeChunkUpdates: '0', fullscreen: 'false',
+		onboardAccessibility: 'false', tutorialStep: 'none', soundCategory_master: '0.0', pauseOnLostFocus: 'false']
+def writeOptions = { File dir, String backend ->
+	def f = new File(dir, 'options.txt')
+	def opts = new LinkedHashMap<String, String>()
+	if (f.exists()) f.eachLine { l -> def i = l.indexOf(':'); if (i > 0) opts[l.substring(0, i)] = l.substring(i + 1) }
+	opts.putAll(sharedOptions)
+	opts.preferredGraphicsBackend = "\"${backend}\""
+	dir.mkdirs()
+	f.text = opts.collect { k, v -> "${k}:${v}" }.join('\n') + '\n'
+}
+// shaderpacks/<packName> -> the pack folder (symlink), shaderpacks/<packName>.txt = copy of the settings (Iris rewrites it).
+def linkPack = { File dir ->
+	if (!packDir.isDirectory() || !packSettings.isFile()) throw new GradleException("Shader pack ${packDir} or settings ${packSettings} missing (-PshaderPack, -PshaderSettings)")
+	def link = new File(dir, "shaderpacks/${packName}").toPath()
+	java.nio.file.Files.createDirectories(link.parent)
+	java.nio.file.Files.deleteIfExists(link)
+	java.nio.file.Files.createSymbolicLink(link, packDir.toPath().toAbsolutePath())
+	java.nio.file.Files.copy(packSettings.toPath(), link.resolveSibling("${packName}.txt"), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+}
+// -Demrion.autotest.scenes is resolved against mod/ (the game runs in its run dir).
+def forwardEmrionProps = { JavaExec task, Map<String, String> defaults ->
+	(defaults + emrionProps.get()).each { k, v -> task.jvmArgs "-D${k}=${k == 'emrion.autotest.scenes' ? file(v).absolutePath : v}" }
+}
+
 loom {
 	runs {
 		client {
 			programArgs '--graphicsBackend', 'vulkan'
 		}
+		irisReference {
+			client()
+			name 'Iris Reference (OpenGL)'
+			runDir 'run-iris'
+			programArgs '--graphicsBackend', 'opengl', '--width', '1920', '--height', '1080'
+		}
 	}
 }
 tasks.named('runClient') {
-	def props = emrionProps
 	def optionsFile = file('run/options.txt')
 	doFirst {
-		props.get().each { k, v -> jvmArgs "-D${k}=${v}" }
+		if (compare) {
+			linkPack(file('run'))
+			writeOptions(file('run'), 'vulkan')
+			args '--width', '1920', '--height', '1080'
+		}
+		forwardEmrionProps(it, compare ? ['emrion.pack': packName, 'emrion.autotest.tag': 'emrion'] : [:])
 		// Also persist the in-game setting so the options screen shows Vulkan in dev.
 		if (!optionsFile.exists()) {
 			optionsFile.parentFile.mkdirs()
 			optionsFile.text = 'preferredGraphicsBackend:"vulkan"\nonboardAccessibility:false\n'
 		}
+		// -Demrion.autotest.resourcepacks=/abs/a.zip;/abs/b.zip: symlink them into run/resourcepacks (never committed) and
+		// enable exactly them in options.txt; an empty value enables none. (Listing a compatible pack as incompatible would
+		// make MC skip it.)
+		def packs = emrionProps.get()['emrion.autotest.resourcepacks']
+		if (packs != null) {
+			def dir = new File(optionsFile.parentFile, 'resourcepacks')
+			dir.mkdirs()
+			def names = packs.split(';').findAll { it }.collect { p ->
+				def src = new File(p)
+				if (!src.exists()) throw new GradleException("resource pack not found: $p")
+				def link = new File(dir, src.name).toPath()
+				java.nio.file.Files.deleteIfExists(link)
+				java.nio.file.Files.createSymbolicLink(link, src.toPath())
+				'file/' + src.name
+			}
+			// MC refuses symlinked packs unless their targets are listed here (prefix match)
+			new File(optionsFile.parentFile, 'allowed_symlinks.txt').text = packs.split(';').findAll { it }.collect { new File(it).parent + '/' }.unique().join('\n') + '\n'
+			def list = groovy.json.JsonOutput.toJson(['vanilla'] + names)
+			def lines = optionsFile.readLines().findAll { !it.startsWith('resourcePacks:') && !it.startsWith('incompatibleResourcePacks:') }
+			optionsFile.text = (lines + ["resourcePacks:$list", "incompatibleResourcePacks:[]"]).join('\n') + '\n'
+		}
+	}
+}
+tasks.named('runIrisReference') {
+	def mods = configurations.irisReference
+	def runDir = file('run-iris')
+	def userConfig = new File(irisModsDir.parentFile, 'config')
+	doFirst {
+		if (mods.files.size() != 2) throw new GradleException("Expected the Iris and Sodium jars in ${irisModsDir} (-PirisModsDir), found ${mods.files*.name}")
+		jvmArgs "-Dfabric.addMods=${mods.files.join(File.pathSeparator)}"
+		linkPack(runDir)
+		writeOptions(runDir, 'opengl')
+		new File(runDir, 'config').mkdirs()
+		new File(runDir, 'config/iris.properties').text = """shaderPack=${packName}
+enableShaders=true
+maxShadowRenderDistance=24
+colorSpace=SRGB
+allowUnknownShaders=false
+disableUpdateMessage=true
+"""
+		def sodium = new File(userConfig, 'sodium-options.json')
+		if (sodium.isFile()) java.nio.file.Files.copy(sodium.toPath(), new File(runDir, 'config/sodium-options.json').toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+		forwardEmrionProps(it, ['emrion.autotest.tag': 'iris'])
 	}
 }
 
@@ -70,3 +164,11 @@ dependencies {
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 test { useJUnitPlatform() }
+
+// Side-by-side + MAE/SSIM per scene: run-iris/screenshots/iris-*.png vs run/screenshots/emrion-*.png -> run-compare/.
+tasks.register('compareScenes', Exec) {
+	group = 'verification'
+	description = 'Compares the Iris reference screenshots with ours (docs/BENCHMARK.md).'
+	commandLine 'python3', '-I', file('tools/compare_scenes.py').absolutePath, file(findProperty('irisShots') ?: 'run-iris/screenshots').absolutePath,
+			file(findProperty('emrionShots') ?: 'run/screenshots').absolutePath, file('run-compare').absolutePath
+}

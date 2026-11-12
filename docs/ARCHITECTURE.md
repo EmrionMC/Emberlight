@@ -215,11 +215,12 @@ Planned set; each mixin class carries a comment explaining why it is needed.
 | Target | Kind | Why |
 |---|---|---|
 | `RenderSystem.getCompiledPipelineNullable` | HEAD, cancellable | The single choke point every draw uses to pick its pipeline. While a pack phase is active, return our geometry pipeline. |
-| `LevelRenderer` main-pass lambda (`addMainPass`) | inject / wrap | Split opaque and translucent into our MRT passes, copy depthtex1, run deferred between them. |
-| `LevelRenderer` before main pass | inject | Run the shadow pass (`prepareChunkRenders` with the shadow view). |
-| `GameRenderer.render3dHud` / `renderItemInHand` | wrap | Copy depthtex2 before the hand's depth clear, and render the hand into gbuffers. |
-| `GameRenderer.renderLevel` TAIL | inject | Run composite* and final into `mainRenderTarget`. |
-| `GameRenderer.useImprovedTransparency` | return | Force the classic transparency path while a pack is active (OIT changes the pass structure). |
+| `LevelRenderer.render` HEAD / after `FrameGraphBuilder.execute` | inject | Iris's beginLevelRendering (uniforms, plan up to the first world phase) and the end of the plan (composites, final). |
+| `LevelRenderer.lambda$addMainPass$0` | wrap `createRenderPass`, `executeClassicTransparency` | MC's "Main" pass becomes our opaque gbuffers pass; at the translucent call the opaque pass is closed, the solid hand drawn, the plan run to the translucent phase (depthtex1 copy, deferred), translucents drawn in a second pass, then the translucent hand (`GeometryHooks.splitMainPass`). |
+| `LevelRenderer.executeSolid/executeClassicTransparency` | wrap draw groups | Iris renderStage per group (terrain 8/17, entities 11, particles 19, weather 21, border 22); vanilla clouds skipped when `clouds=off`. |
+| `SkyRenderer` | wrap `createRenderPass`, HEAD of each sky part | Sky phase into our pass; renderStage SKY/SUNSET/SUN/MOON/STARS/VOID; `sun`/`moon`/`stars=false`; sunPathRotation tilt. |
+| `GameRenderer.renderItemInHand` (invoked from the level) | invoker + wraps | The hand is drawn inside the level (Iris order) with the HAND projection and its own FeatureRenderDispatcher; MC's own hand call in `render3dHud` is skipped while a pack renders. |
+| `GameRenderer.useImprovedTransparency` | HEAD | Force the classic transparency path while a pack is active (OIT changes the pass structure). |
 | `VulkanRenderPass.setPipeline` TAIL | inject | Bind descriptor set 1 for our pipelines. |
 | `VulkanConst.textureUsageToVk` | return | Add the STORAGE usage bit for our custom usage flag. |
 | `VulkanFeatureSets.optionalFeatureSets` | return | Enable `fragmentStoresAndAtomics`, `vertexPipelineStoresAndAtomics`, `geometryShader`, `shaderStorageImageWriteWithoutFormat` (only those the pack needs). |

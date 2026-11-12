@@ -10,7 +10,7 @@ import java.util.List;
  * Facade used by the CLI and the mod. Owner: agent (c) (orchestration), wiring stages of (a) and (b).
  */
 public interface Converter {
-	String VERSION = "0.1.0";
+	String VERSION = "0.1.2"; // bump on every change to converter output: it is part of the cache key
 
 	/**
 	 * @param pack     zip or folder

@@ -1,4 +1,4 @@
-// Shared vertex stage of the geometry-swap proof (included by debug_terrain_{mdi,ubo}.vert).
+// Vertex-data debug view (-Demrion.debug.vertex=true): EMRION_BLOCK attributes at their canonical locations (FORMAT.md §7.1).
 // Set-0 bindings are placeholders (index into VertexLayouts.SET0_CANONICAL + Projection=8, Globals=9), patched at load.
 layout(std140, set = 0, binding = 9) uniform Globals {
     ivec3 CameraBlockPos; float GlintAlpha; vec3 CameraOffset; float GameTime; vec2 ScreenSize; int MenuBlurRadius; int UseRgss;
@@ -14,16 +14,28 @@ layout(location = 11) in float ChunkVisibility;
 layout(location = 0) in vec3 Position;
 layout(location = 1) in vec4 Color;
 layout(location = 2) in vec2 UV0;
+layout(location = 5) in vec3 Normal;
+layout(location = 6) in ivec2 mc_Entity;
+layout(location = 7) in vec2 mc_midTexCoord;
+layout(location = 8) in vec4 at_tangent;
+layout(location = 9) in vec4 at_midBlock;
 
-layout(location = 0) out vec3 viewPos;
-layout(location = 1) out vec2 texCoord;
-layout(location = 2) out vec4 vertexColor;
+layout(location = 0) out vec2 texCoord;
+layout(location = 1) out vec4 vertexColor;
+layout(location = 2) flat out ivec2 entity;
+layout(location = 3) out vec3 normal;
+layout(location = 4) out vec4 tangent;
+layout(location = 5) out vec4 midBlock;
+layout(location = 6) out vec2 midTex;
 
 void main() {
     vec3 pos = Position + vec3(ChunkPosition - CameraBlockPos) + CameraOffset;
-    vec4 vp = ModelViewMat * vec4(pos, 1.0);
-    gl_Position = ProjMat * vp;
-    viewPos = vp.xyz;
+    gl_Position = ProjMat * ModelViewMat * vec4(pos, 1.0);
     texCoord = UV0;
     vertexColor = Color;
+    entity = mc_Entity;
+    normal = Normal;
+    tangent = at_tangent;
+    midBlock = at_midBlock;
+    midTex = mc_midTexCoord;
 }
