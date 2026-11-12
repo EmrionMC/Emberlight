@@ -178,7 +178,7 @@ public final class DefaultConverter implements Converter {
 				else failed[0]++;
 			}
 			Manifest manifest = new Manifest(Manifest.FORMAT_VERSION, VERSION, key, new Manifest.PackInfo(source.name(), packHash),
-					environment, pack.options(), PackProperties.from(pack.properties()), layout, pack.idMaps(), copyTextures(plans, tmp),
+					environment, pack.options(), packProperties(pack), layout, pack.idMaps(), copyTextures(plans, tmp),
 					pack.dimensionMap(), dimensions);
 			ManifestJson.write(tmp.resolve(CacheDir.MANIFEST), manifest);
 			List<Diagnostic> all = diagnostics.all();
@@ -188,7 +188,24 @@ public final class DefaultConverter implements Converter {
 			return new Result(out, manifest, all, false, compiled, failed[0]);
 		}
 
+		/** Typed shaders.properties flags plus the pack-wide const directives the runtime needs (Iris reads them from code). */
+		static Map<String, Object> packProperties(ResolvedPack pack) {
+			Map<String, Object> out = new java.util.TreeMap<>(PackProperties.from(pack.properties()));
+			var anyDim = new TreeMap<>(pack.dimensions()).firstEntry();
+			if (anyDim != null) {
+				var consts = dev.emrion.shaders.converter.pack.PackConsts.merge(anyDim.getValue());
+				for (String k : List.of("wetnessHalflife", "drynessHalflife", "eyeBrightnessHalflife", "centerDepthHalflife"))
+					if (consts.containsKey(k)) {
+						try { out.put(k, Double.parseDouble(consts.get(k).replaceAll("[fF]$", ""))); }
+						catch (NumberFormatException ignored) { /* Iris skips unparsable const values too */ }
+					}
+			}
+			return out;
+		}
+
 		List<String> selectDimensions(ResolvedPack pack) {
+			if (pack.dimensions().values().stream().allMatch(List::isEmpty))
+				diagnostics.add(Diagnostic.error(null, 0, "pack contains no shader programs (is shaders/ missing?)"));
 			if (request.dimensions() == null || request.dimensions().isEmpty()) return new TreeMap<>(pack.dimensions()).keySet().stream().toList();
 			List<String> dims = new ArrayList<>();
 			for (String d : request.dimensions().stream().sorted().distinct().toList()) {
@@ -325,7 +342,19 @@ public final class DefaultConverter implements Converter {
 				String ext = t.file().substring(t.file().lastIndexOf('.') + 1);
 				String file = "textures/" + t.name() + "." + ext;
 				write(tmp.resolve(file), bytes.get());
-				out.add(new Manifest.TextureDef(t.name(), file, t.resource(), t.format(), t.dims(), t.size(), t.filter(), t.wrap(), t.mipmap()));
+				String filter = t.filter(), wrap = t.wrap();
+				// Iris applies the PNG's .mcmeta ("texture": {"blur", "clamp"}) to custom textures.
+				var mcmeta = source.readString(t.file() + ".mcmeta");
+				if (mcmeta.isPresent()) {
+					try {
+						var tex = com.google.gson.JsonParser.parseString(mcmeta.get()).getAsJsonObject().getAsJsonObject("texture");
+						if (tex != null && tex.has("blur")) filter = tex.get("blur").getAsBoolean() ? "linear" : "nearest";
+						if (tex != null && tex.has("clamp")) wrap = tex.get("clamp").getAsBoolean() ? "clamp" : "repeat";
+					} catch (RuntimeException e) {
+						diagnostics.add(Diagnostic.warning(t.file() + ".mcmeta", 0, "unreadable mcmeta: " + e.getMessage()));
+					}
+				}
+				out.add(new Manifest.TextureDef(t.name(), file, t.resource(), t.format(), t.dims(), t.size(), filter, wrap, t.mipmap()));
 			}
 			return out;
 		}

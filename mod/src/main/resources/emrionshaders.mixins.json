@@ -5,8 +5,15 @@
   "client": [
     "FrontendGpuDeviceAccessor",
     "GameRendererMixin",
+    "GameRendererProjectionMixin",
     "RenderSystemMixin",
+    "VideoSettingsScreenMixin",
+    "VulkanConstMixin",
+    "VulkanFeatureSetsMixin",
+    "VulkanQueryPoolAccessor",
     "VulkanRenderPassMixin"
   ],
-  "injectors": { "defaultRequire": 1 }
+  "injectors": {
+    "defaultRequire": 1
+  }
 }

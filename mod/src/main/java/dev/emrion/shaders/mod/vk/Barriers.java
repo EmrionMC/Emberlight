@@ -30,6 +30,7 @@ public final class Barriers {
 	public static final long COLOR_READ = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT;
 	public static final long DEPTH_WRITE = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 	public static final long TRANSFER_WRITE = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+	public static final long TRANSFER_READ = VK_ACCESS_2_TRANSFER_READ_BIT;
 
 	public static void memory(VkCommandBuffer cb, long srcStage, long srcAccess, long dstStage, long dstAccess) {
 		try (MemoryStack stack = MemoryStack.stackPush()) {

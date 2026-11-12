@@ -20,7 +20,7 @@ public final class PackConsts {
 		Map<String, String> out = new LinkedHashMap<>();
 		programs.stream().filter(ResolvedPack.ProgramSource::enabled)
 				.flatMap(p -> p.stages().stream())
-				.filter(s -> s.stage() == StageType.FRAGMENT && ProgramCatalog.directiveRank(s.group()) >= 0)
+				.filter(s -> s.stage() == StageType.FRAGMENT && s.directives() != null && ProgramCatalog.directiveRank(s.group()) >= 0)
 				.sorted(Comparator.comparingInt((PreprocessedStage s) -> ProgramCatalog.directiveRank(s.group())))
 				.forEach(s -> out.putAll(s.directives().consts()));
 		return out;

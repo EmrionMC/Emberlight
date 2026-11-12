@@ -36,6 +36,21 @@ public final class RawPass {
 		}
 	}
 
+	/** Depth-only pass into {@code depthView} (load and store), full-size viewport and scissor. */
+	public static void beginDepth(VkCommandBuffer cb, int width, int height, long depthView) {
+		try (MemoryStack stack = MemoryStack.stackPush()) {
+			var att = VkRenderingAttachmentInfo.calloc(stack).sType$Default().imageView(depthView).imageLayout(VK_IMAGE_LAYOUT_GENERAL)
+					.loadOp(VK_ATTACHMENT_LOAD_OP_LOAD).storeOp(VK_ATTACHMENT_STORE_OP_STORE);
+			var info = VkRenderingInfo.calloc(stack).sType$Default().layerCount(1).pDepthAttachment(att);
+			info.renderArea().extent().set(width, height);
+			KHRDynamicRendering.vkCmdBeginRenderingKHR(cb, info);
+			vkCmdSetViewport(cb, 0, VkViewport.calloc(1, stack).width(width).height(height).maxDepth(1.0F));
+			var scissor = VkRect2D.calloc(1, stack);
+			scissor.extent().set(width, height);
+			vkCmdSetScissor(cb, 0, scissor);
+		}
+	}
+
 	public static void end(VkCommandBuffer cb) {
 		KHRDynamicRendering.vkCmdEndRenderingKHR(cb);
 	}

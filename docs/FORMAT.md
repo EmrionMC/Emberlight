@@ -48,7 +48,7 @@ The JSON examples below show intent. Where an example and `Manifest.java` disagr
   "uniforms": { … §6 … },                 // one std140 layout shared by every dimension and program
   "idMaps": { … §8 … },
   "textures": [ … §7.3 … ],               // custom textures (files in textures/)
-  "dimensionMap": [ { "match": "minecraft:overworld", "folder": "world0" }, … ],  // ordered, first match wins; "*" allowed
+  "dimensionMap": [ { "match": "minecraft:overworld", "folder": "world0" }, … ],  // exact ids win; then globs ("*:*") in list order
   "dimensions": { "world0": { … §7 … }, "world-1": { … }, "world1": { … } }
 }
 ```
@@ -234,6 +234,7 @@ multidraw-indirect path: `terrain_mdi`, set 0 = `[Globals, Projection, TerrainUn
   binding (for example `gaux4` → custom texture `cloud-water` in gbuffers/shadow, but → `colortex7` in composites).
 - `sampled_image` entries for colortex use the read side per flip state, so the mod builds one descriptor set per `flipStates` entry.
 - The same image may appear with a compare sampler and a plain sampler (shadowtex0 in Complementary).
+- A `storage_image` on a colortex (`colorimgN`) binds the **read side** of the flip state, as Iris does (iris-spec §2.2 "Images").
 
 ### 7.3 Targets and textures
 

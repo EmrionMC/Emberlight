@@ -43,7 +43,8 @@ final class MemoryPackSource implements PackSource {
 
 	private static SortedMap<String, byte[]> readDirectory(Path dir) throws IOException {
 		SortedMap<String, byte[]> files = new TreeMap<>();
-		try (Stream<Path> walk = Files.walk(dir)) {
+		dir = dir.toRealPath(); // shaderpacks entries are often symlinks; Files.walk does not descend into a linked root
+		try (Stream<Path> walk = Files.walk(dir, java.nio.file.FileVisitOption.FOLLOW_LINKS)) {
 			for (Path p : (Iterable<Path>) walk.filter(Files::isRegularFile)::iterator) {
 				files.put(dir.relativize(p).toString().replace('\\', '/'), Files.readAllBytes(p));
 			}
