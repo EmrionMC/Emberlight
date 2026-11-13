@@ -14,3 +14,4 @@ mod/logs/
 mod/run-iris/
 mod/run-compare/
 /testpacks
+*.log
