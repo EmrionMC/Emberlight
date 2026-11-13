@@ -17,6 +17,7 @@ import org.lwjgl.vulkan.VkPipelineMultisampleStateCreateInfo;
 import org.lwjgl.vulkan.VkPipelineRasterizationStateCreateInfo;
 import org.lwjgl.vulkan.VkPipelineRenderingCreateInfoKHR;
 import org.lwjgl.vulkan.VkPipelineShaderStageCreateInfo;
+import org.lwjgl.vulkan.VkPipelineTessellationStateCreateInfo;
 import org.lwjgl.vulkan.VkPipelineVertexInputDivisorStateCreateInfoEXT;
 import org.lwjgl.vulkan.VkPipelineVertexInputStateCreateInfo;
 import org.lwjgl.vulkan.VkPipelineViewportStateCreateInfo;
@@ -47,6 +48,7 @@ public final class GraphicsPipelineBuilder {
 	private int frontFace = VK_FRONT_FACE_CLOCKWISE; // MC renders unflipped with CW front faces
 	private int topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 	private int polygonMode = VK_POLYGON_MODE_FILL;
+	private int patchControlPoints;
 	private long layout;
 
 	public GraphicsPipelineBuilder stage(int vkShaderStage, long module) {
@@ -98,6 +100,13 @@ public final class GraphicsPipelineBuilder {
 
 	public GraphicsPipelineBuilder topology(int topology) {
 		this.topology = topology;
+		return this;
+	}
+
+	/** Tessellation: topology becomes PATCH_LIST with this many control points per patch. */
+	public GraphicsPipelineBuilder patches(int controlPoints) {
+		this.topology = VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
+		this.patchControlPoints = controlPoints;
 		return this;
 	}
 
@@ -169,6 +178,8 @@ public final class GraphicsPipelineBuilder {
 					.pDynamicState(VkPipelineDynamicStateCreateInfo.calloc(stack).sType$Default()
 							.pDynamicStates(stack.ints(VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR)))
 					.layout(layout);
+			if (patchControlPoints > 0)
+				info.pTessellationState(VkPipelineTessellationStateCreateInfo.calloc(stack).sType$Default().patchControlPoints(patchControlPoints));
 			LongBuffer p = stack.mallocLong(1);
 			VulkanContext.check(vkCreateGraphicsPipelines(ctx.vk, pipelineCache, info, null, p), "vkCreateGraphicsPipelines");
 			return p.get(0);

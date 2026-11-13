@@ -24,7 +24,7 @@ public record Manifest(
 		List<DimensionMapping> dimensionMap,
 		Map<String, Dimension> dimensions
 ) {
-	public static final int FORMAT_VERSION = 1;
+	public static final int FORMAT_VERSION = 2;
 
 	public record PackInfo(String name, String sha256) {}
 
@@ -98,10 +98,19 @@ public record Manifest(
 			float[] workGroupsRender,
 			List<String> mipmapBefore,
 			float viewportScale,
-			Integer renderStageOrdinal
-	) {}
+			Integer renderStageOrdinal,
+			float[] viewportOffset // scale.<program> offset [x, y] as a fraction of the target size; null = 0 0
+	) {
+		public Program(String kind, String group, List<String> fallbackFor, Stages stages, List<Output> outputs, Blend blend, AlphaTest alphaTest,
+				List<Set0Ref> set0, List<Integer> set1, List<Integer> writesStorage, boolean usesPushConstants, int[] localSize, int[] workGroups,
+				float[] workGroupsRender, List<String> mipmapBefore, float viewportScale, Integer renderStageOrdinal) {
+			this(kind, group, fallbackFor, stages, outputs, blend, alphaTest, set0, set1, writesStorage, usesPushConstants, localSize, workGroups,
+					workGroupsRender, mipmapBefore, viewportScale, renderStageOrdinal, null);
+		}
+	}
 
-	public record Stages(VertexStage vertex, SpvRef geometry, SpvRef fragment, SpvRef compute) {}
+	/** tessControl/tessEval/geometry have one module per vertex variant, like vertex (they read variant-dependent transforms). */
+	public record Stages(VertexStage vertex, VertexStage tessControl, VertexStage tessEval, VertexStage geometry, SpvRef fragment, SpvRef compute) {}
 
 	/** variant key (see {@link VertexLayouts}) → spv path. Composite-like programs use the single key "fullscreen". */
 	public record VertexStage(Map<String, String> variants) {}
@@ -146,7 +155,10 @@ public record Manifest(
 	public record TextureDef(String name, String file, String resource, String format, int dims, int[] size,
 	                         String filter, String wrap, boolean mipmap) {}
 
-	public record FlipState(int id, List<Integer> alt) {}
+	/** alt: colortex indices read from the alt image; shadowAlt: the same for shadowcolor (null = none). */
+	public record FlipState(int id, List<Integer> alt, List<Integer> shadowAlt) {
+		public FlipState(int id, List<Integer> alt) { this(id, alt, null); }
+	}
 
 	/**
 	 * One frame command (FORMAT.md §7.4). cmd: clear | compute | fullscreen | mipmaps | geometry | copy_depth | copy | final.

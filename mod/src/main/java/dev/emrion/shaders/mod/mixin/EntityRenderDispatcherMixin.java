@@ -10,6 +10,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.SubmitNodeCollector;
 import net.minecraft.client.renderer.entity.EntityRenderDispatcher;
 import net.minecraft.client.renderer.entity.state.AvatarRenderState;
+import net.minecraft.client.renderer.entity.state.ZombieVillagerRenderState;
 import net.minecraft.client.renderer.entity.state.EntityRenderState;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
 import net.minecraft.world.entity.Entity;
@@ -36,7 +37,9 @@ public class EntityRenderDispatcherMixin {
 		BlockIdTable ids = EmrionVertexFormats.ids();
 		Entity cameraEntity = Minecraft.getInstance().getCameraEntity();
 		int previous = EntityIds.entity;
-		EntityIds.entity = state instanceof AvatarRenderState avatar && ids.currentPlayer() != -1 && cameraEntity != null
+		int converting = ids.entityName(BlockIdTable.CONVERTING_VILLAGER);
+		EntityIds.entity = state instanceof ZombieVillagerRenderState zombie && zombie.isConverting && converting != -1 ? converting
+				: state instanceof AvatarRenderState avatar && ids.currentPlayer() != -1 && cameraEntity != null
 				&& avatar.id == cameraEntity.getId() ? ids.currentPlayer() : state.entityType == null ? -1 : ids.entity(state.entityType);
 		try {
 			original.call(state, camera, x, y, z, poseStack, collector);

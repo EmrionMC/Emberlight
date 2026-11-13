@@ -40,7 +40,8 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 		return new Run(programs, analyses, properties, uniforms, diagnostics).run();
 	}
 
-	private static final Pattern PASS = Pattern.compile("(setup|begin|shadowcomp|prepare|deferred|composite|final|shadow)(\\d*)(?:_([a-z]))?");
+	/** Pass programs; {@code <pass>_csh} is the slot-0 compute of a pass that also has a fullscreen program (DefaultPackLoader). */
+	private static final Pattern PASS = Pattern.compile("(setup|begin|shadowcomp|prepare|deferred|composite|final|shadow)(\\d*)(?:_([a-z]|csh))?");
 	private static final Pattern COLORTEX = Pattern.compile("colortex(\\d+)");
 	private static final Pattern SHADOWCOLOR = Pattern.compile("shadowcolor(\\d)");
 	private static final List<ProgramGroup> STAGE_ORDER = List.of(ProgramGroup.SHADOWCOMP, ProgramGroup.BEGIN, ProgramGroup.PREPARE,
@@ -88,7 +89,11 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 		final Set<String> mipOn = new HashSet<>();
 		final Set<Integer> mipmapped = new TreeSet<>();
 		Set<Integer> lastAtLeastOnce = Set.of();
-		final SequencedMap<List<Integer>, Integer> flipStates = new LinkedHashMap<>();
+		final SequencedMap<List<List<Integer>>, Integer> flipStates = new LinkedHashMap<>(); // [colortex alt, shadowcolor alt]
+		// shadowcolor flips happen only in shadowcomp; every other pass reads the final state (Iris ShadowRenderTargets)
+		final Map<String, List<Integer>> shadowSnapshots = new HashMap<>();
+		final Set<Integer> shadowNeedsAlt = new TreeSet<>();
+		List<Integer> shadowFinal = List.of();
 		final SequencedMap<String, Ctx> ctx = new LinkedHashMap<>(); // planned programs in frame order
 
 		final SequencedMap<Res, Integer> resources = new LinkedHashMap<>();
@@ -110,6 +115,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 			classify();
 			activateShadows();
 			allocateColortexByName();
+			simulateShadowFlips();
 
 			List<Integer> none = List.of();
 			state(none);
@@ -193,7 +199,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 			once.addAll(setup);
 
 			List<Manifest.FlipState> states = new ArrayList<>();
-			flipStates.forEach((alt, id) -> states.add(new Manifest.FlipState(id, alt)));
+			flipStates.forEach((k, id) -> states.add(new Manifest.FlipState(id, k.get(0), k.get(1).isEmpty() ? null : k.get(1))));
 			List<Manifest.Resource> res = new ArrayList<>();
 			res.add(new Manifest.Resource(VertexLayouts.BINDING_UNIFORMS, "uniform_buffer_dynamic", "EmrionUniforms", null, null, null, null));
 			res.add(new Manifest.Resource(VertexLayouts.BINDING_PHASE, "uniform_buffer_dynamic", "EmrionPhase", null, null, null, null));
@@ -280,7 +286,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 				}
 				int index = m.group(2).isEmpty() ? 0 : Integer.parseInt(m.group(2));
 				var pass = passes.computeIfAbsent(a.group(), g -> new TreeMap<>()).computeIfAbsent(index, Pass::new);
-				if (compute) pass.computes().put(m.group(3) == null ? "" : m.group(3), a.program());
+				if (compute) pass.computes().put(m.group(3) == null || m.group(3).equals("csh") ? "" : m.group(3), a.program());
 				else pass.program()[0] = a.program();
 			}
 			// Iris ProgramId fallback chains (iris-spec §1.2).
@@ -349,7 +355,34 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 
 		TreeMap<Integer, Pass> passes(ProgramGroup g) { return passes.getOrDefault(g, new TreeMap<>()); }
 
-		int state(List<Integer> alt) { return flipStates.computeIfAbsent(alt, k -> flipStates.size()); }
+		int state(List<Integer> alt) { return state(alt, shadowFinal); }
+
+		int state(List<Integer> alt, List<Integer> shadowAlt) { return flipStates.computeIfAbsent(List.of(alt, shadowAlt), k -> flipStates.size()); }
+
+		/**
+		 * Iris ShadowCompositeRenderer, simulated once: shadowcomp_pre flips, then each shadowcomp pass reads its snapshot
+		 * (flipped → alt), writes the other side and flips what it drew (flip.&lt;pass&gt;.&lt;buf&gt; as for colortex). The shadow pass
+		 * always writes main; everything outside shadowcomp reads the final state.
+		 */
+		void simulateShadowFlips() {
+			Set<Integer> f = new TreeSet<>();
+			explicitFlips("shadowcomp_pre").forEach((n, b) -> { if (b && !f.remove(n)) f.add(n); });
+			for (var pass : passes(ProgramGroup.SHADOWCOMP).values()) {
+				List<Integer> snap = List.copyOf(f);
+				pass.computes().values().forEach(c -> shadowSnapshots.put(c, snap));
+				String p = pass.program()[0];
+				if (p == null) continue;
+				shadowSnapshots.put(p, snap);
+				var explicit = explicitFlips(p);
+				for (int n : drawBuffers(analyses.get(p))) {
+					if (!snap.contains(n)) shadowNeedsAlt.add(n); // writes alt
+					if (!Boolean.FALSE.equals(explicit.get(n)) && !f.remove(n)) f.add(n);
+				}
+				explicit.forEach((n, b) -> { if (b && !f.remove(n)) f.add(n); });
+			}
+			shadowNeedsAlt.addAll(f);
+			shadowFinal = List.copyOf(f);
+		}
 
 		void toggle(int n) {
 			if (!flips.remove(n)) flips.add(n);
@@ -362,11 +395,13 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 			boolean flipsColortex = g != ProgramGroup.SETUP && g != ProgramGroup.SHADOWCOMP && g != ProgramGroup.FINAL;
 			String preKey = g.name().toLowerCase(Locale.ROOT) + "_pre";
 			if (flipsColortex) explicitFlips(preKey).forEach((n, f) -> { if (f) toggle(n); });
-			else if (!explicitFlips(preKey).isEmpty()) warn(null, "flip." + preKey + " is not supported");
+			else if (g != ProgramGroup.SHADOWCOMP && !explicitFlips(preKey).isEmpty()) warn(null, "flip." + preKey + " is not supported");
 			Set<Integer> atLeastOnce = new TreeSet<>(g == ProgramGroup.FINAL ? lastAtLeastOnce : Set.of());
 			for (var pass : passes(g).values()) {
 				List<Integer> snap = g == ProgramGroup.SETUP ? List.of() : List.copyOf(flips);
-				int fs = state(snap);
+				String first = pass.program()[0] != null ? pass.program()[0] : pass.computes().isEmpty() ? null : pass.computes().firstEntry().getValue();
+				List<Integer> shadowSnap = g == ProgramGroup.SHADOWCOMP ? shadowSnapshots.getOrDefault(first, List.of()) : shadowFinal;
+				int fs = state(snap, shadowSnap);
 				for (String c : pass.computes().values()) {
 					ctx.put(c, new Ctx(stage, snap, Set.copyOf(atLeastOnce), Set.copyOf(mipOn), fs));
 					out.add(cmd("compute", c, fs));
@@ -395,7 +430,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 					int n = db.get(i);
 					if (g == ProgramGroup.SHADOWCOMP) {
 						shadowColors.add("shadowcolor" + n);
-						writes.add(new Manifest.Attachment(i, "shadowcolor" + n, "main"));
+						writes.add(new Manifest.Attachment(i, "shadowcolor" + n, shadowSnap.contains(n) ? "main" : "alt"));
 						continue;
 					}
 					String side = snap.contains(n) ? "main" : "alt";
@@ -403,11 +438,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 					writes.add(new Manifest.Attachment(i, "colortex" + n, side));
 				}
 				out.add(new Command("fullscreen", p, fs, null, null, null, null, null, writes, null));
-				if (!flipsColortex) {
-					if (g == ProgramGroup.SHADOWCOMP && !db.isEmpty())
-						warn(p, "shadowcolor flipping in shadowcomp is not implemented; writes go to main");
-					continue;
-				}
+				if (!flipsColortex) continue; // shadowcomp flips shadowcolor: simulateShadowFlips
 				var explicit = explicitFlips(p);
 				for (int n : db) {
 					if (Boolean.FALSE.equals(explicit.get(n))) continue;
@@ -524,7 +555,8 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 						compute ? null : blend(name, kind, outputs), geo ? alphaTest(name) : null,
 						a.set0().stream().map(IrisDimensionPlanner::set0Ref).toList(), List.copyOf(set1), List.copyOf(storage), geo,
 						compute ? d.localSize() : null, compute ? d.workGroups() : null, compute ? d.workGroupsRender() : null,
-						mips, viewportScale(name), geo ? null : 0));
+						mips, viewport(name)[0], geo ? null : 0, viewport(name)[1] == 0 && viewport(name)[2] == 0 ? null
+								: new float[]{viewport(name)[1], viewport(name)[2]}));
 			}
 			return out;
 		}
@@ -555,11 +587,13 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 		}
 
 		Manifest.Stages stages(Transpiler.ProgramAnalysis a, boolean compute, boolean geo) {
-			if (compute) return new Manifest.Stages(null, null, null, new Manifest.SpvRef(null));
+			if (compute) return new Manifest.Stages(null, null, null, null, null, new Manifest.SpvRef(null));
 			Map<String, String> v = new LinkedHashMap<>();
 			for (String k : geo ? variants(a.program()) : List.of("fullscreen")) v.put(k, null);
-			boolean gsh = a.stages().stream().anyMatch(s -> s.stage() == StageType.GEOMETRY);
-			return new Manifest.Stages(new Manifest.VertexStage(v), gsh ? new Manifest.SpvRef(null) : null, new Manifest.SpvRef(null), null);
+			Map<StageType, Manifest.VertexStage> mid = new java.util.EnumMap<>(StageType.class);
+			for (var s : a.stages()) if (s.stage().intermediate()) mid.put(s.stage(), new Manifest.VertexStage(v));
+			return new Manifest.Stages(new Manifest.VertexStage(v), mid.get(StageType.TESS_CONTROL), mid.get(StageType.TESS_EVAL),
+					mid.get(StageType.GEOMETRY), new Manifest.SpvRef(null), null);
 		}
 
 		int bind(Res r) {
@@ -740,7 +774,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 					boolean clear = !Boolean.FALSE.equals(bool(consts.get(sc + "Clear")));
 					float[] cc = vec4(consts.get(sc + "ClearColor"));
 					out.add(new Manifest.Target(sc, "shadow_color", f[1], f[0], 2, null, new int[]{res, res}, colorMip(i) ? 0 : 1,
-							false, clear, cc == null ? new float[]{1, 1, 1, 1} : cc, false, 0));
+							shadowNeedsAlt.contains(i), clear, cc == null ? new float[]{1, 1, 1, 1} : cc, false, 0));
 				}
 			}
 			images.forEach((name, t) -> {
@@ -907,10 +941,17 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 			}
 		}
 
-		float viewportScale(String program) {
+		/** scale.&lt;program&gt; = scale [offsetX offsetY] (Iris ShaderProperties): {scale, x, y}; unparsable → default, as Iris. */
+		float[] viewport(String program) {
 			String v = props.get("scale." + program);
-			// shortcut: the viewport offset (2nd/3rd token) is dropped; Program has no field for it yet.
-			return v == null ? 1f : Float.parseFloat(v.trim().split("\\s+")[0]);
+			if (v == null) return new float[]{1, 0, 0};
+			String[] t = v.trim().split("\\s+");
+			try {
+				return new float[]{Float.parseFloat(t[0]), t.length > 1 ? Float.parseFloat(t[1]) : 0, t.length > 1 ? Float.parseFloat(t[2]) : 0};
+			} catch (NumberFormatException | ArrayIndexOutOfBoundsException e) {
+				warn(program, "unparsable scale." + program + " = " + v + "; ignored");
+				return new float[]{1, 0, 0};
+			}
 		}
 
 		// ---------------------------------------------------------------------------------------------------------

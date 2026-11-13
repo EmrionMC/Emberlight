@@ -62,6 +62,8 @@ public final class ShadercSpirvCompiler implements SpirvCompiler {
 	static int kind(StageType stage) {
 		return switch (stage) {
 			case VERTEX -> shaderc_glsl_vertex_shader;
+			case TESS_CONTROL -> shaderc_glsl_tess_control_shader;
+			case TESS_EVAL -> shaderc_glsl_tess_evaluation_shader;
 			case GEOMETRY -> shaderc_glsl_geometry_shader;
 			case FRAGMENT -> shaderc_glsl_fragment_shader;
 			case COMPUTE -> shaderc_glsl_compute_shader;

@@ -1,6 +1,8 @@
 package dev.emrion.shaders.mod.mixin;
 
 import dev.emrion.shaders.mod.runtime.GeometryHooks;
+import dev.emrion.shaders.mod.vertex.BlockIdTable;
+import dev.emrion.shaders.mod.vertex.EmrionVertexFormats;
 import dev.emrion.shaders.mod.vertex.EntityIds;
 import net.minecraft.client.renderer.feature.BlockModelFeatureRenderer;
 import net.minecraft.client.renderer.feature.CustomFeatureRenderer;
@@ -30,6 +32,9 @@ public class FeatureSubmitIdsMixin implements EntityIds.Holder {
 	@Inject(method = "<init>*", at = @At("RETURN"))
 	private void emrion$capture(CallbackInfo ci) {
 		emrion$ids = EntityIds.packed() | (GeometryHooks.submittingBlockEntity ? EntityIds.BLOCK_ENTITY_SUBMIT : 0);
+		// Iris MixinFlameFeatureRenderer: entity fire draws as minecraft:entity_flame (−1 when the pack does not map it)
+		if ((Object) this instanceof FlameFeatureRenderer.Submit && EmrionVertexFormats.active())
+			emrion$ids = emrion$ids & ~0xFFFFL | EmrionVertexFormats.ids().entityName(BlockIdTable.ENTITY_FLAME) & 0xFFFFL;
 	}
 
 	@Override

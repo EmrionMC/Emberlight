@@ -36,6 +36,7 @@
     "BlockEntityRenderStateAccessor",
     "BufferBuilderAccessor",
     "EntityRenderDispatcherMixin",
+    "CapeLayerMixin",
     "FeatureBuildGroupMixin",
     "FeatureSubmitIdsMixin",
     "TextGlyphRendererMixin",

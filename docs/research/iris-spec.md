@@ -751,7 +751,9 @@ All PER_FRAME (`I/uniforms/CelestialUniforms.java:30-180`).
 
 ### 5.10 Not present in this Iris
 
-`HardcodedCustomUniforms` (`timeAngle`, `day`, `night`, `isDry`, …) exists in the source but **is never registered** (`I/uniforms/HardcodedCustomUniforms.java:25`; no callers). Packs must define these via `uniform.*`. **[CR]** defines its own.
+`HardcodedCustomUniforms` (`timeAngle`, `day`, `night`, `isDry`, `velocity`, `starter`, …) exists in the source but **is never registered** (`I/uniforms/HardcodedCustomUniforms.java:25`; no callers). Packs must define these via `uniform.*`. **[CR]** defines its own.
+So `velocity` (the camera's per-frame movement there) is **not** an Iris uniform: a pack that declares `uniform float velocity`
+without a `uniform.float.velocity` reads 0, as under Iris; the mod provides nothing for it on purpose.
 
 ---
 
@@ -795,13 +797,18 @@ Parsing: `I/shaderpack/IdMap.java:69-275`, `I/shaderpack/materialmap/BlockEntry.
 - Without a block.properties, the legacy numeric IDs are used (`I/shaderpack/materialmap/LegacyIdMap.java`).
 
 **item.properties / entity.properties**
-- `item.<int>` / `entity.<int>` = space list of `ns:name`. State filters are not allowed. Unmapped = −1.
+- `item.<int>` / `entity.<int>` = space list of `ns:name`. State filters are not allowed: an entry with `=` is skipped with a
+  warning (`I/shaderpack/IdMap.java:187-192`), also in item.properties. Block items take the **block.properties** id of the
+  block's default state instead (state filters apply there), with `blockEntityId = 1` (`ItemStackStateLayerMixin`). Unmapped = −1.
 
 **Special entity names** (from the mixins):
-- `minecraft:current_player`, `minecraft:player_cape`, `minecraft:elytra_with_cape`, `minecraft:name_tag`
-- `minecraft:entity_shadow`, `minecraft:entity_flame`
-- `minecraft:end_crystal_beam`, `minecraft:lightning_bolt`
-- `minecraft:zombie_villager_converting`
+- `minecraft:current_player` (entity id of the camera player), `minecraft:zombie_villager_converting` (a converting zombie
+  villager, only if the pack maps it), `minecraft:name_tag` (name tags), `minecraft:entity_flame` (fire on burning entities),
+  `minecraft:end_crystal_beam`, `minecraft:lightning_bolt` (the lightning render type; the same as the entity type's id).
+- item.properties: `minecraft:player_cape` (cape layer), `minecraft:elytra_with_cape` (wings of a player with a cape),
+  `trim_<material>` (armor trims).
+- `minecraft:entity_shadow` is declared (`I/mixin/MixinEntityRenderDispatcher.java:40`) but **never used**: Iris only
+  suppresses vanilla entity shadows when the pack renders a shadow map.
 
 **Context IDs**
 - `entityId` is set per entity draw.

@@ -29,25 +29,30 @@ import org.jspecify.annotations.Nullable;
  */
 public final class BlockIdTable {
 	public static final Identifier CURRENT_PLAYER = Identifier.fromNamespaceAndPath("minecraft", "current_player");
+	/** Iris's special entity.properties names (entity_render_context mixins): converting zombie villagers, entity fire, name tags. */
+	public static final Identifier CONVERTING_VILLAGER = Identifier.fromNamespaceAndPath("minecraft", "zombie_villager_converting"),
+			ENTITY_FLAME = Identifier.fromNamespaceAndPath("minecraft", "entity_flame"), NAME_TAG = Identifier.fromNamespaceAndPath("minecraft", "name_tag");
+	/** item.properties name Iris gives the player's cape (MixinCapeLayer). */
+	public static final Identifier PLAYER_CAPE = Identifier.fromNamespaceAndPath("minecraft", "player_cape");
 	public static final BlockIdTable EMPTY = new BlockIdTable(null, new Reference2IntOpenHashMap<>(), new Reference2IntOpenHashMap<>(),
-			new Object2IntOpenHashMap<>(), -1);
+			new Object2IntOpenHashMap<>(), new Object2IntOpenHashMap<>());
 
 	final Manifest.@Nullable IdMaps source;
 	private final Reference2IntOpenHashMap<BlockState> blocks;
 	private final Reference2IntOpenHashMap<EntityType<?>> entities;
-	private final Object2IntOpenHashMap<Identifier> items;
-	private final int currentPlayer;
+	private final Object2IntOpenHashMap<Identifier> items, entityNames;
 
 	private BlockIdTable(Manifest.@Nullable IdMaps source, Reference2IntOpenHashMap<BlockState> blocks,
-			Reference2IntOpenHashMap<EntityType<?>> entities, Object2IntOpenHashMap<Identifier> items, int currentPlayer) {
+			Reference2IntOpenHashMap<EntityType<?>> entities, Object2IntOpenHashMap<Identifier> items, Object2IntOpenHashMap<Identifier> entityNames) {
 		this.source = source;
 		this.blocks = blocks;
 		this.entities = entities;
 		this.items = items;
-		this.currentPlayer = currentPlayer;
+		this.entityNames = entityNames;
 		blocks.defaultReturnValue(-1);
 		entities.defaultReturnValue(-1);
 		items.defaultReturnValue(-1);
+		entityNames.defaultReturnValue(-1);
 	}
 
 	/** Resolves the id maps against the registries (render thread; needs bound tags for {@code #tag} matchers). */
@@ -55,13 +60,13 @@ public final class BlockIdTable {
 		Reference2IntOpenHashMap<BlockState> blocks = new Reference2IntOpenHashMap<>();
 		assign(maps.blocks(), REGISTRY, blocks);
 		Reference2IntOpenHashMap<EntityType<?>> entities = new Reference2IntOpenHashMap<>();
-		int player = -1;
+		Object2IntOpenHashMap<Identifier> entityNames = new Object2IntOpenHashMap<>();
 		for (Manifest.IdEntry e : maps.entities()) {
 			for (String name : e.match()) {
 				Identifier id = Identifier.tryParse(name);
 				if (id == null) continue;
-				if (id.equals(CURRENT_PLAYER)) player = e.id();
-				else BuiltInRegistries.ENTITY_TYPE.getOptional(id).ifPresent(t -> entities.put(t, e.id()));
+				entityNames.put(id, e.id());
+				BuiltInRegistries.ENTITY_TYPE.getOptional(id).ifPresent(t -> entities.put(t, e.id()));
 			}
 		}
 		Object2IntOpenHashMap<Identifier> items = new Object2IntOpenHashMap<>();
@@ -72,7 +77,7 @@ public final class BlockIdTable {
 			}
 		}
 		blocks.trim();
-		return new BlockIdTable(maps, blocks, entities, items, player);
+		return new BlockIdTable(maps, blocks, entities, items, entityNames);
 	}
 
 	public int block(BlockState state) { return blocks.getInt(state); }
@@ -80,7 +85,10 @@ public final class BlockIdTable {
 	public int entity(EntityType<?> type) { return entities.getInt(type); }
 
 	/** entity.properties id of {@code minecraft:current_player}, or −1 if the pack has none (then the player type's id applies). */
-	public int currentPlayer() { return currentPlayer; }
+	public int currentPlayer() { return entityNames.getInt(CURRENT_PLAYER); }
+
+	/** entity.properties id of any name, entity type or special (Iris entityIds.applyAsInt), −1 if unmapped. */
+	public int entityName(Identifier name) { return entityNames.getInt(name); }
 
 	/** By the item's model id (ITEM_MODEL component), as Iris does. */
 	public int item(Identifier modelId) { return items.getInt(modelId); }

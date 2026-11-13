@@ -101,7 +101,7 @@ class DefaultPackLoaderTest {
 		List<ResolvedPack.ProgramSource> w0 = rp.dimensions().get("world0");
 		assertEquals(List.of("shadowcomp", "shadowcomp_a", "gbuffers_terrain", "composite_csh", "composite", "composite2"),
 				w0.stream().map(ResolvedPack.ProgramSource::name).toList());
-		assertTrue(d.all().stream().anyMatch(x -> x.message().contains("compute alongside fullscreen")));
+		assertTrue(d.all().stream().noneMatch(x -> x.message().contains("compute alongside fullscreen")));
 		assertFalse(program(w0, "composite2", StageType.FRAGMENT).enabled(), "program.world0/composite2.enabled = FOG");
 		assertTrue(rp.dimensions().get("world-1").stream().allMatch(ResolvedPack.ProgramSource::enabled));
 
@@ -202,5 +202,25 @@ class DefaultPackLoaderTest {
 		Map<String, String> c = PackConsts.merge(rp.dimensions().get(""));
 		assertEquals("RGBA16F", c.get("colortex0Format"), "composite is read after gbuffers");
 		assertEquals("false", c.get("colortex1Clear"));
+	}
+
+	@Test
+	void tessellationStagesNeedTheFeatureFlag() throws Exception {
+		for (String ext : new String[]{"vsh", "tcs", "tes", "gsh", "fsh"}) {
+			write("shaders/gbuffers_terrain." + ext, "#version 400\nvoid main() {}\n");
+			write("shaders/composite." + ext, "#version 400\nvoid main() {}\n");
+		}
+		Diagnostics d = new Diagnostics();
+		var stages = load(null, d).dimensions().get("").stream().filter(p -> p.name().equals("gbuffers_terrain")).findFirst().orElseThrow()
+				.stages().stream().map(PreprocessedStage::stage).toList();
+		assertEquals(List.of(StageType.VERTEX, StageType.GEOMETRY, StageType.FRAGMENT), stages);
+		write("shaders/shaders.properties", "iris.features.optional = TESSELATION_SHADERS\n"); // Iris accepts the old spelling
+		ResolvedPack rp = load(null, d);
+		stages = rp.dimensions().get("").stream().filter(p -> p.name().equals("gbuffers_terrain")).findFirst().orElseThrow()
+				.stages().stream().map(PreprocessedStage::stage).toList();
+		assertEquals(List.of(StageType.VERTEX, StageType.TESS_CONTROL, StageType.TESS_EVAL, StageType.GEOMETRY, StageType.FRAGMENT), stages);
+		var composite = rp.dimensions().get("").stream().filter(p -> p.name().equals("composite")).findFirst().orElseThrow();
+		assertEquals(2, composite.stages().size(), "composite keeps only .vsh/.fsh");
+		assertTrue(d.all().stream().anyMatch(x -> x.message().contains("only supported in gbuffers and shadow")));
 	}
 }

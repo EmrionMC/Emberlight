@@ -37,8 +37,8 @@ public final class CacheDir {
 			for (var p : d.programs().values()) {
 				var s = p.stages();
 				if (s == null) continue;
-				if (s.vertex() != null) s.vertex().variants().values().forEach(files::add);
-				for (var ref : new Manifest.SpvRef[] {s.geometry(), s.fragment(), s.compute()}) if (ref != null) files.add(ref.spv());
+				for (var v : new Manifest.VertexStage[] {s.vertex(), s.tessControl(), s.tessEval(), s.geometry()}) if (v != null) v.variants().values().forEach(files::add);
+				for (var ref : new Manifest.SpvRef[] {s.fragment(), s.compute()}) if (ref != null) files.add(ref.spv());
 			}
 		}
 		return files.build().allMatch(f -> f == null || Files.isRegularFile(dir.resolve(f)));

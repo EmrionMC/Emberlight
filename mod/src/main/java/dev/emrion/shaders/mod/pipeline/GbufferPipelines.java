@@ -110,8 +110,12 @@ public final class GbufferPipelines {
 						if (!dim.programs().get(p).stages().vertex().variants().containsKey(var)) continue;
 						String misfit = set0Misfit(cacheDir, spv, dim.programs().get(p), var, v.getValue());
 						if (misfit == null) {
-							program = p;
-							variant = var;
+							// GL draws nothing when the primitive does not fit the program's stages (Iris has no fallback)
+							why = primitiveMisfit(cacheDir, spv, dim.programs().get(p), var, raw.getKey());
+							if (why == null) {
+								program = p;
+								variant = var;
+							} else why = p + "[" + var + "]: " + why;
 							break search;
 						}
 						if (why == null) why = p + "[" + var + "]: " + misfit;
@@ -224,10 +228,42 @@ public final class GbufferPipelines {
 		return order;
 	}
 
+	/** The tessellation control, tessellation evaluation and geometry stages, in pipeline order (null: absent). */
+	static Manifest.VertexStage[] intermediates(Manifest.Stages s) {
+		return new Manifest.VertexStage[] {s.tessControl(), s.tessEval(), s.geometry()};
+	}
+
+	private static final int[] INTERMEDIATE_BITS = {VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT, VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT,
+			VK_SHADER_STAGE_GEOMETRY_BIT};
+
+	/**
+	 * null if MC's primitives can feed the program's stages: with tessellation, MC's triangle lists become 3-vertex patches
+	 * (Iris turns GL_TRIANGLES into GL_PATCHES and leaves the patch size at GL's default 3), other topologies are a GL error;
+	 * a geometry shader must accept the drawn primitive. Vulkan also needs both tessellation stages (GL allows a lone .tes).
+	 */
+	private static String primitiveMisfit(Path cacheDir, Map<String, byte[]> spv, Manifest.Program p, String variant, RenderPipeline vanilla) {
+		Manifest.Stages s = p.stages();
+		int topology = VulkanConst.toVk(vanilla.getPrimitiveTopology());
+		if (s.tessControl() != null || s.tessEval() != null) {
+			if (s.tessControl() == null || s.tessEval() == null) return "Vulkan needs both a .tcs and a .tes";
+			return topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST ? null : "tessellation draws only triangle lists, not topology " + topology;
+		}
+		if (s.geometry() == null) return null;
+		int want = switch (topology) {
+			case VK_PRIMITIVE_TOPOLOGY_POINT_LIST -> OutputPatcher.INPUT_POINTS;
+			case VK_PRIMITIVE_TOPOLOGY_LINE_LIST, VK_PRIMITIVE_TOPOLOGY_LINE_STRIP -> OutputPatcher.INPUT_LINES;
+			default -> OutputPatcher.INPUT_TRIANGLES;
+		};
+		int got = OutputPatcher.geometryInput(read(cacheDir, spv, s.geometry().variants().get(variant)));
+		return got == want ? null : "geometry shader input primitive (mode " + got + ") does not match topology " + topology;
+	}
+
 	/** null if every set-0 resource the program's stages use is pushed by the vanilla pipeline, else what is missing. */
 	private static String set0Misfit(Path cacheDir, Map<String, byte[]> spv, Manifest.Program p, String variant, FrontendRenderPipeline vanilla) {
 		try {
 			Set0Patcher.patch(read(cacheDir, spv, p.stages().vertex().variants().get(variant)), VertexLayouts.SET0_CANONICAL, set0Order(vanilla));
+			for (var mid : intermediates(p.stages()))
+				if (mid != null) Set0Patcher.patch(read(cacheDir, spv, mid.variants().get(variant)), VertexLayouts.SET0_CANONICAL, set0Order(vanilla));
 			Set0Patcher.patch(read(cacheDir, spv, p.stages().fragment().spv()), VertexLayouts.SET0_CANONICAL, set0Order(vanilla));
 			return null;
 		} catch (IllegalArgumentException e) {
@@ -318,8 +354,18 @@ public final class GbufferPipelines {
 				OutputPatcher.patch(fs, remap);
 				defaults = defaultMissingInputs(k, vs, vanilla, b);
 				modules.add(ShaderModules.create(ctx, vs));
+				b.stage(VK_SHADER_STAGE_VERTEX_BIT, modules.getLast());
+				var mids = intermediates(p.stages());
+				for (int i = 0; i < mids.length; i++) {
+					if (mids[i] == null) continue;
+					byte[] m = read(cacheDir, spv, mids[i].variants().get(k.variant()));
+					Set0Patcher.patch(m, VertexLayouts.SET0_CANONICAL, order);
+					modules.add(ShaderModules.create(ctx, m));
+					b.stage(INTERMEDIATE_BITS[i], modules.getLast());
+				}
+				if (p.stages().tessControl() != null) b.patches(3); // primitiveMisfit: MC's triangle lists
 				modules.add(ShaderModules.create(ctx, fs));
-				b.stage(VK_SHADER_STAGE_VERTEX_BIT, modules.get(0)).stage(VK_SHADER_STAGE_FRAGMENT_BIT, modules.get(1));
+				b.stage(VK_SHADER_STAGE_FRAGMENT_BIT, modules.getLast());
 				if (p.alphaTest() != null) alphaRef = p.alphaTest().ref();
 			}
 			if (k.hidden() || k.program() == null) b.depth(VK_FORMAT_D32_SFLOAT, true, false, VK_COMPARE_OP_LESS_OR_EQUAL);

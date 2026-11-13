@@ -1,4 +1,4 @@
-# Emrion Pack Format (EPF) — version 1
+# Emrion Pack Format (EPF) — version 2
 
 The converter writes a converted shaderpack as a directory. The mod reads it. This document is the **only contract**
 between `converter/` and `mod/`. The Java records that mirror it live in `converter/src/main/java/dev/emrion/shaders/format/`
@@ -38,7 +38,7 @@ The JSON examples below show intent. Where an example and `Manifest.java` disagr
 
 ```jsonc
 {
-  "formatVersion": 1,
+  "formatVersion": 2,
   "converterVersion": "0.1.0",
   "cacheKey": "3fa2…",
   "pack": { "name": "ComplementaryUnbound_r5.9.3 + EuphoriaPatches_1.10.5", "sha256": "…" },
@@ -146,7 +146,7 @@ only look at their first two arguments). The shared evaluator is `expr.CustomUni
   "programs": { "<name>": { … §7.1 … } },
   "resources": [ … §7.2 … ],     // set 1 layout (shared by all programs of this dimension)
   "targets": [ … §7.3 … ],       // physical images to allocate
-  "flipStates": [ { "id": 0, "alt": [] }, { "id": 1, "alt": [5] }, … ],  // which colortex read their alt image
+  "flipStates": [ { "id": 0, "alt": [] }, { "id": 1, "alt": [5], "shadowAlt": [0] }, … ],  // which colortex (shadowcolor) read their alt image
   "frame": [ … §7.4 … ],         // ordered per-frame command list
   "once": [ … ],                 // commands run once after load/resize (setup*, full clears)
   "shadow": { … §7.5 … }
@@ -162,7 +162,9 @@ only look at their first two arguments). The shared evaluator is `expr.CustomUni
   "fallbackFor": ["gbuffers_terrain_solid", "gbuffers_terrain_cutout"],   // Iris names this program serves
   "stages": {
     "vertex":   { "variants": { "terrain_mdi": "spv/world0/gbuffers_terrain.vsh.terrain_mdi.spv", "entity": "…" } },
-    "geometry": null,
+    "tessControl": null,   // .tcs, same shape as vertex (one module per vertex variant)
+    "tessEval": null,      // .tes, same shape as vertex
+    "geometry": null,      // .gsh, same shape as vertex: { "variants": { "terrain_mdi": "spv/world0/gbuffers_terrain.gsh.terrain_mdi.spv", … } }
     "fragment": { "spv": "spv/world0/gbuffers_terrain.fsh.spv" },
     "compute":  null
   },
@@ -177,9 +179,15 @@ only look at their first two arguments). The shared evaluator is `expr.CustomUni
   "localSize": null, "workGroups": null, "workGroupsRender": null,      // compute: [x,y,z] or [sx,sy] scale
   "mipmapBefore": ["colortex0"],       // composite-like: generate mips for these before the pass
   "viewportScale": 1.0,
+  "viewportOffset": null,              // scale.<program> offset [x, y] (fraction of the target size), null = 0 0
   "renderStageOrdinal": null
 }
 ```
+
+**Program keys** are the Iris program names (`gbuffers_terrain`, `composite3`, `deferred1_b`, `setup2`). A `.csh` is a
+`compute` program named like its file; the slot-0 compute of a pass that also has a fullscreen program (`composite.csh`
+next to `composite.fsh`) is keyed `<pass>_csh` (`composite_csh`). Frame commands run a pass's computes (`<pass>_csh` or
+`<pass>`, then `_a` … `_z`) before its `fullscreen` command, in the pass's flip state; only the fullscreen program flips.
 
 **Vertex variants.** A gbuffers/shadow vertex stage is compiled once per vertex layout it can be drawn with. The layout keys,
 with their attributes in canonical location order, are:
@@ -197,6 +205,16 @@ with their attributes in canonical location order, are:
 | `position` | `POSITION` | Position |
 | `position_color_tex_lightmap` | `POSITION_COLOR_TEX_LIGHTMAP` | Position, Color, UV0, UV2 |
 | `lines` | `POSITION_COLOR_NORMAL_LINE_WIDTH` | Position, Color, Normal, LineWidth |
+
+**Tessellation and geometry stages** (gbuffers and shadow programs only; version 2). `.gsh` is always read, `.tcs`/`.tes`
+only when the pack lists `TESSELLATION_SHADERS` in `iris.features.required/optional` (Iris ProgramSet). They are compiled
+once per vertex variant like the vertex stage, because their matrices (`gl_ModelViewMatrix`, `gl_TextureMatrix[0]`,
+`chunkOffset`) depend on the variant (terrain reads TerrainUniform, everything else DynamicTransforms). Varying locations
+are assigned per program by name across VS → TCS → TES → GS → FS (per-vertex arrays count their element type), and the
+GL→Vulkan depth fix sits in the last stage before the rasterizer (`EmitVertex` in the GS, else the end of the TES, else the
+VS). With tessellation the mod draws MC's triangle lists as 3-vertex patches (Iris: `GL_TRIANGLES` → `GL_PATCHES` with GL's
+default patch size 3); other topologies, a lone `.tcs` or `.tes` (Vulkan needs both) and a geometry shader whose input
+primitive does not match the topology draw nothing, as GL would. Composite-like programs ignore these stages (warning).
 
 The mod picks the variant from the vanilla pipeline's vertex format. The converter emits only the variants a program can
 actually be used with (from the Iris program-to-geometry mapping, iris-spec §1.3). Attributes the variant lacks are
@@ -257,6 +275,10 @@ multidraw-indirect path: `terrain_mdi`, set 0 = `[Globals, Projection, TerrainUn
 - One binding per distinct (image, view kind, sampler state). A pack sampler name resolves **per program group** to a
   binding (for example `gaux4` → custom texture `cloud-water` in gbuffers/shadow, but → `colortex7` in composites).
 - `sampled_image` entries for colortex use the read side per flip state, so the mod builds one descriptor set per `flipStates` entry.
+  shadowcolor works the same through `shadowAlt` (absent = none): only shadowcomp passes flip shadowcolor (Iris
+  ShadowCompositeRenderer: a pass reads its snapshot, writes the other side, then flips what it drew; `flip.shadowcomp_pre`
+  and `flip.shadowcompN.<buf>` apply). The shadow pass always writes main, and every other pass reads the final state, which
+  is static (no end-of-frame copy). A shadowcolor that is ever written on its alt side has `hasAlt`.
 - The same image may appear with a compare sampler and a plain sampler (shadowtex0 in Complementary).
 - A `storage_image` on a colortex (`colorimgN`) binds the **read side** of the flip state, as Iris does (iris-spec §2.2 "Images").
 

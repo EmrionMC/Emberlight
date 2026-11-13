@@ -293,10 +293,11 @@ public final class DefaultConverter implements Converter {
 				}
 				for (StageType stage : StageType.values()) {
 					String glsl = r.glsl().get(stage);
-					if (glsl == null || (stage != StageType.VERTEX && !e.first())) continue;
+					boolean perVariant = stage == StageType.VERTEX || stage.intermediate();
+					if (glsl == null || (!perVariant && !e.first())) continue;
 					LineMap source = analyses.get(e.dim()).get(e.program()).stages().stream().filter(st -> st.stage() == stage)
 							.map(PreprocessedStage::lineMap).findFirst().orElse(null);
-					jobs.add(new StageJob(e.dim(), e.program(), stage, stage == StageType.VERTEX ? e.variant() : null, glsl, source));
+					jobs.add(new StageJob(e.dim(), e.program(), stage, perVariant ? e.variant() : null, glsl, source));
 				}
 			}
 			return jobs;
@@ -426,22 +427,25 @@ public final class DefaultConverter implements Converter {
 		}
 
 		private static Manifest.Program withStages(Manifest.Program p, List<StageResult> rs) {
-			Map<String, String> variants = new TreeMap<>();
-			String geometry = null, fragment = null, compute = null;
+			Map<StageType, Map<String, String>> variants = new java.util.EnumMap<>(StageType.class);
+			String fragment = null, compute = null;
 			for (StageResult r : rs) {
 				StageJob j = r.job();
 				switch (j.stage()) {
-					case VERTEX -> variants.put(j.variant() == null ? "fullscreen" : j.variant(), j.spvPath());
-					case GEOMETRY -> geometry = j.spvPath();
 					case FRAGMENT -> fragment = j.spvPath();
 					case COMPUTE -> compute = j.spvPath();
+					default -> variants.computeIfAbsent(j.stage(), k -> new TreeMap<>()).put(j.variant() == null ? "fullscreen" : j.variant(), j.spvPath());
 				}
 			}
-			var stages = new Manifest.Stages(variants.isEmpty() ? null : new Manifest.VertexStage(variants),
-					ref(geometry), ref(fragment), ref(compute));
+			var stages = new Manifest.Stages(variants(variants, StageType.VERTEX), variants(variants, StageType.TESS_CONTROL),
+					variants(variants, StageType.TESS_EVAL), variants(variants, StageType.GEOMETRY), ref(fragment), ref(compute));
 			return new Manifest.Program(p.kind(), p.group(), p.fallbackFor(), stages, p.outputs(), p.blend(), p.alphaTest(),
 					p.set0(), p.set1(), p.writesStorage(), p.usesPushConstants(), p.localSize(), p.workGroups(),
-					p.workGroupsRender(), p.mipmapBefore(), p.viewportScale(), p.renderStageOrdinal());
+					p.workGroupsRender(), p.mipmapBefore(), p.viewportScale(), p.renderStageOrdinal(), p.viewportOffset());
+		}
+
+		private static Manifest.VertexStage variants(Map<StageType, Map<String, String>> m, StageType t) {
+			return m.containsKey(t) ? new Manifest.VertexStage(m.get(t)) : null;
 		}
 
 		private static Manifest.SpvRef ref(String path) { return path == null ? null : new Manifest.SpvRef(path); }

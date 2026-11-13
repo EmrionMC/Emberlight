@@ -179,7 +179,7 @@ public final class GeometryPipelines {
 
 	/**
 	 * Push-descriptor layout identical to MC's for the vanilla <em>backend</em> pipeline's {@code uniforms()} (binding = index,
-	 * VS|FS). That list holds only what the vanilla shaders use, in first-use order; the frontend record's list differs.
+	 * every graphics stage, a pack's tessellation and geometry stages read it too). That list holds only what the vanilla shaders use, in first-use order; the frontend record's list differs.
 	 */
 	public static long set0Layout(VulkanContext ctx, List<BindGroupLayout.UniformDescription> uniforms, int extraSamplers) {
 		var b = new Descriptors.LayoutBuilder();
@@ -189,9 +189,9 @@ public final class GeometryPipelines {
 				case COMBINED_IMAGE_SAMPLER -> VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 				case TEXEL_BUFFER -> VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
 			};
-			b.add(i, type, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
+			b.add(i, type, VK_SHADER_STAGE_ALL_GRAPHICS);
 		}
-		for (int i = 0; i < extraSamplers; i++) b.add(uniforms.size() + i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
+		for (int i = 0; i < extraSamplers; i++) b.add(uniforms.size() + i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_ALL_GRAPHICS);
 		return b.build(ctx, true);
 	}
 

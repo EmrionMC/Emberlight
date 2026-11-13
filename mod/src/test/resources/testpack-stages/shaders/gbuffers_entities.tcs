@@ -1,0 +1,23 @@
+#version 400 compatibility
+layout(vertices = 3) out;
+in vec2 texcoord[];
+in vec2 lmcoord[];
+in vec4 glcolor[];
+in vec3 viewNormal[];
+out vec2 tcTexcoord[];
+out vec2 tcLmcoord[];
+out vec4 tcColor[];
+out vec3 tcNormal[];
+void main() {
+	gl_out[gl_InvocationID].gl_Position = gl_in[gl_InvocationID].gl_Position;
+	tcTexcoord[gl_InvocationID] = texcoord[gl_InvocationID];
+	tcLmcoord[gl_InvocationID] = lmcoord[gl_InvocationID];
+	tcColor[gl_InvocationID] = glcolor[gl_InvocationID];
+	tcNormal[gl_InvocationID] = viewNormal[gl_InvocationID];
+	if (gl_InvocationID == 0) {
+		gl_TessLevelOuter[0] = 4.0;
+		gl_TessLevelOuter[1] = 4.0;
+		gl_TessLevelOuter[2] = 4.0;
+		gl_TessLevelInner[0] = 4.0;
+	}
+}

@@ -39,6 +39,7 @@ import org.lwjgl.vulkan.VkSamplerCreateInfo;
  */
 public final class PackRuntime {
 	private static final Pattern COLORTEX = Pattern.compile("colortex(\\d+)");
+	private static final Pattern SHADOWCOLOR = Pattern.compile("shadowcolor(\\d+)");
 	private static final int MC_USAGE = GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_COPY_SRC | GpuTexture.USAGE_TEXTURE_BINDING
 			| GpuTexture.USAGE_RENDER_ATTACHMENT;
 	/** Atlases as Iris samples them: its terrain sampler (nearest, linear mips); labPBR specular nearest (no value blending). */
@@ -203,10 +204,11 @@ public final class PackRuntime {
 		return "alt".equals(side) && s[1] != null ? s[1] : s[0];
 	}
 
-	/** The side a pass in {@code flip} reads (FORMAT §7.2): alt for colortex in the flip state's alt list. */
+	/** The side a pass in {@code flip} reads (FORMAT §7.2): alt for colortex (shadowcolor) in the flip state's alt (shadowAlt) list. */
 	Img read(String target, Manifest.FlipState flip) {
-		Matcher m = COLORTEX.matcher(target);
-		boolean alt = m.matches() && flip.alt().contains(Integer.parseInt(m.group(1)));
+		Matcher m = COLORTEX.matcher(target), s = SHADOWCOLOR.matcher(target);
+		boolean alt = m.matches() && flip.alt().contains(Integer.parseInt(m.group(1)))
+				|| s.matches() && flip.shadowAlt() != null && flip.shadowAlt().contains(Integer.parseInt(s.group(1)));
 		return image(target, alt ? "alt" : "main");
 	}
 

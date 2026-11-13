@@ -294,10 +294,11 @@ public final class GlslTranspiler implements Transpiler {
 			// Iris "core" path: core profile, >=150 without profile, or the lines program (TransformPatcher).
 			core = vs != null && ("core".equals(vs.profile) || vs.version >= 150 && vs.profile == null || name.equals("gbuffers_line"));
 			Stage fs = stage(StageType.FRAGMENT);
-			boolean gs = stage(StageType.GEOMETRY) != null;
+			boolean gs = stages.stream().anyMatch(s -> s.type.intermediate());
 			fogVarying = fs != null && vs != null && !gs && fs.used("gl_FogFragCoord");
 			entityColorVarying = geometry && fs != null && vs != null && !gs && fs.used("entityColor");
-			// Iris EntityPatcher: ids come from iris_Entity via a flat varying (programs with a geometry stage keep push constants)
+			// Iris EntityPatcher: ids come from iris_Entity via a flat varying (programs with tessellation or geometry stages
+			// keep push constants: shortcut: Iris passes them through those stages, upgrade when a pack needs per-vertex ids there)
 			boolean usesIds = false;
 			for (Stage s : stages) for (String n : ENTITY_IDS.keySet()) if (s.declaresVariable(n)) ownIds.add(n);
 			for (Stage s : stages) for (String n : ENTITY_IDS.keySet()) usesIds |= s.used(n);
@@ -313,8 +314,8 @@ public final class GlslTranspiler implements Transpiler {
 		private void assignLocations() {
 			Map<String, Integer> size = new LinkedHashMap<>();
 			for (Stage s : stages) {
-				for (Var v : s.outs.values()) size.merge(v.name(), slots(v, false), Math::max);
-				for (Var v : s.ins.values()) size.merge(v.name(), slots(v, s.type == StageType.GEOMETRY), Math::max);
+				for (Var v : s.outs.values()) size.merge(v.name(), slots(v, perVertex(s.type, v, false)), Math::max);
+				for (Var v : s.ins.values()) size.merge(v.name(), slots(v, perVertex(s.type, v, true)), Math::max);
 			}
 			if (fogVarying) size.put("emr_FogFragCoord", 1);
 			if (entityColorVarying) size.put("emr_entityColor", 1);
@@ -324,6 +325,12 @@ public final class GlslTranspiler implements Transpiler {
 				locations.put(e.getKey(), next);
 				next += e.getValue();
 			}
+		}
+
+		/** Per-vertex arrays (outer dimension = vertex of the primitive/patch): GS inputs, TCS in/out and TES inputs, except patch ones. */
+		static boolean perVertex(StageType type, Var v, boolean in) {
+			if (v.item().has("patch")) return false;
+			return type == StageType.TESS_CONTROL || in && (type == StageType.GEOMETRY || type == StageType.TESS_EVAL);
 		}
 
 		private int slots(Var v, boolean perVertexArray) {
@@ -450,6 +457,11 @@ public final class GlslTranspiler implements Transpiler {
 				if (transforms) set0.addAll(List.of("DynamicTransforms", "TerrainUniform", "ChunkSection"));
 				if (p.entityColorVarying) set0.add("Sampler1");
 			}
+			if (p.geometry && s.type.intermediate()) {
+				for (String n : List.of("gl_ModelViewMatrix", "gl_ModelViewMatrixInverse", "gl_ModelViewProjectionMatrix", "gl_NormalMatrix",
+						"gl_TextureMatrix", "gl_Color", "modelViewMatrix", "modelViewMatrixInverse", "normalMatrix", "textureMatrix", "chunkOffset"))
+					if (s.used(n)) set0.addAll(List.of("DynamicTransforms", "TerrainUniform", "ChunkSection"));
+			}
 		}
 		List<String> orderedSet0 = new ArrayList<>();
 		for (String n : VertexLayouts.SET0_CANONICAL) if (set0.contains(n)) orderedSet0.add(n);
@@ -518,7 +530,7 @@ public final class GlslTranspiler implements Transpiler {
 		List<Diagnostic> diags = new ArrayList<>(p.diagnostics);
 		Map<StageType, String> out = new LinkedHashMap<>();
 		for (Stage s : p.stages) {
-			StageEmitter e = new StageEmitter(this, p, s, context, s.type == StageType.VERTEX ? vertexVariant : null);
+			StageEmitter e = new StageEmitter(this, p, s, context, s.type == StageType.VERTEX || s.type.intermediate() ? vertexVariant : null);
 			out.put(s.type, e.emit());
 			for (Diagnostic d : e.diagnostics) diags.add(d.in(p.name, s.type.extension));
 		}
@@ -554,8 +566,9 @@ public final class GlslTranspiler implements Transpiler {
 			}
 			this.terrain = variant != null && variant.startsWith("terrain");
 			this.fullscreen = !p.geometry;
-			boolean gs = p.stage(StageType.GEOMETRY) != null;
-			this.lastVertexStage = s.type == StageType.GEOMETRY || s.type == StageType.VERTEX && !gs;
+			// the depth fix (GL clip z → Vulkan) belongs in the last stage before the rasterizer
+			boolean gs = p.stage(StageType.GEOMETRY) != null, tes = p.stage(StageType.TESS_EVAL) != null;
+			this.lastVertexStage = s.type == StageType.GEOMETRY || s.type == StageType.TESS_EVAL && !gs || s.type == StageType.VERTEX && !gs && !tes;
 		}
 
 		boolean has(String input) { return variantInputs.contains(input); }
@@ -564,7 +577,8 @@ public final class GlslTranspiler implements Transpiler {
 
 		String kw(String name) {
 			// shared has always been the compute storage qualifier; only older stages may use it as a name
-			return KEYWORDS_450.contains(name) && !(name.equals("shared") && s.type == StageType.COMPUTE) || s.shadowed.contains(name)
+			return KEYWORDS_450.contains(name) && !(name.equals("shared") && s.type == StageType.COMPUTE)
+					&& !(name.equals("patch") && (s.type == StageType.TESS_CONTROL || s.type == StageType.TESS_EVAL)) || s.shadowed.contains(name)
 					? "emr_kw_" + name : name;
 		}
 
@@ -612,6 +626,8 @@ public final class GlslTranspiler implements Transpiler {
 			}
 			if (p.geometry) geometryTable(vs);
 			else compositeTable(vs);
+			// Iris VanillaTransformer: gl_Color outside the vertex stage is the colour modulator
+			if (p.geometry && st.intermediate()) repl.put("gl_Color", terrain ? "vec4(1.0)" : "emr_dt.ColorModulator");
 			if (p.entityIdVarying && (st == StageType.FRAGMENT || vs)) {
 				for (var e : ENTITY_IDS.entrySet()) repl.put(e.getKey(), "emr_entityInfo." + e.getValue());
 				if (vs) prologue.add("emr_entityInfo = " + (has("iris_Entity") ? "ivec3(" + in("iris_Entity") + ")"
@@ -836,7 +852,8 @@ public final class GlslTranspiler implements Transpiler {
 				Stage prev = previous();
 				if (prev != null && !prev.outs.containsKey(name)) {
 					// Iris: an input without producer reads zero
-					String zero = zeroOf(type, d);
+					if (Program.perVertex(s.type, new Var(it, d, type), true) && arr.equals("[]")) arr = "[32]"; // ≥ any primitive/patch size
+					String zero = zeroOf(type, d, arr);
 					out.append('\n').append(type).append(' ').append(kw(name)).append(arr).append(zero == null ? "" : " = " + zero).append(';');
 					return;
 				}
@@ -855,7 +872,7 @@ public final class GlslTranspiler implements Transpiler {
 					} else {
 						diagnostics.add(Diagnostic.warning(s.src.sourcePath(), 0, "varying " + name + " type mismatch " + type + " vs " + ct));
 					}
-				} else if (consumer != null && s.count(name) <= 1) {
+				} else if (consumer != null && s.count(name) <= 1 && s.type != StageType.TESS_CONTROL) { // TCS may only write its own vertex
 					String zero = zeroOf(type, d);
 					if (zero != null) prologue.add(kw(name) + " = " + zero + ";");
 				}
@@ -865,8 +882,14 @@ public final class GlslTranspiler implements Transpiler {
 		}
 
 		String zeroOf(String type, Declarator d) {
+			return zeroOf(type, d, null);
+		}
+
+		/** {@code arr}: the emitted array suffix when it differs from the declaration (sized unsized arrays), else null. */
+		String zeroOf(String type, Declarator d, String arr) {
 			if (!d.hasArray()) return GlslTypes.zero(type);
-			List<Integer> dims = arrayDims(t, d.arrStart(), d.arrEnd());
+			List<Integer> dims = arr == null || !arr.matches("\\[\\d+]") ? arrayDims(t, d.arrStart(), d.arrEnd())
+					: List.of(Integer.parseInt(arr.substring(1, arr.length() - 1)));
 			if (dims.size() != 1 || dims.getFirst() <= 0 || GlslTypes.zero(type) == null) return null;
 			return type + "[" + dims.getFirst() + "](" + String.join(", ", java.util.Collections.nCopies(dims.getFirst(), GlslTypes.zero(type))) + ")";
 		}
@@ -1001,7 +1024,7 @@ public final class GlslTranspiler implements Transpiler {
 			w.append("\temr_main();\n");
 			for (String l : epilogue) w.append('\t').append(l).append('\n');
 			if (s.type == StageType.FRAGMENT && fragData.contains(0)) w.append(alphaTest());
-			if (lastVertexStage && s.type == StageType.VERTEX && s.used("gl_Position")) {
+			if (lastVertexStage && s.type != StageType.GEOMETRY && s.used("gl_Position")) {
 				w.append("\tgl_Position.z = (gl_Position.z + gl_Position.w) * 0.5;\n");
 			}
 			return w.append("}\n").toString();

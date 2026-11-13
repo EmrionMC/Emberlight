@@ -35,6 +35,21 @@ public final class OutputPatcher {
 		return locations;
 	}
 
+	/** SPIR-V execution modes of a geometry shader's input primitive. */
+	public static final int INPUT_POINTS = 19, INPUT_LINES = 20, INPUT_TRIANGLES = 22;
+
+	/** The input-primitive execution mode of a geometry shader (InputPoints … InputTrianglesAdjacency), or -1. */
+	public static int geometryInput(byte[] spv) {
+		IntBuffer words = ByteBuffer.wrap(spv).order(ByteOrder.LITTLE_ENDIAN).asIntBuffer();
+		for (int i = 5; i < words.limit(); i += Math.max(1, words.get(i) >>> 16)) {
+			if ((words.get(i) & 0xFFFF) == 16 && (words.get(i) >>> 16) >= 3) { // OpExecutionMode
+				int mode = words.get(i + 2);
+				if (mode >= 19 && mode <= 23) return mode;
+			}
+		}
+		return -1;
+	}
+
 	/** Patches {@code spv} in place: output location {@code l} becomes {@code remap[l]}. */
 	public static void patch(byte[] spv, int[] remap) {
 		IntBuffer words = ByteBuffer.wrap(spv).order(ByteOrder.LITTLE_ENDIAN).asIntBuffer();

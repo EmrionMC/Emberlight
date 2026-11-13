@@ -24,7 +24,7 @@ class ManifestJsonTest {
 				new Manifest.Block("EmrionPhase", 144, List.of()), new Manifest.Block(null, 48, List.of()));
 		var program = new Manifest.Program("gbuffers", "gbuffers", List.of("gbuffers_terrain_solid"),
 				new Manifest.Stages(new Manifest.VertexStage(Map.of("terrain_mdi", "spv/world0/gbuffers_terrain.vsh.terrain_mdi.spv")),
-						null, new Manifest.SpvRef("spv/world0/gbuffers_terrain.fsh.spv"), null),
+						null, null, null, new Manifest.SpvRef("spv/world0/gbuffers_terrain.fsh.spv"), null),
 				List.of(new Manifest.Output(0, "colortex0")),
 				new Manifest.Blend(new Manifest.BlendMode("vanilla", null, null, null, null), Map.of("colortex6", new Manifest.BlendMode("off", null, null, null, null))),
 				new Manifest.AlphaTest("greater", 0.1f), List.of(new Manifest.Set0Ref("Sampler0", "combined_image_sampler")),
@@ -69,7 +69,7 @@ class ManifestJsonTest {
 	@Test
 	void usesFormatKeyNamesAndOmitsNulls() {
 		JsonObject o = JsonParser.parseString(ManifestJson.toJson(sample())).getAsJsonObject();
-		assertEquals(1, o.get("formatVersion").getAsInt());
+		assertEquals(Manifest.FORMAT_VERSION, o.get("formatVersion").getAsInt());
 		var program = o.getAsJsonObject("dimensions").getAsJsonObject("world0").getAsJsonObject("programs").getAsJsonObject("gbuffers_terrain");
 		assertFalse(program.getAsJsonObject("stages").has("geometry"));
 		assertEquals("spv/world0/gbuffers_terrain.fsh.spv", program.getAsJsonObject("stages").getAsJsonObject("fragment").get("spv").getAsString());

@@ -536,6 +536,92 @@ class GlslTranspilerTest {
 	}
 
 	@Test
+	void tessellationAndGeometryStagesLinkLocationsAndFixDepthInTheLastStage() throws Exception {
+		String p = "gbuffers_terrain";
+		List<PreprocessedStage> st = List.of(
+				TranspilerTestSupport.stage(p, ProgramGroup.GBUFFERS, StageType.VERTEX, """
+						#version 400 compatibility
+						varying vec2 texCoord;
+						varying vec4 vcolor;
+						void main() { texCoord = gl_MultiTexCoord0.xy; vcolor = gl_Color; gl_Position = gl_ModelViewMatrix * gl_Vertex; }
+						"""),
+				TranspilerTestSupport.stage(p, ProgramGroup.GBUFFERS, StageType.TESS_CONTROL, """
+						#version 400 compatibility
+						layout(vertices = 3) out;
+						in vec2 texCoord[];
+						in vec4 vcolor[];
+						out vec2 tcCoord[];
+						patch out float level;
+						void main() {
+							tcCoord[gl_InvocationID] = texCoord[gl_InvocationID];
+							gl_out[gl_InvocationID].gl_Position = gl_in[gl_InvocationID].gl_Position;
+							level = 2.0;
+							gl_TessLevelInner[0] = 2.0;
+							for (int i = 0; i < 3; i++) gl_TessLevelOuter[i] = 2.0;
+						}
+						"""),
+				TranspilerTestSupport.stage(p, ProgramGroup.GBUFFERS, StageType.TESS_EVAL, """
+						#version 400 compatibility
+						layout(triangles, equal_spacing, ccw) in;
+						in vec2 tcCoord[];
+						patch in float level;
+						out vec2 teCoord;
+						void main() {
+							teCoord = gl_TessCoord.x * tcCoord[0] + gl_TessCoord.y * tcCoord[1] + gl_TessCoord.z * tcCoord[2] + level * 0.0;
+							gl_Position = gl_ProjectionMatrix * (gl_TessCoord.x * gl_in[0].gl_Position + gl_TessCoord.y * gl_in[1].gl_Position + gl_TessCoord.z * gl_in[2].gl_Position);
+						}
+						"""),
+				TranspilerTestSupport.stage(p, ProgramGroup.GBUFFERS, StageType.GEOMETRY, """
+						#version 400 compatibility
+						layout(triangles) in;
+						layout(triangle_strip, max_vertices = 3) out;
+						in vec2 teCoord[];
+						in vec3 missing[];
+						out vec2 texCoord2;
+						out vec4 tint;
+						void main() {
+							for (int i = 0; i < 3; i++) {
+								texCoord2 = teCoord[i]; tint = gl_Color + vec4(missing[i], 0.0) + gl_ModelViewMatrix[0];
+								gl_Position = gl_in[i].gl_Position; EmitVertex();
+							}
+							EndPrimitive();
+						}
+						"""),
+				TranspilerTestSupport.stage(p, ProgramGroup.GBUFFERS, StageType.FRAGMENT, """
+						#version 400 compatibility
+						uniform sampler2D tex;
+						in vec2 texCoord2;
+						in vec4 tint;
+						void main() { gl_FragData[0] = texture2D(tex, texCoord2) * tint; }
+						"""));
+		Transpiler.ProgramAnalysis a = TR.analyze(st);
+		Map<StageType, String> g = TR.emit(a, TranspilerTestSupport.context(a, null), "terrain_mdi").glsl();
+		assertEquals(5, g.size());
+		if (validator) for (var e : g.entrySet()) {
+			String err = TranspilerTestSupport.validate(tmp, "tess_" + e.getKey(), e.getKey(), e.getValue());
+			assertNull(err, () -> "validation failed:\n" + err + "\n" + e.getValue());
+		}
+		String fix = "gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5;";
+		assertFalse(g.get(StageType.VERTEX).contains(fix));
+		assertFalse(g.get(StageType.TESS_EVAL).contains(fix));
+		assertTrue(g.get(StageType.GEOMETRY).contains("emr_EmitVertex()"));
+		// one name, one location, in every stage that declares it (per-vertex arrays take the element's slots)
+		java.util.regex.Matcher m = java.util.regex.Pattern.compile("layout\\(location = (\\d+)\\) (?:flat )?(?:patch )?(?:in|out) \\w+ (\\w+)").matcher(String.join("\n", g.values()));
+		Map<String, String> seen = new java.util.HashMap<>();
+		while (m.find()) if (!m.group(2).startsWith("emr_")) assertEquals(seen.computeIfAbsent(m.group(2), k -> m.group(1)), m.group(1), m.group(2));
+		assertTrue(seen.keySet().containsAll(List.of("texCoord", "tcCoord", "level", "teCoord", "texCoord2", "tint")), seen.toString());
+		assertEquals(seen.size(), new java.util.HashSet<>(seen.values()).size(), "distinct locations: " + seen);
+		// terrain transforms in the intermediate stages too (the GS is compiled per vertex variant)
+		assertTrue(g.get(StageType.GEOMETRY).contains("emr_terrain.ModelViewMat"), g.get(StageType.GEOMETRY));
+		assertTrue(g.get(StageType.GEOMETRY).contains("vec3 missing[32] = vec3[32]("), g.get(StageType.GEOMETRY));
+		// TES as the last stage gets the fix
+		Map<StageType, String> noGs = TR.emit(TR.analyze(List.of(st.get(0), st.get(1), st.get(2), st.get(4))),
+				TranspilerTestSupport.context(a, null), "terrain_mdi").glsl();
+		assertTrue(noGs.get(StageType.TESS_EVAL).contains(fix));
+		assertFalse(noGs.get(StageType.VERTEX).contains(fix));
+	}
+
+	@Test
 	void entityColorComesFromTheOverlayInTheEntityVariant() throws Exception {
 		String fs = "#version 130\nuniform vec4 entityColor;\nvarying vec2 texCoord;\nvoid main() { gl_FragData[0] = entityColor + vec4(texCoord, 0.0, 0.0); }\n";
 		Out o = run("gbuffers_entities", ProgramGroup.GBUFFERS, "entity", null, null, VS, fs);

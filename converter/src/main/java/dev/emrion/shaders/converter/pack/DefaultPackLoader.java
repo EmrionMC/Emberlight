@@ -53,8 +53,9 @@ import java.util.function.Consumer;
  *
  * <p>Program list per dimension: setup, begin, shadow, shadowcomp, prepare, gbuffers, deferred, composite, final.
  * A .csh is its own COMPUTE-only program named like its file (shadowcomp, shadowcomp_a, setup1); when a pass also has
- * a .vsh/.fsh program of the same name, the compute one is named {@code <pass>_csh}. Computes come before the
- * fullscreen program of their pass (Iris runs them first). Disabled programs are listed with enabled=false and no stages.
+ * a .vsh/.fsh program of the same name, the compute one is named {@code <pass>_csh} (manifest keys are unique; the
+ * planner maps it back to slot 0 of the pass). Computes come before the fullscreen program of their pass (Iris runs
+ * {@code <pass>.csh}, {@code <pass>_a.csh} … first, CompositeRenderer). Disabled programs are listed with enabled=false and no stages.
  */
 public final class DefaultPackLoader implements PackLoader {
 	private static final String ROOT = "shaders";
@@ -88,6 +89,8 @@ public final class DefaultPackLoader implements PackLoader {
 		final Map<String, List<String>> applied = new ConcurrentHashMap<>();
 		OptionSet optionSet;
 		OptionValues values;
+		/** Iris reads .tcs/.tes only if the pack lists TESSELLATION_SHADERS (required or optional; ProgramSet). */
+		boolean readTessellation;
 
 		Run(PackSource src, Map<String, String> env, Diagnostics diags) {
 			this.src = src;
@@ -165,6 +168,8 @@ public final class DefaultPackLoader implements PackLoader {
 			for (String f : raw.optionalFeatures()) {
 				if (usableFeatures.contains(f.toUpperCase(Locale.US))) progEnv.put("IRIS_FEATURE_" + f, "");
 			}
+			for (String f : java.util.stream.Stream.concat(raw.requiredFeatures().stream(), raw.optionalFeatures().stream()).toList())
+				readTessellation |= f.equalsIgnoreCase("TESSELLATION_SHADERS") || f.equalsIgnoreCase("TESSELATION_SHADERS");
 			for (String f : raw.requiredFeatures()) {
 				String u = f.equalsIgnoreCase("TESSELATION_SHADERS") ? "TESSELLATION_SHADERS" : f.toUpperCase(Locale.US);
 				if (!usableFeatures.contains(u)) diags.add(Diagnostic.error(ROOT + "/shaders.properties", 0, "Required feature not supported: " + f));
@@ -311,11 +316,7 @@ public final class DefaultPackLoader implements PackLoader {
 		private boolean computeProgram(List<Object[]> entries, String d, String folder, String file, ProgramGroup g,
 		                               Set<String> disabled, boolean clashesWithGraphics) {
 			if (!exists(d, file, "csh")) return false;
-			String name = file;
-			if (clashesWithGraphics) {
-				name = file + "_csh";
-				warn(ROOT + d + "/" + file + ".csh", "compute alongside fullscreen pass not yet supported");
-			}
+			String name = clashesWithGraphics ? file + "_csh" : file;
 			boolean enabled = !disabled.contains(programKey(folder, file));
 			entries.add(new Object[]{name, enabled, List.of(new Job(name, g, StageType.COMPUTE, d + "/" + file + ".csh", false))});
 			return enabled;
@@ -331,7 +332,13 @@ public final class DefaultPackLoader implements PackLoader {
 			}
 			List<Job> jobs = new ArrayList<>();
 			jobs.add(new Job(n, slot.group(), StageType.VERTEX, d + "/" + n + ".vsh", !vsh));
-			if (exists(d, n, "gsh")) jobs.add(new Job(n, slot.group(), StageType.GEOMETRY, d + "/" + n + ".gsh", false));
+			for (StageType t : List.of(StageType.TESS_CONTROL, StageType.TESS_EVAL, StageType.GEOMETRY)) {
+				if (t != StageType.GEOMETRY && !readTessellation) continue;
+				if (!exists(d, n, t.extension)) continue;
+				// shortcut: our fullscreen pass is one triangle (Iris: a quad), so per-primitive stages would differ; add when a pack needs it
+				if (!slot.group().isGeometry()) warn(ROOT + d + "/" + n + "." + t.extension, "tessellation/geometry stages are only supported in gbuffers and shadow programs; ignored");
+				else jobs.add(new Job(n, slot.group(), t, d + "/" + n + "." + t.extension, false));
+			}
 			jobs.add(new Job(n, slot.group(), StageType.FRAGMENT, d + "/" + n + ".fsh", false));
 			if (!vsh && enabled) warn(ROOT + d + "/" + n + ".fsh", "No .vsh; using Iris's legacy fallback vertex shader");
 			entries.add(new Object[]{n, enabled, List.copyOf(jobs)});

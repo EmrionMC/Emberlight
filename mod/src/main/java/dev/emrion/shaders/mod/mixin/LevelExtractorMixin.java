@@ -21,6 +21,18 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(LevelExtractor.class)
 public class LevelExtractorMixin {
 	@Shadow @Final private LevelRenderer levelRenderer;
+	@Shadow private net.minecraft.client.multiplayer.ClientLevel level;
+	@Shadow private net.minecraft.client.SectionUpdateTracker sectionUpdateTracker;
+	@Shadow @Final private net.minecraft.client.renderer.state.level.LevelRenderState levelRenderState;
+
+	/** Why: MC compiles only sections its visibility graph reached; the shadow pass and RT need the rest (ForcedSections). */
+	@Inject(method = "extract", at = @At(value = "INVOKE",
+			target = "Lnet/minecraft/client/renderer/extract/LevelExtractor;extractVisibleEntities(Lnet/minecraft/client/Camera;Lnet/minecraft/client/renderer/culling/Frustum;Lnet/minecraft/client/DeltaTracker;Lnet/minecraft/client/renderer/state/level/LevelRenderState;)V"))
+	private void emrion$forcedSections(CallbackInfo ci) {
+		var area = levelRenderer.viewArea();
+		if (sectionUpdateTracker != null && level != null && area != null) dev.emrion.shaders.mod.runtime.ForcedSections.schedule(sectionUpdateTracker, level, area, levelRenderState);
+		else dev.emrion.shaders.mod.runtime.ForcedSections.clear();
+	}
 
 	@Inject(method = "applyFrustum", at = @At("TAIL"))
 	private void emrion$sodiumDistance(CallbackInfo ci) {

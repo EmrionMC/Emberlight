@@ -1,0 +1,20 @@
+#version 400 compatibility
+layout(triangles, equal_spacing, ccw) in;
+in vec2 tcTexcoord[];
+in vec2 tcLmcoord[];
+in vec4 tcColor[];
+in vec3 tcNormal[];
+out vec2 teTexcoord;
+out vec2 teLmcoord;
+out vec4 teColor;
+void main() {
+	vec3 b = gl_TessCoord;
+	vec4 pos = b.x * gl_in[0].gl_Position + b.y * gl_in[1].gl_Position + b.z * gl_in[2].gl_Position;
+	vec3 n = normalize(b.x * tcNormal[0] + b.y * tcNormal[1] + b.z * tcNormal[2]);
+	float bulge = b.x * b.y * b.z * 27.0; // 1 at the centre of each triangle, 0 on its edges
+	pos.xyz += n * bulge * 0.15;
+	gl_Position = gl_ProjectionMatrix * pos;
+	teTexcoord = b.x * tcTexcoord[0] + b.y * tcTexcoord[1] + b.z * tcTexcoord[2];
+	teLmcoord = b.x * tcLmcoord[0] + b.y * tcLmcoord[1] + b.z * tcLmcoord[2];
+	teColor = (b.x * tcColor[0] + b.y * tcColor[1] + b.z * tcColor[2]) * vec4(vec3(0.5 + 0.5 * bulge), 1.0);
+}

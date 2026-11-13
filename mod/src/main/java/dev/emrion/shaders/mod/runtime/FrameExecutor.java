@@ -56,7 +56,7 @@ public final class FrameExecutor {
 	/** A/B switches for the benchmark (docs/BENCHMARK.md); both on by default. */
 	private static final boolean DEFER_CLEARS = !"false".equals(System.getProperty("emrion.perf.deferClears")),
 			COMPUTE_CLEARS = !"false".equals(System.getProperty("emrion.perf.computeClears"));
-	private static final long SHADER_STAGES = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | FRAGMENT;
+	private static final long SHADER_STAGES = VK_PIPELINE_STAGE_2_PRE_RASTERIZATION_SHADERS_BIT | FRAGMENT; // VS, TCS, TES, GS
 	/** Iris WorldRenderingPhase ordinals have 24 entries (iris-spec §1.4). */
 	private static final int STAGES = 24;
 	/** EmrionPhase blocks per frame at most: FULLSCREEN plus every (WORLD/HAND/SHADOW, renderStage). */
@@ -472,11 +472,15 @@ public final class FrameExecutor {
 
 	private void draw(VkCommandBuffer cb, Manifest.Program p, String program, int flip, int w, int h, long... views) {
 		RawPass.begin(cb, w, h, views);
-		if (p.viewportScale() != 1f && p.viewportScale() > 0f) {
+		float[] off = p.viewportOffset();
+		if (p.viewportScale() != 1f && p.viewportScale() > 0f || off != null) {
 			try (MemoryStack stack = MemoryStack.stackPush()) {
+				// Iris CompositeRenderer: glViewport(size·offset, size·scale); our images keep GL's row order, so y is not mirrored
 				int sw = Math.max(1, (int) (w * p.viewportScale())), sh = Math.max(1, (int) (h * p.viewportScale()));
-				vkCmdSetViewport(cb, 0, VkViewport.calloc(1, stack).width(sw).height(sh).maxDepth(1f));
+				int x = off == null ? 0 : (int) (w * off[0]), y = off == null ? 0 : (int) (h * off[1]);
+				vkCmdSetViewport(cb, 0, VkViewport.calloc(1, stack).x(x).y(y).width(sw).height(sh).maxDepth(1f));
 				var scissor = VkRect2D.calloc(1, stack);
+				scissor.offset().set(Math.max(0, x), Math.max(0, y));
 				scissor.extent().set(sw, sh);
 				vkCmdSetScissor(cb, 0, scissor);
 			}

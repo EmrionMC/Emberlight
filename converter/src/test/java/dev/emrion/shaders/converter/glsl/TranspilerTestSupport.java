@@ -58,6 +58,8 @@ final class TranspilerTestSupport {
 	static String validate(Path dir, String name, StageType stage, String glsl) throws IOException, InterruptedException {
 		String ext = switch (stage) {
 			case VERTEX -> "vert";
+			case TESS_CONTROL -> "tesc";
+			case TESS_EVAL -> "tese";
 			case GEOMETRY -> "geom";
 			case FRAGMENT -> "frag";
 			case COMPUTE -> "comp";
@@ -81,5 +83,5 @@ final class TranspilerTestSupport {
 		}
 	}
 
-	static List<StageType> ORDER = List.of(StageType.VERTEX, StageType.GEOMETRY, StageType.FRAGMENT, StageType.COMPUTE);
+	static List<StageType> ORDER = List.of(StageType.values());
 }

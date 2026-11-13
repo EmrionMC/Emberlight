@@ -67,6 +67,39 @@ class IrisDimensionPlannerTest {
 		assertArrayEquals(new int[]{8, 8, 1}, r.dim().programs().get("composite_a").localSize());
 	}
 
+	@Test
+	void computesOfAPassRunBeforeItsFullscreenProgram() {
+		// composite.csh next to composite.fsh: the loader names it composite_csh (Iris: composite.csh, composite_a.csh, then composite)
+		var r = plan(props(), p("composite_csh").compute(new int[]{8, 8, 1}, null), p("composite_a").compute(new int[]{8, 8, 1}, null),
+				p("composite").draw(0), p("composite1").draw(0));
+		assertEquals(List.of("clear", "clear", "geometry sky", "geometry opaque", "geometry hand_solid", "geometry translucent",
+				"geometry hand_translucent", "compute composite_csh", "compute composite_a", "fullscreen composite", "fullscreen composite1",
+				"final null"), r.frame());
+		int fs = r.command("fullscreen", "composite").flipState();
+		assertEquals(fs, r.command("compute", "composite_csh").flipState(), "computes see the pass's flip state");
+		assertEquals(List.of(0), r.flipState(r.command("fullscreen", "composite1").flipState()), "only the fullscreen program flips");
+		assertTrue(r.diags().all().stream().noneMatch(d -> d.message().contains("composite_csh")), r.diags().all().toString());
+	}
+
+	@Test
+	void shadowcompFlipsShadowcolorLikeIris() {
+		var one = plan(props(), p("shadowcomp").draw(0), p("composite").draw(0).samplers("shadowcolor0"));
+		var w = one.command("fullscreen", "shadowcomp").writes().getFirst();
+		assertEquals("alt", w.side(), "a shadowcomp pass starts reading main and writing alt");
+		assertNull(one.dim().flipStates().get(one.command("fullscreen", "shadowcomp").flipState()).shadowAlt());
+		assertEquals(List.of(0), one.dim().flipStates().get(one.command("fullscreen", "composite").flipState()).shadowAlt(),
+				"later passes read the side shadowcomp wrote");
+		assertTrue(one.target("shadowcolor0").hasAlt());
+		assertTrue(one.diags().all().stream().noneMatch(d -> d.message().contains("shadowcolor flipping")));
+
+		var two = plan(props("flip.shadowcomp_pre.colortex1", "true"), p("shadowcomp").draw(0), p("shadowcomp1").draw(0),
+				p("composite").draw(0).samplers("shadowcolor0", "shadowcolor1"));
+		assertEquals("main", two.command("fullscreen", "shadowcomp1").writes().getFirst().side());
+		assertEquals(List.of(0, 1), two.dim().flipStates().get(two.command("fullscreen", "shadowcomp1").flipState()).shadowAlt());
+		assertEquals(List.of(1), two.dim().flipStates().get(two.command("fullscreen", "composite").flipState()).shadowAlt(),
+				"shadowcolor0 flipped twice, shadowcolor1 by shadowcomp_pre");
+	}
+
 	// ---- draw buffers ----
 
 	@Test
@@ -128,7 +161,15 @@ class IrisDimensionPlannerTest {
 		assertEquals("always", r.dim().programs().get("gbuffers_terrain").alphaTest().func());
 		assertEquals("one", r.dim().programs().get("gbuffers_spidereyes").blend().defaultMode().dst());
 		assertEquals(0.5f, r.dim().programs().get("composite").viewportScale());
+		assertNull(r.dim().programs().get("composite").viewportOffset());
 		assertEquals("off", r.dim().programs().get("composite").blend().defaultMode().mode());
+	}
+
+	@Test
+	void scaleOffsetIsKept() {
+		var r = plan(props("scale.composite1", "0.25 0.5 0.75"), p("composite1"));
+		assertEquals(0.25f, r.dim().programs().get("composite1").viewportScale());
+		assertArrayEquals(new float[]{0.5f, 0.75f}, r.dim().programs().get("composite1").viewportOffset());
 	}
 
 	// ---- targets ----
