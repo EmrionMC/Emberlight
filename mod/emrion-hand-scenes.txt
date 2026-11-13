@@ -1,0 +1,7 @@
+# First-person hand scene (docs/BENCHMARK.md). Kept apart from emrion-scenes.txt: it needs the HUD (and with it the hand)
+# and a script step that turns the empty map into a filled one. Run both sides with
+#   -Demrion.autotest.scenes=emrion-hand-scenes.txt -Demrion.autotest.hud=true
+#   "-Demrion.autotest.script=use down;wait 0.5;use up;wait 10;shot heldmap"
+# The scene shot (<tag>-hand.png) shows the empty map; the script shot (<tag>-heldmap.png) the filled map after its
+# terrain is explored (map id may differ between runs, the content does not).
+hand | 110.5 80 -199.5 180 25 | 6000 | clear | gamemode survival @a; execute positioned 110.5 0 -199.5 positioned over motion_blocking run tp @a ~ ~ ~ 180 25; item replace entity @a weapon.mainhand with minecraft:map

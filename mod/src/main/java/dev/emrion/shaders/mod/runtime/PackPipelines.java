@@ -36,18 +36,19 @@ public final class PackPipelines {
 	/** MC's main render target format (MainTarget): what final writes. */
 	public static final GpuFormat SCREEN_FORMAT = GpuFormat.RGBA8_UNORM;
 
-	public final long setLayout, emptySetLayout, layout;
+	// not final: a constructor that fails half-way releases what it built (handles still 0 are skipped by vkDestroy*)
+	public long setLayout, emptySetLayout, layout;
 	/** Push-descriptor layout (one combined image sampler at set 0 binding 0) for the helper passes. */
-	public final long helperSetLayout, helperLayout;
+	public long helperSetLayout, helperLayout;
 	/** Compute clears of unsigned-integer storage images (push descriptor: one storage image; push constant: the value). */
-	public final long clearSetLayout, clearLayout, clear2d, clear3d;
+	public long clearSetLayout, clearLayout, clear2d, clear3d;
 	/** program name → VkPipeline (graphics for composite-like, compute for compute). */
-	public final Map<String, Long> pipelines = new HashMap<>();
+	public final Map<String, Long> pipelines = new java.util.concurrent.ConcurrentHashMap<>();
 	/** VkFormat → texel copy pipeline into that format. */
-	public final Map<Integer, Long> blit = new HashMap<>();
-	public final GbufferPipelines gbuffers;
+	public final Map<Integer, Long> blit = new java.util.concurrent.ConcurrentHashMap<>();
+	public GbufferPipelines gbuffers;
 	/** Constant default vertex attributes for gbuffers inputs the vanilla formats lack (GeometryPipelines.DEFAULTS). */
-	public final dev.emrion.shaders.mod.vk.RawBuffer defaults;
+	public dev.emrion.shaders.mod.vk.RawBuffer defaults;
 
 	private final VulkanContext ctx;
 
@@ -55,6 +56,16 @@ public final class PackPipelines {
 	public PackPipelines(VulkanContext ctx, Path cacheDir, Manifest manifest, Manifest.Dimension dim,
 			Map<RenderPipeline, FrontendRenderPipeline> vanilla) {
 		this.ctx = ctx;
+		try {
+			build(cacheDir, manifest, dim, vanilla);
+		} catch (RuntimeException | Error failed) {
+			net.minecraft.client.Minecraft.getInstance().execute(this::destroyLater);
+			throw failed;
+		}
+		ctx.pipelineCache().save();
+	}
+
+	private void build(Path cacheDir, Manifest manifest, Manifest.Dimension dim, Map<RenderPipeline, FrontendRenderPipeline> vanilla) {
 		defaults = new dev.emrion.shaders.mod.vk.RawBuffer(ctx, 32, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true);
 		dev.emrion.shaders.mod.pipeline.GeometryPipelines.writeDefaults(defaults.mapped);
 		var set1 = new Descriptors.LayoutBuilder();
@@ -76,23 +87,18 @@ public final class PackPipelines {
 		int threads = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
 		try (ExecutorService pool = Executors.newFixedThreadPool(threads)) {
 			List<CompletableFuture<Void>> jobs = new ArrayList<>();
-			Map<String, Long> built = new java.util.concurrent.ConcurrentHashMap<>();
 			for (var e : dim.programs().entrySet()) {
 				var p = e.getValue();
 				if (!p.kind().equals("composite") && !p.kind().equals("compute")) continue; // geometry: M3
-				jobs.add(CompletableFuture.runAsync(() -> built.put(e.getKey(), build(cacheDir, p, targets, cache)), pool));
+				jobs.add(CompletableFuture.runAsync(() -> pipelines.put(e.getKey(), build(cacheDir, p, targets, cache)), pool));
 			}
-			Map<Integer, Long> blits = new java.util.concurrent.ConcurrentHashMap<>();
 			List<Integer> blitFormats = new ArrayList<>(List.of(VulkanConst.toVk(SCREEN_FORMAT)));
 			var ct0 = targets.get("colortex0");
 			if (ct0 != null) blitFormats.add(VulkanConst.toVk(Formats.gpu(ct0.format())));
-			for (int f : blitFormats.stream().distinct().toList()) jobs.add(CompletableFuture.runAsync(() -> blits.put(f, helper("emrion_blit", f)), pool));
+			for (int f : blitFormats.stream().distinct().toList()) jobs.add(CompletableFuture.runAsync(() -> blit.put(f, helper("emrion_blit", f)), pool));
 			gbuffers = new GbufferPipelines(ctx, cacheDir, manifest, dim, setLayout, vanilla, pool);
 			CompletableFuture.allOf(jobs.toArray(CompletableFuture[]::new)).join();
-			pipelines.putAll(built);
-			blit.putAll(blits);
 		}
-		ctx.pipelineCache().save();
 	}
 
 	static int descriptorType(String kind) {
@@ -198,8 +204,8 @@ public final class PackPipelines {
 
 	/** Render thread only (the gbuffers pipelines are MC pipelines). */
 	public void destroyLater() {
-		gbuffers.destroyLater();
-		defaults.destroyLater();
+		if (gbuffers != null) gbuffers.destroyLater();
+		if (defaults != null) defaults.destroyLater();
 		ctx.destroyLater(() -> {
 			pipelines.values().forEach(p -> vkDestroyPipeline(ctx.vk, p, null));
 			blit.values().forEach(p -> vkDestroyPipeline(ctx.vk, p, null));

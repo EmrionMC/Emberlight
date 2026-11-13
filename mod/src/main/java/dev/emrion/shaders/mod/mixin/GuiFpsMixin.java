@@ -27,7 +27,11 @@ abstract class GuiFpsMixin {
 	                        @Local GuiGraphicsExtractor graphics) {
 		if (!shouldRenderLevel) return;
 		Minecraft mc = Minecraft.getInstance();
-		if (!DISABLED) graphics.text(mc.font, mc.getFps() + " FPS", 2, 2, 0xFFFFFFFF, true);
+		if (!DISABLED) {
+			String fps = mc.getFps() + " FPS";
+			graphics.fill(1, 1, 3 + mc.font.width(fps), 11, 0x90505050); // F3's backdrop: readable on a bright sky
+			graphics.text(mc.font, fps, 2, 2, 0xFFFFFFFF, false);
+		}
 		if (!Profiler.visible) return;
 		int y = 12;
 		for (String line : Profiler.lines()) {

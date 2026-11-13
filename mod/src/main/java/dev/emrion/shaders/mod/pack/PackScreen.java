@@ -8,11 +8,15 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 import org.jspecify.annotations.Nullable;
 
-/** Minimal pack selection (M2): one button per pack, "Off", status line, progress bar and the first errors. M5 replaces it. */
+/**
+ * Minimal pack selection (M2): one button per pack, "Off", status line, progress bar and the first errors. M5 replaces it.
+ * On OpenGL (mod inert) it only explains that Vulkan is needed and opens Video Settings, where the Graphics API option is.
+ */
 public final class PackScreen extends Screen {
 	private static final int ROW = 22;
 	private final @Nullable Screen parent;
-	private Button options;
+	private @Nullable Button options;
+	private final boolean vulkan = dev.emrion.shaders.mod.EmrionShadersClient.active();
 
 	public PackScreen(@Nullable Screen parent) {
 		super(Component.literal("Emrion Shaders"));
@@ -22,6 +26,12 @@ public final class PackScreen extends Screen {
 	@Override
 	protected void init() {
 		int x = width / 2 - 100, y = 32;
+		if (!vulkan) {
+			addRenderableWidget(Button.builder(Component.literal("Open Video Settings..."), b -> minecraft.gui.setScreen(
+					new net.minecraft.client.gui.screens.options.VideoSettingsScreen(this, minecraft, minecraft.options))).bounds(x - 102, height - 28, 200, 20).build());
+			addRenderableWidget(Button.builder(Component.literal("Done"), b -> onClose()).bounds(x + 102, height - 28, 200, 20).build());
+			return;
+		}
 		addRenderableWidget(Button.builder(label("Off", PackManager.selected() == null), b -> pick(null)).bounds(x, y, 200, 20).build());
 		for (String pack : PackManager.packs()) {
 			y += ROW;
@@ -47,13 +57,19 @@ public final class PackScreen extends Screen {
 
 	@Override
 	public void tick() {
-		if (!options.active) options.active = PackManager.optionSession() != null; // on once the pack finished loading
+		if (options != null && !options.active) options.active = PackManager.optionSession() != null; // on once the pack finished loading
 	}
 
 	@Override
 	public void extractRenderState(GuiGraphicsExtractor g, int mouseX, int mouseY, float partialTick) {
 		super.extractRenderState(g, mouseX, mouseY, partialTick);
 		g.centeredText(font, title, width / 2, 12, 0xFFFFFFFF);
+		if (!vulkan) {
+			String[] lines = {"Emrion Shaders needs the Vulkan graphics backend.", "The game is running on OpenGL, so shader packs are off.", "",
+					"Video Settings > Graphics API: \"Prefer Vulkan\",", "then restart the game."};
+			for (int i = 0; i < lines.length; i++) g.centeredText(font, lines[i], width / 2, height / 2 - 40 + i * 12, i < 2 ? 0xFFFFFFFF : 0xFFFFE060);
+			return;
+		}
 		int y = height - 80;
 		g.centeredText(font, PackManager.status, width / 2, y, 0xFFE0E0E0);
 		float p = PackManager.progress;

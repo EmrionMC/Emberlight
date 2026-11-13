@@ -41,7 +41,9 @@ public class GameRendererMixin {
 
 	@Inject(method = "render", at = @At("TAIL"))
 	private void emrion$frameEnd(CallbackInfo ci) {
-		if (EmrionShadersClient.active()) Profiler.frameEnd();
+		if (!EmrionShadersClient.active()) return;
+		GeometryHooks.endFrame();
+		Profiler.frameEnd();
 	}
 
 	@Inject(method = "renderLevel", at = @At("TAIL"))

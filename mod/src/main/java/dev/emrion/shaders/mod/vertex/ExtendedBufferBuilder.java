@@ -7,6 +7,7 @@ import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
 import com.mojang.renderpearl.api.vertex.VertexFormat;
 import dev.emrion.shaders.mod.mixin.BufferBuilderAccessor;
+import net.minecraft.client.renderer.texture.OverlayTexture;
 import org.jspecify.annotations.Nullable;
 import org.lwjgl.system.MemoryUtil;
 
@@ -19,6 +20,8 @@ import org.lwjgl.system.MemoryUtil;
 public final class ExtendedBufferBuilder extends BufferBuilder {
 	private final int stride, uv, normal, mid, tangent, extra, midBlock;
 	private final @Nullable BlockContext block;
+	/** GLYPH: MC's text code sets neither Normal nor UV1; we set them so the vertex is complete (Normal is replaced per quad). */
+	private final boolean glyph;
 	/** Vertices per polygon (4 quads, 3 triangles), 0 = other topologies (no per-polygon data). */
 	private final int polygon;
 	private int pending;
@@ -28,6 +31,7 @@ public final class ExtendedBufferBuilder extends BufferBuilder {
 	public ExtendedBufferBuilder(ByteBufferBuilder buffer, PrimitiveTopology topology, VertexFormat format, @Nullable BlockContext block) {
 		super(buffer, topology, format);
 		this.block = block;
+		glyph = format == EmrionVertexFormats.GLYPH;
 		stride = format.getVertexSize();
 		uv = format.getElement("UV0").offset();
 		normal = format.getElement("Normal").offset();
@@ -42,6 +46,7 @@ public final class ExtendedBufferBuilder extends BufferBuilder {
 	public VertexConsumer addVertex(float x, float y, float z) {
 		if (pending == polygon && polygon != 0) finishPolygon();
 		super.addVertex(x, y, z);
+		if (glyph) setOverlay(OverlayTexture.NO_OVERLAY).setNormal(0f, 1f, 0f); // Iris injects the same up normal before the face normal
 		long v = ((BufferBuilderAccessor) (Object) this).emrion$vertexPointer();
 		BlockContext b = block;
 		if (b != null) {

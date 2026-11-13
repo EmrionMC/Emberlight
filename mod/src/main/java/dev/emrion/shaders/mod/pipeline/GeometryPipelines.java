@@ -16,6 +16,7 @@ import com.mojang.renderpearl.backend.vulkan.VulkanRenderPipeline;
 import com.mojang.renderpearl.frontend.FrontendRenderPipeline;
 import com.mojang.renderpearl.util.TextureViewAndSampler;
 import dev.emrion.shaders.format.VertexLayouts;
+import dev.emrion.shaders.mod.pbr.PbrTextures;
 import dev.emrion.shaders.mod.vk.Blend;
 import dev.emrion.shaders.mod.vk.Descriptors;
 import dev.emrion.shaders.mod.vk.GraphicsPipelineBuilder;
@@ -47,8 +48,8 @@ public final class GeometryPipelines {
 	/**
 	 * Per-pipeline draw constants: the alpha-test reference, {@code blockAtlas} (unused: atlasSize now follows the bound
 	 * Sampler0, see {@link #sampler0}; shortcut: kept so the m4 branches that build Draw still merge, drop it after), and the extra
-	 * set-0 samplers (bindings {@code firstExtra + i}, kind {@code extras[i]}: 0 white albedo, 1 overlay, 2 lightmap) that
-	 * the pack reads but the vanilla pipeline does not push.
+	 * set-0 samplers (bindings {@code firstExtra + i}, kind {@code extras[i]}: 0 white albedo, 1 overlay, 2 lightmap, 3 normals
+	 * and 4 specular of the current Sampler0) that the pack may read but the vanilla pipeline does not push.
 	 */
 	public record Draw(float alphaRef, boolean blockAtlas, int firstExtra, int[] extras, boolean defaults) {}
 
@@ -70,8 +71,10 @@ public final class GeometryPipelines {
 	/** The defaults vertex buffer (32 bytes, see {@link #writeDefaults}); set by the executor. */
 	public static long defaultsBuffer;
 
-	/** Image views and samplers of the extra set-0 samplers, by kind; refreshed per frame by the executor. */
-	public static final long[] EXTRA_VIEWS = new long[3], EXTRA_SAMPLERS = new long[3];
+	/** Image views and samplers of the extra set-0 samplers, by kind; refreshed per frame by the executor, the PBR views per Sampler0. */
+	public static final long[] EXTRA_VIEWS = new long[5], EXTRA_SAMPLERS = new long[5];
+	/** First extra kind that follows Sampler0 (normals, specular). */
+	private static final int PBR = 3;
 
 	private static final Map<VulkanRenderPipeline, Draw> OURS = new ConcurrentHashMap<>();
 
@@ -83,8 +86,11 @@ public final class GeometryPipelines {
 	public static final Set<GpuTexture> ATLAS_TEXTURES = Collections.synchronizedSet(Collections.newSetFromMap(new WeakHashMap<>()));
 	/** atlasSize of the current Sampler0 (Iris: the bound albedo texture's size if it is a TextureAtlas, else 0). */
 	private static int atlasWidth, atlasHeight;
+	/** The texture of the current Sampler0 (null: none since the pass started). */
+	private static @Nullable GpuTexture sampler0;
 	private static VkCommandBuffer boundCb;
 	private static VulkanRenderPipeline bound;
+	private static Draw boundDraw;
 	/** EmrionDraw (FORMAT §6 pushConstants): entityColor, entityId, blockEntityId, currentRenderedItemId, alphaTestRef, atlasSize. */
 	private static final ByteBuffer PUSH = MemoryUtil.memCalloc(40);
 
@@ -97,6 +103,7 @@ public final class GeometryPipelines {
 		}
 		boundCb = cb;
 		bound = pipeline;
+		boundDraw = d;
 		bind(cb, pipeline, d);
 	}
 
@@ -110,13 +117,15 @@ public final class GeometryPipelines {
 		boundCb = null;
 		bound = null;
 		atlasWidth = atlasHeight = 0; // a new pass starts with no Sampler0
+		sampler0 = null;
 	}
 
 	private static void bind(VkCommandBuffer cb, VulkanRenderPipeline pipeline, Draw d) {
 		try (MemoryStack stack = MemoryStack.stackPush()) {
 			vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.pipelineLayout(), 1, stack.longs(set), stack.ints(DYNAMIC_OFFSETS));
 		}
-		if (d.extras.length > 0) pushExtras(cb, pipeline.pipelineLayout(), d);
+		PbrTextures.views(sampler0, EXTRA_VIEWS, PBR); // maps that finished loading since the last bind
+		if (d.extras.length > 0) pushExtras(cb, pipeline.pipelineLayout(), d, 0);
 		if (d.defaults) {
 			try (MemoryStack stack = MemoryStack.stackPush()) {
 				vkCmdBindVertexBuffers(cb, DEFAULTS_BINDING, stack.longs(defaultsBuffer), stack.longs(0));
@@ -126,30 +135,45 @@ public final class GeometryPipelines {
 		vkCmdPushConstants(cb, pipeline.pipelineLayout(), VK_SHADER_STAGE_ALL, 0, PUSH);
 	}
 
-	/** FrontendRenderPass set Sampler0 (also replayed after every setPipeline): update atlasSize, pushed at once if ours is bound. */
+	/**
+	 * FrontendRenderPass set Sampler0 (also replayed after every setPipeline): update atlasSize and the PBR maps of the new
+	 * texture, pushed at once if ours is bound.
+	 */
 	public static void sampler0(@Nullable Object value) {
 		GpuTextureView view = value instanceof TextureViewAndSampler t ? t.view() : null;
-		boolean atlas = view != null && ATLAS_TEXTURES.contains(view.texture());
+		GpuTexture texture = view == null ? null : view.texture();
+		if (texture == sampler0) return;
+		sampler0 = texture;
+		boolean atlas = view != null && ATLAS_TEXTURES.contains(texture);
 		int w = atlas ? view.getWidth(0) : 0, h = atlas ? view.getHeight(0) : 0;
-		if (w == atlasWidth && h == atlasHeight) return;
+		boolean sizeChanged = w != atlasWidth || h != atlasHeight;
 		atlasWidth = w;
 		atlasHeight = h;
-		if (boundCb == null) return;
-		PUSH.putInt(32, w).putInt(36, h);
-		vkCmdPushConstants(boundCb, bound.pipelineLayout(), VK_SHADER_STAGE_ALL, 0, PUSH);
+		if (boundCb == null) return; // the next bind of ours looks the maps up
+		if (sizeChanged) {
+			PUSH.putInt(32, w).putInt(36, h);
+			vkCmdPushConstants(boundCb, bound.pipelineLayout(), VK_SHADER_STAGE_ALL, 0, PUSH);
+		}
+		long normals = EXTRA_VIEWS[PBR], specular = EXTRA_VIEWS[PBR + 1];
+		PbrTextures.views(texture, EXTRA_VIEWS, PBR);
+		if (normals != EXTRA_VIEWS[PBR] || specular != EXTRA_VIEWS[PBR + 1]) pushExtras(boundCb, bound.pipelineLayout(), boundDraw, PBR);
 	}
 
-	/** Incremental push of the extra samplers; MC pushes its own bindings later, before the draw (push descriptors merge). */
-	private static void pushExtras(VkCommandBuffer cb, long layout, Draw d) {
+	/**
+	 * Incremental push of the extra samplers of kind ≥ {@code minKind}; MC pushes its own bindings later, before the draw
+	 * (push descriptors merge).
+	 */
+	private static void pushExtras(VkCommandBuffer cb, long layout, Draw d, int minKind) {
 		try (MemoryStack stack = MemoryStack.stackPush()) {
 			var writes = VkWriteDescriptorSet.calloc(d.extras.length, stack);
 			for (int i = 0; i < d.extras.length; i++) {
+				if (d.extras[i] < minKind) continue;
 				var info = VkDescriptorImageInfo.calloc(1, stack).imageView(EXTRA_VIEWS[d.extras[i]]).sampler(EXTRA_SAMPLERS[d.extras[i]])
 						.imageLayout(VK_IMAGE_LAYOUT_GENERAL);
-				writes.get(i).sType$Default().dstBinding(d.firstExtra + i).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+				writes.get().sType$Default().dstBinding(d.firstExtra + i).descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
 						.pImageInfo(info);
 			}
-			KHRPushDescriptor.vkCmdPushDescriptorSetKHR(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, writes);
+			if (writes.flip().remaining() > 0) KHRPushDescriptor.vkCmdPushDescriptorSetKHR(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, writes);
 		}
 	}
 

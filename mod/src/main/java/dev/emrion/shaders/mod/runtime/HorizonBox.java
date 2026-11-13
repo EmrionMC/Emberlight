@@ -39,6 +39,12 @@ public final class HorizonBox {
 		pass.draw(10, 1, 0, 0);
 	}
 
+	/** Client shutdown: frees the cone's vertex buffer. */
+	public static void close() {
+		if (buffer != null) buffer.close();
+		buffer = null;
+	}
+
 	private static void rebuild(int r) {
 		if (buffer != null) buffer.close();
 		radius = r;

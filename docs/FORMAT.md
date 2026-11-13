@@ -228,7 +228,11 @@ Vertex formats the mod draws terrain and entities with while a pack is active (`
 
 **set0** lists the MC per-draw resources a stage references. In the SPIR-V they carry `DescriptorSet 0` and a placeholder
 `Binding` equal to the index in this canonical table:
-`0 DynamicTransforms, 1 TerrainUniform, 2 ChunkSection, 3 Sampler0, 4 Sampler1, 5 Sampler2, 6 CloudInfo, 7 CloudFaces`.
+`0 DynamicTransforms, 1 TerrainUniform, 2 ChunkSection, 3 Sampler0, 4 Sampler1, 5 Sampler2, 6 CloudInfo, 7 CloudFaces,
+8 EmrionNormals, 9 EmrionSpecular`.
+In every gbuffers and shadow program the pack samplers `normals` and `specular` are `EmrionNormals`/`EmrionSpecular`: the
+labPBR maps of the texture the draw binds as `Sampler0` (Iris's PBRTextureManager). Vanilla pipelines never push them, so
+the mod pushes them as extra set-0 samplers after the vanilla bindings, and again whenever `Sampler0` changes.
 At pipeline creation the mod rewrites each `Binding` word to the index of that name in the replaced vanilla pipeline's
 **backend** `uniforms()` list (= frontend `uniformIndices()`; ARCHITECTURE §5.2). On this NVIDIA machine, terrain uses the
 multidraw-indirect path: `terrain_mdi`, set 0 = `[Globals, Projection, TerrainUniform, Fog, Sampler2, Sampler0]`. The mod parses `OpDecorate` itself, so no spvc is needed at runtime.
@@ -246,7 +250,7 @@ multidraw-indirect path: `terrain_mdi`, set 0 = `[Globals, Projection, TerrainUn
   { "binding": 30, "kind": "storage_image", "target": "voxel_img" },
   { "binding": 31, "kind": "sampled_image", "target": "voxel_img", "sampler": { "filter": "nearest", "wrap": "clamp" } },
   { "binding": 40, "kind": "storage_buffer", "target": "bufferObject0" },
-  { "binding": 50, "kind": "sampled_image", "builtin": "normals_atlas" | "specular_atlas" | "block_atlas" }
+  { "binding": 50, "kind": "sampled_image", "builtin": "block_atlas" | "white" | "white_depth" }
 ]
 ```
 

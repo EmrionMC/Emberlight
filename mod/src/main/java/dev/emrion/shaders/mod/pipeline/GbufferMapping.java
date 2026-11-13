@@ -73,7 +73,8 @@ public final class GbufferMapping {
 			if (f.getType() != RenderPipeline.class) continue;
 			try {
 				RenderPipeline p = (RenderPipeline) f.get(null);
-				if (!NOT_WORLD.contains(p) && !out.contains(p)) out.add(p);
+				// points: pack vertex shaders never write gl_PointSize, which a POINT_LIST pipeline needs (VUID-...-topology-08773)
+				if (!NOT_WORLD.contains(p) && !out.contains(p) && p.getPrimitiveTopology() != com.mojang.renderpearl.api.pipeline.PrimitiveTopology.POINTS) out.add(p);
 			} catch (IllegalAccessException e) {
 				throw new IllegalStateException(e);
 			}

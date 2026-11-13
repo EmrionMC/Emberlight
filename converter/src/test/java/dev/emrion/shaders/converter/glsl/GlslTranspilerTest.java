@@ -528,6 +528,24 @@ class GlslTranspilerTest {
 	}
 
 	@Test
+	void pbrSamplersFollowSampler0InEveryGbuffersProgram() throws Exception {
+		String fs = """
+				#version 130
+				uniform sampler2D normals;
+				uniform sampler2D specular;
+				varying vec2 texCoord;
+				void main() { gl_FragData[0] = texture2D(normals, texCoord) + texture2D(specular, texCoord); }
+				""";
+		for (String variant : List.of("terrain_mdi", "entity")) {
+			Out o = gbuffers(variant, VS, fs);
+			assertTrue(o.fs().contains("layout(set = 0, binding = 8) uniform sampler2D normals;"), o.fs());
+			assertTrue(o.fs().contains("layout(set = 0, binding = 9) uniform sampler2D specular;"));
+			assertTrue(o.analysis().samplers().isEmpty());
+			assertTrue(o.analysis().set0().containsAll(List.of("EmrionNormals", "EmrionSpecular")));
+		}
+	}
+
+	@Test
 	void ssboKeepsStd430AndUsesBufferObjectBinding() throws Exception {
 		Out o = composite(VS, """
 				#version 430 compatibility

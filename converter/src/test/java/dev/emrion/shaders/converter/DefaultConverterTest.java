@@ -86,8 +86,11 @@ class DefaultConverterTest {
 	ResolvedPack.ProgramSource broken() {
 		return new ResolvedPack.ProgramSource("composite1", true, List.of(
 				stage("composite1", ProgramGroup.COMPOSITE, StageType.VERTEX, COMPOSITE_VSH),
-				stage("composite1", ProgramGroup.COMPOSITE, StageType.FRAGMENT, "#version 450\nvoid main() { nope(); }\n")));
+				new PreprocessedStage("composite1", ProgramGroup.COMPOSITE, StageType.FRAGMENT, "shaders/world0/composite1.fsh",
+						"#version 450\nvoid main() { nope(); }\n", brokenLines, null)));
 	}
+
+	LineMap brokenLines = LineMap.IDENTITY_UNKNOWN;
 
 	final PackLoader loader = (source, settingsFile, macros, diagnostics) -> {
 		var programs = new ArrayList<>(List.of(composite(), gbuffers(),
@@ -208,6 +211,27 @@ class DefaultConverterTest {
 
 		Files.writeString(settings, "SHADOW_QUALITY=2\n");
 		assertFalse(run(true, null).cacheHit(), "settings change → new key");
+	}
+
+	@Test
+	void compileErrorsPointAtThePackFile() throws Exception {
+		includeBroken = true;
+		brokenLines = new LineMap() {
+			public String file(int outputLine) { return "shaders/program/composite1.glsl"; }
+			public int line(int outputLine) { return outputLine + 40; }
+		};
+		Diagnostic error = run(true, null).diagnostics().stream().filter(d -> d.severity() == Diagnostic.Severity.ERROR).findFirst().orElseThrow();
+		assertEquals("shaders/program/composite1.glsl", error.file());
+		assertEquals(42, error.line());
+	}
+
+	@Test
+	void cacheWithAMissingSpvIsConvertedAgain() throws Exception {
+		var first = run(true, null);
+		Files.delete(first.outputDir().resolve("spv/world0/gbuffers_basic.fsh.spv"));
+		var again = run(true, null);
+		assertFalse(again.cacheHit());
+		assertTrue(Files.isRegularFile(again.outputDir().resolve("spv/world0/gbuffers_basic.fsh.spv")));
 	}
 
 	@Test

@@ -47,6 +47,22 @@ public final class EmrionVertexFormats {
 			.addAttribute("iris_Entity", GpuFormat.RGBA16_UINT)
 			.build();
 
+	/**
+	 * World text (POSITION_TEX_LIGHTMAP_COLOR: maps, signs, name tags) as Iris's GLYPH: the same elements as {@link #ENTITY}, so
+	 * it uses the entity vertex variant; ExtendedBufferBuilder fills Normal (face normal), UV1 (no overlay) and the rest.
+	 */
+	public static final VertexFormat GLYPH = VertexFormat.builder(0)
+			.addAttribute("Position", GpuFormat.RGB32_FLOAT)
+			.addAttribute("Color", GpuFormat.RGBA8_UNORM)
+			.addAttribute("UV0", GpuFormat.RG32_FLOAT)
+			.addAttribute("UV1", GpuFormat.RG16_SINT)
+			.addAttribute("UV2", GpuFormat.RG16_SINT)
+			.addAttribute("Normal", GpuFormat.RGBA8_SNORM)
+			.addAttribute("mc_midTexCoord", GpuFormat.RG32_FLOAT)
+			.addAttribute("at_tangent", GpuFormat.RGBA8_SNORM)
+			.addAttribute("iris_Entity", GpuFormat.RGBA16_UINT)
+			.build();
+
 	private static volatile boolean active;
 	/** shaders.properties separateAo / oldLighting of the active pack (set before the chunk rebuild of {@link #setActive}). */
 	private static volatile boolean separateAo, oldLighting = true;

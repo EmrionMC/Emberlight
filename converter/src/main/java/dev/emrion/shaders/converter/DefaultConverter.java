@@ -3,6 +3,7 @@ package dev.emrion.shaders.converter;
 import dev.emrion.shaders.converter.cache.CacheDir;
 import dev.emrion.shaders.converter.cache.CacheKey;
 import dev.emrion.shaders.converter.glsl.LineMap;
+import dev.emrion.shaders.converter.glsl.PreprocessedStage;
 import dev.emrion.shaders.converter.glsl.StageType;
 import dev.emrion.shaders.converter.glsl.Transpiler;
 import dev.emrion.shaders.converter.pack.PackLoader;
@@ -104,7 +105,7 @@ public final class DefaultConverter implements Converter {
 	}
 
 	/** One stage to compile; {@code variant} is null for non-vertex stages and for programs without vertex variants. */
-	private record StageJob(String dim, String program, StageType stage, String variant, String glsl) {
+	private record StageJob(String dim, String program, StageType stage, String variant, String glsl, LineMap source) {
 		String baseName() {
 			return dim + "/" + program + "." + stage.extension + (variant == null || variant.equals("fullscreen") ? "" : "." + variant);
 		}
@@ -287,13 +288,15 @@ public final class DefaultConverter implements Converter {
 				r.diagnostics().forEach(d -> diagnostics.add(d.program() == null ? d.in(e.program(), d.stage()) : d));
 				if (r.diagnostics().stream().anyMatch(d -> d.severity() == Diagnostic.Severity.ERROR) || r.glsl().isEmpty()) {
 					// emit failure: a job without GLSL fails the program in PlanFiller
-					jobs.add(new StageJob(e.dim(), e.program(), StageType.VERTEX, e.variant(), null));
+					jobs.add(new StageJob(e.dim(), e.program(), StageType.VERTEX, e.variant(), null, null));
 					continue;
 				}
 				for (StageType stage : StageType.values()) {
 					String glsl = r.glsl().get(stage);
 					if (glsl == null || (stage != StageType.VERTEX && !e.first())) continue;
-					jobs.add(new StageJob(e.dim(), e.program(), stage, stage == StageType.VERTEX ? e.variant() : null, glsl));
+					LineMap source = analyses.get(e.dim()).get(e.program()).stages().stream().filter(st -> st.stage() == stage)
+							.map(PreprocessedStage::lineMap).findFirst().orElse(null);
+					jobs.add(new StageJob(e.dim(), e.program(), stage, stage == StageType.VERTEX ? e.variant() : null, glsl, source));
 				}
 			}
 			return jobs;
@@ -305,7 +308,7 @@ public final class DefaultConverter implements Converter {
 			List<StageResult> results = parallel(jobs.stream().<Callable<StageResult>>map(job -> () -> {
 				try {
 					if (job.glsl() == null) return new StageResult(job, null, List.of());
-					var r = compiler.compile(job.baseName(), job.glsl(), job.stage(), srcLines(job.srcPath()));
+					var r = compiler.compile(job.baseName(), job.glsl(), job.stage(), srcLines(job.srcPath(), job.source()));
 					return new StageResult(job, r.spv(), r.diagnostics().stream().map(d -> d.in(job.program(), job.stageName())).toList());
 				} catch (RuntimeException e) {
 					return new StageResult(job, null, List.of(new Diagnostic(Diagnostic.Severity.ERROR, job.srcPath(), 0,
@@ -373,11 +376,20 @@ public final class DefaultConverter implements Converter {
 		}
 	}
 
-	/** Compile errors point at the written src/ file, which is the exact text shaderc saw. */
-	private static LineMap srcLines(String srcPath) {
+	/**
+	 * Compile errors point at the pack file and line: the emitted GLSL carries {@code #line} directives with preprocessed
+	 * line numbers, which {@code source} maps back. Lines it cannot map (generated code) point at the written src/ file.
+	 */
+	private static LineMap srcLines(String srcPath, LineMap source) {
 		return new LineMap() {
-			public String file(int outputLine) { return srcPath; }
-			public int line(int outputLine) { return outputLine; }
+			public String file(int outputLine) {
+				String f = source == null ? null : source.file(outputLine);
+				return f != null ? f : srcPath;
+			}
+
+			public int line(int outputLine) {
+				return source != null && source.file(outputLine) != null ? source.line(outputLine) : outputLine;
+			}
 		};
 	}
 

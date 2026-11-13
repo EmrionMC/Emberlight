@@ -125,7 +125,7 @@ public record Manifest(
 	/**
 	 * kind: uniform_buffer_dynamic | sampled_image | storage_image | storage_buffer.
 	 * Exactly one of target (a {@link Target#name()}), texture (a {@link TextureDef#name()}) or builtin is set for images.
-	 * builtin: normals_atlas | specular_atlas | block_atlas. sampler null = the texture's own sampling (custom textures:
+	 * builtin: block_atlas | white | white_depth. sampler null = the texture's own sampling (custom textures:
 	 * TextureDef filter/wrap; atlases: MC's atlas sampler).
 	 */
 	public record Resource(int binding, String kind, String name, String target, String texture, String builtin, SamplerDef sampler) {}

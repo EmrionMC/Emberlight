@@ -40,7 +40,7 @@ public final class DebugVertex {
 	public static final boolean ENABLED = Boolean.getBoolean("emrion.debug.vertex");
 	/** Also extend and visualise entity vertices (needs every ENTITY pipeline swapped, see {@link #replacement}). */
 	public static final boolean ENTITIES = false;
-	private static final List<String> PLACEHOLDERS = concat(VertexLayouts.SET0_CANONICAL, List.of("Projection", "Globals"));
+	private static final List<String> PLACEHOLDERS = concat(VertexLayouts.SET0_CANONICAL.subList(0, 8), List.of("Projection", "Globals")); // debug_vertex.glsl: 8, 9
 	private static final List<RenderPipeline> TERRAIN = List.of(RenderPipelines.SOLID_TERRAIN, RenderPipelines.SOLID_TERRAIN_MULTIDRAW,
 			RenderPipelines.CUTOUT_TERRAIN, RenderPipelines.CUTOUT_TERRAIN_MULTIDRAW, RenderPipelines.TRANSLUCENT_TERRAIN,
 			RenderPipelines.TRANSLUCENT_TERRAIN_MULTIDRAW);

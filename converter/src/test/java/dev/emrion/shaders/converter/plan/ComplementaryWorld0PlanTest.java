@@ -31,7 +31,7 @@ class ComplementaryWorld0PlanTest {
 			Map.entry("noiseTextureResolution", "128"), Map.entry("shadowDistanceRenderMul", "1.0"),
 			Map.entry("entityShadowDistanceMul", "0.125"));
 
-	private static final String[] LIT = {"tex", "normals", "specular", "noisetex", "gaux4", "shadowcolor0", "floodfill_sampler",
+	private static final String[] LIT = {"tex", "noisetex", "gaux4", "shadowcolor0", "floodfill_sampler",
 			"floodfill_sampler_copy"};
 
 	private static P lit(String name, Integer... draw) {

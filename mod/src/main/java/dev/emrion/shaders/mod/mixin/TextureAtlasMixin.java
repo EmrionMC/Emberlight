@@ -3,6 +3,7 @@ package dev.emrion.shaders.mod.mixin;
 import com.mojang.blaze3d.systems.RenderSystem;
 import dev.emrion.shaders.mod.EmrionShadersClient;
 import dev.emrion.shaders.mod.pbr.PbrAtlases;
+import dev.emrion.shaders.mod.pbr.PbrTextures;
 import dev.emrion.shaders.mod.pipeline.GeometryPipelines;
 import net.minecraft.client.renderer.texture.AbstractTexture;
 import net.minecraft.client.renderer.texture.SpriteLoader;
@@ -13,8 +14,9 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Why: the PBR atlases mirror the block atlas. {@code upload} RETURN is where a reload's stitched block atlas layout becomes
- * final; {@code cycleAnimationFrames} TAIL is the block atlas's animation tick (PBR frames advance in the same tick);
+ * Why: the PBR atlases mirror their atlas. {@code upload} RETURN is where a reload's stitched atlas layout becomes final
+ * (and every cached per-texture PBR map is stale); {@code cycleAnimationFrames} TAIL is the atlas's animation tick (PBR
+ * frames advance in the same tick);
  * {@code createTexture} TAIL fills a new PBR atlas with Iris's default before MC blits the sprites into it, and records every
  * atlas texture so atlasSize can tell atlases from plain textures.
  */
@@ -22,21 +24,19 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class TextureAtlasMixin extends AbstractTexture {
 	@Inject(method = "upload", at = @At("RETURN"))
 	private void emrion$upload(SpriteLoader.Preparations preparations, CallbackInfo ci) {
-		if (EmrionShadersClient.active() && emrion$isBlocks()) PbrAtlases.onBlockAtlasUpload((TextureAtlas) (Object) this, preparations);
+		if (!EmrionShadersClient.active() || (Object) this instanceof PbrAtlases.PbrAtlas) return;
+		PbrTextures.clear();
+		PbrAtlases.onAtlasUpload((TextureAtlas) (Object) this, preparations);
 	}
 
 	@Inject(method = "cycleAnimationFrames", at = @At("TAIL"))
 	private void emrion$tick(CallbackInfo ci) {
-		if (EmrionShadersClient.active() && emrion$isBlocks()) PbrAtlases.onBlockAtlasTick();
+		if (EmrionShadersClient.active() && !((Object) this instanceof PbrAtlases.PbrAtlas)) PbrAtlases.onAtlasTick((TextureAtlas) (Object) this);
 	}
 
 	@Inject(method = "createTexture", at = @At("TAIL"))
 	private void emrion$created(CallbackInfo ci) {
 		GeometryPipelines.ATLAS_TEXTURES.add(getTexture()); // atlasSize is non-zero only for atlas textures (Iris)
 		if ((Object) this instanceof PbrAtlases.PbrAtlas pbr) RenderSystem.getDevice().createCommandEncoder().clearColorTexture(getTexture(), pbr.clear);
-	}
-
-	private boolean emrion$isBlocks() {
-		return ((TextureAtlas) (Object) this).location().equals(TextureAtlas.LOCATION_BLOCKS);
 	}
 }

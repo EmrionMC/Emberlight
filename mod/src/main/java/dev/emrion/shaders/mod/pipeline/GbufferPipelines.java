@@ -127,7 +127,14 @@ public final class GbufferPipelines {
 					table.add(c + " " + v.getKey().getLocation() + " -> " + iris + " => " + (program == null ? "(nothing drawn: " + why + ")" : program + "[" + variant + "]"));
 			}
 		}
-		CompletableFuture.allOf(jobs.values().toArray(CompletableFuture[]::new)).join();
+		try {
+			CompletableFuture.allOf(jobs.values().toArray(CompletableFuture[]::new)).join();
+		} catch (RuntimeException failed) {
+			// the pipelines that did build are never used: release them (MC's pipeline close belongs on the render thread)
+			List<FrontendRenderPipeline> done = jobs.values().stream().filter(j -> j.state() == java.util.concurrent.Future.State.SUCCESS).map(CompletableFuture::join).toList();
+			net.minecraft.client.Minecraft.getInstance().execute(() -> done.forEach(GeometryPipelines::close));
+			throw failed;
+		}
 		for (Context c : Context.values()) {
 			Map<RenderPipeline, FrontendRenderPipeline> m = new IdentityHashMap<>();
 			keys[c.ordinal()].forEach((p, k) -> m.put(p, jobs.get(k).join()));
@@ -184,7 +191,7 @@ public final class GbufferPipelines {
 
 	/**
 	 * The vanilla pipeline as it draws while a pack is active: chunk meshes are EMRION_BLOCK and world/hand ENTITY draws are
-	 * EMRION_ENTITY (agent g2's formats), so our copy reads those vertex buffers.
+	 * EMRION_ENTITY and world text GLYPH (agent g2's formats), so our copy reads those vertex buffers.
 	 */
 	static FrontendRenderPipeline extended(FrontendRenderPipeline p) {
 		List<VertexFormat> formats = new ArrayList<>(p.vertexFormats());
@@ -192,6 +199,7 @@ public final class GbufferPipelines {
 		VertexFormat f = formats.getFirst();
 		if (f == DefaultVertexFormat.BLOCK && uniformOrder(p).contains("TerrainUniform")) formats.set(0, EmrionVertexFormats.terrain());
 		else if (f == DefaultVertexFormat.ENTITY) formats.set(0, EmrionVertexFormats.entity());
+		else if (f == DefaultVertexFormat.POSITION_TEX_LIGHTMAP_COLOR) formats.set(0, EmrionVertexFormats.GLYPH);
 		else return p;
 		return new FrontendRenderPipeline(p.name(), p.backendRenderPipeline(), formats, p.uniformIndices(), p.uniforms(), p.colorTargetStates(),
 				p.wantsDepthTexture(), p.pushConstantSize());
@@ -207,7 +215,7 @@ public final class GbufferPipelines {
 	}
 
 	/** Samplers a pack stage may read although the vanilla pipeline does not push them; we push them (GeometryPipelines.EXTRA_*). */
-	static final List<String> EXTRA_SAMPLERS = List.of("Sampler0", "Sampler1", "Sampler2");
+	static final List<String> EXTRA_SAMPLERS = List.of("Sampler0", "Sampler1", "Sampler2", "EmrionNormals", "EmrionSpecular");
 
 	/** Set-0 binding order: the vanilla list, then every extra sampler it lacks. */
 	private static List<String> set0Order(FrontendRenderPipeline vanilla) {
@@ -315,7 +323,14 @@ public final class GbufferPipelines {
 				if (p.alphaTest() != null) alphaRef = p.alphaTest().ref();
 			}
 			if (k.hidden() || k.program() == null) b.depth(VK_FORMAT_D32_SFLOAT, true, false, VK_COMPARE_OP_LESS_OR_EQUAL);
-			long pipeline = b.colors(formats, blends).writeMasks(masks).layout(layout).build(ctx, ctx.pipelineCache().handle);
+			long pipeline;
+			try {
+				pipeline = b.colors(formats, blends).writeMasks(masks).layout(layout).build(ctx, ctx.pipelineCache().handle);
+			} catch (RuntimeException failed) { // the wrapped pipeline would own these
+				org.lwjgl.vulkan.VK10.vkDestroyPipelineLayout(ctx.vk, layout, null);
+				org.lwjgl.vulkan.VK10.vkDestroyDescriptorSetLayout(ctx.vk, set0Layout, null);
+				throw failed;
+			}
 			boolean atlas = k.variant() != null && k.variant().startsWith("terrain") || k.vanilla() == net.minecraft.client.renderer.RenderPipelines.CRUMBLING;
 			return GeometryPipelines.wrap(ctx, vanilla, pipeline, layout, set0Layout, states, new GeometryPipelines.Draw(alphaRef, atlas, bound.size(), extras, defaults));
 		} finally {

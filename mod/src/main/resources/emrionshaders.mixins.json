@@ -3,6 +3,7 @@
   "package": "dev.emrion.shaders.mod.mixin",
   "compatibilityLevel": "JAVA_25",
   "client": [
+    "AbstractTextureAccessor",
     "AnimationStateAccessor",
     "FrontendGpuDeviceAccessor",
     "FrontendRenderPassMixin",
@@ -23,6 +24,7 @@
     "SpriteContentsAccessor",
     "TextureAtlasAccessor",
     "TextureAtlasMixin",
+    "TextureManagerAccessor",
     "VideoSettingsScreenMixin",
     "VulkanConstMixin",
     "VulkanFeatureSetsMixin",

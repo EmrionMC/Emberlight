@@ -56,6 +56,7 @@ final class ShadowPass {
 	private static final Vector3f LIGHT = new Vector3f();
 	private static SubmitNodeStorage submits;
 	private static FeatureRenderDispatcher dispatcher;
+	private static RenderBuffers buffers;
 	/** Sections drawn last frame (debug overlay / log). */
 	static int sectionCount, entityCount;
 
@@ -101,6 +102,11 @@ final class ShadowPass {
 			}
 			e.endPhase();
 		}
+	}
+
+	/** End of every frame, as MC's own RenderBuffers: recycles the vertex buffers of the shadow entity draws (else a new GPU buffer per frame). */
+	static void endFrame() {
+		if (buffers != null) buffers.endFrame();
 	}
 
 	/** A boolean shaders.properties value (Iris defaults: shadowTerrain/Translucent/Entities true, shadowPlayer false). */
@@ -205,7 +211,7 @@ final class ShadowPass {
 		if (mc.level == null || mc.player == null || !all && !player) return null;
 		if (dispatcher == null) {
 			submits = new SubmitNodeStorage();
-			dispatcher = new FeatureRenderDispatcher(new RenderBuffers(0), mc.getModelManager(), mc.getAtlasManager(), mc.font, mc.gameRenderer.gameRenderState());
+			dispatcher = new FeatureRenderDispatcher(buffers = new RenderBuffers(0), mc.getModelManager(), mc.getAtlasManager(), mc.font, mc.gameRenderer.gameRenderState());
 		}
 		Vec3 cam = camera.pos;
 		ENTITY_FRUSTUM.x = cam.x;

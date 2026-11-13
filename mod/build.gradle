@@ -52,6 +52,29 @@ def linkPack = { File dir ->
 	java.nio.file.Files.createSymbolicLink(link, packDir.toPath().toAbsolutePath())
 	java.nio.file.Files.copy(packSettings.toPath(), link.resolveSibling("${packName}.txt"), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
 }
+// -Demrion.autotest.resourcepacks=/abs/a.zip;/abs/b.zip: symlink them into <runDir>/resourcepacks (never committed) and
+// enable exactly them in options.txt; an empty value enables none. (Listing a compatible pack as incompatible would
+// make MC skip it.) Both runClient and runIrisReference, so the reference sees the same resource packs.
+def linkResourcePacks = { File runDir ->
+	def packs = emrionProps.get()['emrion.autotest.resourcepacks']
+	if (packs == null) return
+	def optionsFile = new File(runDir, 'options.txt')
+	def dir = new File(runDir, 'resourcepacks')
+	dir.mkdirs()
+	def names = packs.split(';').findAll { it }.collect { p ->
+		def src = new File(p)
+		if (!src.exists()) throw new GradleException("resource pack not found: $p")
+		def link = new File(dir, src.name).toPath()
+		java.nio.file.Files.deleteIfExists(link)
+		java.nio.file.Files.createSymbolicLink(link, src.toPath())
+		'file/' + src.name
+	}
+	// MC refuses symlinked packs unless their targets are listed here (prefix match)
+	new File(runDir, 'allowed_symlinks.txt').text = packs.split(';').findAll { it }.collect { new File(it).parent + '/' }.unique().join('\n') + '\n'
+	def list = groovy.json.JsonOutput.toJson(['vanilla'] + names)
+	def lines = optionsFile.readLines().findAll { !it.startsWith('resourcePacks:') && !it.startsWith('incompatibleResourcePacks:') }
+	optionsFile.text = (lines + ["resourcePacks:$list", "incompatibleResourcePacks:[]"]).join('\n') + '\n'
+}
 // -Demrion.autotest.scenes is resolved against mod/ (the game runs in its run dir).
 def forwardEmrionProps = { JavaExec task, Map<String, String> defaults ->
 	(defaults + emrionProps.get()).each { k, v -> task.jvmArgs "-D${k}=${k == 'emrion.autotest.scenes' ? file(v).absolutePath : v}" }
@@ -60,7 +83,8 @@ def forwardEmrionProps = { JavaExec task, Map<String, String> defaults ->
 loom {
 	runs {
 		client {
-			programArgs '--graphicsBackend', 'vulkan'
+			// -PgraphicsBackend=opengl: check that the mod stays inert on OpenGL
+			programArgs '--graphicsBackend', findProperty('graphicsBackend') ?: 'vulkan'
 		}
 		irisReference {
 			client()
@@ -91,27 +115,7 @@ tasks.named('runClient') {
 			optionsFile.parentFile.mkdirs()
 			optionsFile.text = 'preferredGraphicsBackend:"vulkan"\nonboardAccessibility:false\n'
 		}
-		// -Demrion.autotest.resourcepacks=/abs/a.zip;/abs/b.zip: symlink them into run/resourcepacks (never committed) and
-		// enable exactly them in options.txt; an empty value enables none. (Listing a compatible pack as incompatible would
-		// make MC skip it.)
-		def packs = emrionProps.get()['emrion.autotest.resourcepacks']
-		if (packs != null) {
-			def dir = new File(optionsFile.parentFile, 'resourcepacks')
-			dir.mkdirs()
-			def names = packs.split(';').findAll { it }.collect { p ->
-				def src = new File(p)
-				if (!src.exists()) throw new GradleException("resource pack not found: $p")
-				def link = new File(dir, src.name).toPath()
-				java.nio.file.Files.deleteIfExists(link)
-				java.nio.file.Files.createSymbolicLink(link, src.toPath())
-				'file/' + src.name
-			}
-			// MC refuses symlinked packs unless their targets are listed here (prefix match)
-			new File(optionsFile.parentFile, 'allowed_symlinks.txt').text = packs.split(';').findAll { it }.collect { new File(it).parent + '/' }.unique().join('\n') + '\n'
-			def list = groovy.json.JsonOutput.toJson(['vanilla'] + names)
-			def lines = optionsFile.readLines().findAll { !it.startsWith('resourcePacks:') && !it.startsWith('incompatibleResourcePacks:') }
-			optionsFile.text = (lines + ["resourcePacks:$list", "incompatibleResourcePacks:[]"]).join('\n') + '\n'
-		}
+		linkResourcePacks(optionsFile.parentFile)
 	}
 }
 tasks.named('runIrisReference') {
@@ -123,6 +127,7 @@ tasks.named('runIrisReference') {
 		jvmArgs "-Dfabric.addMods=${mods.files.join(File.pathSeparator)}"
 		linkPack(runDir)
 		writeOptions(runDir, 'opengl')
+		linkResourcePacks(runDir)
 		new File(runDir, 'config').mkdirs()
 		new File(runDir, 'config/iris.properties').text = """shaderPack=${packName}
 enableShaders=true

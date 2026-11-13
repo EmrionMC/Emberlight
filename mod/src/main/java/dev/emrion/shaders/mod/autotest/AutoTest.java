@@ -32,7 +32,7 @@ import org.jspecify.annotations.Nullable;
  * emrion.autotest.pos=x,y,z,yaw,pitch[;x,y,z,yaw,pitch...]   one screenshot per position
  * emrion.autotest.time=6000         emrion.autotest.wait=8 (seconds, plus until chunk builds are done)
  * emrion.autotest.reload=N          after joining, reload the resource packs N times and log each duration
- * emrion.autotest.resourcepacks=/abs/pack.zip[;...]   (Gradle runClient only) symlink + enable these resource packs
+ * emrion.autotest.resourcepacks=/abs/pack.zip[;...]   (Gradle runClient and runIrisReference) symlink + enable these resource packs
  * emrion.autotest.tag=name          screenshots: run/screenshots/emrion-&lt;tag&gt;[-i].png
  * emrion.autotest.commands=cmd1;cmd2   extra commands (no slash) run at every position, after the teleport (once the chunks are loaded)
  * emrion.autotest.scenes=file      scene list instead of pos/time/commands (format: mod/emrion-scenes.txt);
@@ -48,6 +48,10 @@ import org.jspecify.annotations.Nullable;
  * emrion.autotest.set=NAME=value[;NAME=value]   then apply these option values like the GUI's Apply (settings file +
  *                                  reconvert + swap), wait for the swap and take &lt;tag&gt;-set.png
  * emrion.autotest.hotreload=N      then reload the pack N times (key R), each waiting for the swap; logs GPU memory (VMA)
+ * emrion.autotest.script=step;step  then run these steps (robustness tests), one after the other:
+ *     wait S | size WxH | fullscreen on|off | gui N | cmd COMMAND | shot NAME (&lt;tag&gt;-NAME.png) | mem (log FPS and VMA budget)
+ *     pack off|on (on waits until the pack renders) | reload (waits for the swap) | leave | join | hud | f3 on|off
+ *     screen pause|inventory|chat|none | use down|up (hold the use key) | press KEY (key.keyboard.KEY) | repeat N { steps } (no nesting)
  * </pre>
  * With only {@code quit=true} the game exits as soon as the title screen is up (smoke test).
  */
@@ -57,7 +61,7 @@ public final class AutoTest {
 	/** -Demrion.autotest.profile=true: the Profiler accumulates over the benchmark window and logs it (Vulkan only). */
 	private static final boolean PROFILE = Boolean.getBoolean(P + "profile");
 
-	private enum State { WAIT_TITLE, WAIT_WORLD, RELOAD, SETUP, WAIT_CHUNKS, SETTLE, SHOT, BENCHMARK, OPTIONS, SET, HOT_RELOAD, LEAVE, QUIT, DONE }
+	private enum State { WAIT_TITLE, WAIT_WORLD, RELOAD, SETUP, WAIT_CHUNKS, SETTLE, SHOT, BENCHMARK, OPTIONS, SET, HOT_RELOAD, SCRIPT, LEAVE, QUIT, DONE }
 
 	private final String world = System.getProperty(P + "world");
 	private final long seed = Long.getLong(P + "seed", 2026L);
@@ -74,6 +78,9 @@ public final class AutoTest {
 	private final String set = System.getProperty(P + "set", "");
 	private int hotReloads = Integer.getInteger(P + "hotreload", 0);
 	private int optionShot, swapsBefore = -1, swapTick;
+	private final List<String> script = expand(splitCommands(System.getProperty(P + "script", "")));
+	private int step;
+	private @Nullable String scriptPack = System.getProperty("emrion.pack");
 
 	/** {@code name == null}: legacy pos mode (emrion-&lt;tag&gt;[-i].png). {@code pos == null}: wherever the player is. */
 	record Scene(String name, String pos, int time, String weather, List<String> commands) {}
@@ -276,7 +283,7 @@ public final class AutoTest {
 			case HOT_RELOAD -> {
 				if (swapsBefore < 0) {
 					if (hotReloads <= 0) {
-						go(State.LEAVE);
+						go(State.SCRIPT);
 						return;
 					}
 					EmrionShadersClient.LOG.info("Autotest: GPU memory before hot reload: {}", gpuMemory());
@@ -298,6 +305,17 @@ public final class AutoTest {
 				EmrionShadersClient.LOG.info("Autotest: GPU memory after hot reload ({} left): {}", --hotReloads, gpuMemory());
 				swapsBefore = -1;
 			}
+			case SCRIPT -> {
+				if (step >= script.size()) {
+					go(State.LEAVE);
+					return;
+				}
+				if (ticks == 1) EmrionShadersClient.LOG.info("Autotest script [{}/{}]: {}", step + 1, script.size(), script.get(step));
+				if (scriptStep(mc, script.get(step))) {
+					step++;
+					go(State.SCRIPT);
+				} else if (ticks > 300 * TPS) throw new IllegalStateException("autotest: script step never finished: " + script.get(step));
+			}
 			case LEAVE -> {
 				if (ticks < TPS) return; // let the screenshot write finish
 				if (!quit) {
@@ -313,6 +331,116 @@ public final class AutoTest {
 				go(State.DONE);
 			}
 			case DONE -> {}
+		}
+	}
+
+	/** {@code repeat N { a; b }} → a; b repeated N times (the braces are separate ';'-steps or glued to their neighbours). */
+	static List<String> expand(List<String> steps) {
+		List<String> out = new ArrayList<>();
+		for (int i = 0; i < steps.size(); i++) {
+			String s = steps.get(i);
+			if (!s.startsWith("repeat ")) {
+				out.add(s);
+				continue;
+			}
+			String[] head = s.substring(7).split("\\{", 2);
+			int n = Integer.parseInt(head[0].strip());
+			List<String> body = new ArrayList<>();
+			if (head.length > 1 && !head[1].isBlank()) body.add(head[1].strip());
+			while (++i < steps.size() && !steps.get(i).endsWith("}")) body.add(steps.get(i));
+			if (i < steps.size()) {
+				String last = steps.get(i).substring(0, steps.get(i).length() - 1).strip();
+				if (!last.isEmpty()) body.add(last);
+			}
+			for (int k = 0; k < n; k++) out.addAll(body);
+		}
+		return out;
+	}
+
+	/** One script step; called every tick (ticks = 1 on the first) until it returns true. */
+	private boolean scriptStep(Minecraft mc, String s) {
+		String[] a = s.split(" ", 2);
+		String arg = a.length > 1 ? a[1].strip() : "";
+		boolean first = ticks == 1;
+		switch (a[0]) {
+			case "wait" -> {
+				return ticks >= Double.parseDouble(arg) * TPS;
+			}
+			case "size" -> {
+				String[] wh = arg.split("x");
+				if (first) mc.getWindow().setWindowed(Integer.parseInt(wh[0]), Integer.parseInt(wh[1]));
+				return ticks >= TPS;
+			}
+			case "fullscreen" -> {
+				if (first) mc.options.fullscreen().set(arg.equals("on"));
+				return ticks >= 2 * TPS;
+			}
+			case "gui" -> {
+				mc.options.guiScale().set(Integer.parseInt(arg));
+				mc.resizeGui();
+				return true;
+			}
+			case "cmd" -> {
+				command(mc, arg);
+				return true;
+			}
+			case "shot" -> {
+				shoot(mc, tag + "-" + arg + ".png");
+				return true;
+			}
+			case "mem" -> {
+				EmrionShadersClient.LOG.info("Autotest: {} FPS, GPU memory: {}", mc.getFps(), gpuMemory());
+				return true;
+			}
+			case "pack" -> {
+				if (first) {
+					if (scriptPack == null) scriptPack = PackManager.selected();
+					PackManager.select(arg.equals("off") ? null : scriptPack, false);
+				}
+				// "on" is done once the pack renders, or when it failed (selection cleared)
+				return arg.equals("off") ? !PackManager.running() || ticks > 2 : PackManager.running() || PackManager.selected() == null;
+			}
+			case "reload" -> {
+				if (first) {
+					swapsBefore = PackManager.swaps;
+					PackManager.reload();
+				}
+				return PackManager.swaps != swapsBefore || PackManager.selected() == null;
+			}
+			case "leave" -> {
+				if (first) mc.disconnectFromWorld(net.minecraft.network.chat.Component.literal("autotest")); // as the pause menu: saves, then the title screen
+				return mc.level == null && mc.gui.screen() instanceof net.minecraft.client.gui.screens.TitleScreen;
+			}
+			case "join" -> {
+				if (first) openOrCreate(mc);
+				return ticks > TPS && mc.level != null && mc.player != null && mc.gui.screen() == null;
+			}
+			case "hud" -> {
+				mc.gui.hud.toggle();
+				return true;
+			}
+			case "f3" -> {
+				mc.debugEntries.setOverlayVisible(arg.equals("on"));
+				return true;
+			}
+			case "screen" -> {
+				mc.gui.setScreen(switch (arg) {
+					case "pause" -> new net.minecraft.client.gui.screens.PauseScreen(true);
+					case "inventory" -> new net.minecraft.client.gui.screens.inventory.InventoryScreen(mc.player);
+					case "chat" -> new net.minecraft.client.gui.screens.ChatScreen("", false);
+					default -> null;
+				});
+				return true;
+			}
+			case "press" -> { // a key as if typed, e.g. "press o" (key.keyboard.o)
+				net.minecraft.client.KeyMapping.click(com.mojang.blaze3d.platform.InputConstants.getKey("key.keyboard." + arg));
+				return true;
+			}
+			case "use" -> {
+				mc.options.keyUse.setDown(arg.equals("down"));
+				return true;
+			}
+			default -> throw new IllegalArgumentException("autotest: unknown script step " + s);
 		}
 	}
 

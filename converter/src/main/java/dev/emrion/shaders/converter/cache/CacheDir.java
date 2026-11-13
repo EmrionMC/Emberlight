@@ -23,10 +23,25 @@ public final class CacheDir {
 		if (!Files.isRegularFile(file)) return null;
 		try {
 			Manifest m = ManifestJson.readManifest(file);
-			return m != null && key.equals(m.cacheKey()) && m.formatVersion() == Manifest.FORMAT_VERSION ? m : null;
+			return m != null && key.equals(m.cacheKey()) && m.formatVersion() == Manifest.FORMAT_VERSION && filesPresent(dir, m) ? m : null;
 		} catch (IOException | RuntimeException corrupt) {
 			return null;
 		}
+	}
+
+	/** Every SPIR-V module and texture the manifest names exists (a cache dir damaged by hand or a crash is converted again). */
+	static boolean filesPresent(Path dir, Manifest m) {
+		Stream.Builder<String> files = Stream.builder();
+		if (m.textures() != null) m.textures().forEach(t -> files.add(t.file()));
+		if (m.dimensions() != null) for (var d : m.dimensions().values()) {
+			for (var p : d.programs().values()) {
+				var s = p.stages();
+				if (s == null) continue;
+				if (s.vertex() != null) s.vertex().variants().values().forEach(files::add);
+				for (var ref : new Manifest.SpvRef[] {s.geometry(), s.fragment(), s.compute()}) if (ref != null) files.add(ref.spv());
+			}
+		}
+		return files.build().allMatch(f -> f == null || Files.isRegularFile(dir.resolve(f)));
 	}
 
 	/** Fresh, empty {@code <root>/<key>.tmp/}. */

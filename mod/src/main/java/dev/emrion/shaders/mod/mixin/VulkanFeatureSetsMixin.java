@@ -11,14 +11,14 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
  * Why: packs store to images and SSBOs from fragment and vertex stages and write images declared without a format
- * qualifier; MC enables none of these features. Each is its own optional set, so a device lacking one still starts.
+ * qualifier, and gbuffers blend per draw buffer; MC enables none of these features. Each is its own optional set, so a device lacking one still starts.
  */
 @Mixin(VulkanFeatureSets.class)
 public class VulkanFeatureSetsMixin {
 	@Inject(method = "optionalFeatureSets", at = @At("RETURN"))
 	private static void emrion$packFeatures(CallbackInfoReturnable<Set<FeatureSet>> cir) {
 		for (String f : new String[] {"fragmentStoresAndAtomics", "vertexPipelineStoresAndAtomics", "shaderStorageImageWriteWithoutFormat",
-				"shaderStorageImageReadWithoutFormat", "geometryShader"}) {
+				"shaderStorageImageReadWithoutFormat", "geometryShader", "independentBlend"}) {
 			cir.getReturnValue().add(new FeatureSet("Emrion " + f, Set.of(), Set.of(new VulkanFeature(VulkanFeatureSets.VK10_FEATURES_STRUCT, f))));
 		}
 	}

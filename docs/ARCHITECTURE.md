@@ -133,6 +133,7 @@ that implements `CompiledRenderPipeline`. So:
 | `EmrionUniforms` | set 1, binding 0, `UNIFORM_BUFFER_DYNAMIC` | Every built-in and custom uniform the pack uses, at the converter's fixed std140 layout (in the manifest). Matrices are GL-convention (`gbufferProjection` = `C·P_mc`, where `C` maps reverse-Z [0,1] to GL [-1,1]: `z' = w − 2z`). | once per frame, ring buffer (3 slots × frames in flight) |
 | `EmrionPhase` | set 1, binding 1, `UNIFORM_BUFFER_DYNAMIC` | The "current" `gl_ProjectionMatrix` and its inverse per render phase (world, hand, shadow) plus `renderStage`. | a few times per frame, same ring |
 | set 0 (MC) | MC push descriptors | Per-draw MC data: `DynamicTransforms` (ModelViewMat, ModelOffset, ColorModulator, TextureMat), chunk section data for terrain, `Sampler0` (albedo or atlas), `Sampler1` (overlay), `Sampler2` (lightmap), cloud buffers. | per draw, by MC |
+| set 0 (ours) | push descriptors after MC's bindings | Samplers the pack reads but the vanilla pipeline does not push: white/overlay/lightmap stand-ins, and `EmrionNormals`/`EmrionSpecular`, the labPBR maps of the current `Sampler0` (`PbrTextures`: atlas → per-atlas PBR atlases, SimpleTexture → `_n`/`_s` loaded at the next frame start, as Iris's PBRTextureManager). | at our pipeline bind and whenever `Sampler0` changes |
 | `EmrionDraw` | push constants (≤128 B) | `entityId`, `blockEntityId`, `currentRenderedItemId`, `entityColor`, `alphaTestRef`, `iris_NormalMat` (when not derivable) | per draw from hooks |
 
 Set-0 bindings in our SPIR-V are **patched at load time** to the binding order of the vanilla pipeline we replace (its
@@ -222,7 +223,9 @@ Planned set; each mixin class carries a comment explaining why it is needed.
 | `GameRenderer.renderItemInHand` (invoked from the level) | invoker + wraps | The hand is drawn inside the level (Iris order) with the HAND projection and its own FeatureRenderDispatcher; MC's own hand call in `render3dHud` is skipped while a pack renders. |
 | `LevelExtractor.applyFrustum` TAIL | inject | While a pack renders, drop visible sections outside Sodium's cylindrical render distance (`HorizonCull`), so the pack's border fog meets the same terrain edge as under Iris. |
 | `GameRenderer.useImprovedTransparency` | HEAD | Force the classic transparency path while a pack is active (OIT changes the pass structure). |
-| `VulkanRenderPass.setPipeline` TAIL | inject | Bind descriptor set 1 for our pipelines. |
+| `VulkanRenderPass.setPipeline` TAIL | inject | Bind descriptor set 1 and push the extra set-0 samplers for our pipelines. |
+| `FrontendRenderPass.setUniform` HEAD | inject | `Sampler0` changed: atlasSize and the per-draw PBR maps follow it. |
+| `TextureAtlas.upload` RETURN / `cycleAnimationFrames` TAIL / `createTexture` TAIL | inject | PBR atlases mirror each atlas's layout and animation; a reload drops the per-texture PBR cache. |
 | `VulkanConst.textureUsageToVk` | return | Add the STORAGE usage bit for our custom usage flag. |
 | `VulkanFeatureSets.optionalFeatureSets` | return | Enable `fragmentStoresAndAtomics`, `vertexPipelineStoresAndAtomics`, `geometryShader`, `shaderStorageImageWriteWithoutFormat` (only those the pack needs). |
 | `SectionCompiler` / `BufferBuilder` | wrap | Extended terrain vertex format plus per-quad attributes. |

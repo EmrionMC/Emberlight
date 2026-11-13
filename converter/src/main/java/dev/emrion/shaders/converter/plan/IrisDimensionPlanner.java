@@ -584,7 +584,6 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 			if (sc.matches() || name.equals("shadowcolor")) return shadowTargets ? (sc.matches() ? name : "shadowcolor0") : null;
 			return switch (name) {
 				case "tex", "texture", "gtexture", "u_MainSampler", "lightmap", "iris_overlay" -> full ? null : SET0.kind();
-				case "normals", "specular" -> full ? null : name;
 				case "depthtex0", "depthtex1", "depthtex2", "noisetex" -> name;
 				case "gdepthtex" -> full ? "depthtex0" : null;
 				case "shadowtex0", "shadowtex1", "shadowtex0HW", "shadowtex1HW", "watershadow", "shadow" -> !shadowTargets ? null
@@ -628,7 +627,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 						colorMip(i) ? "linear" : "none", "clamp", null));
 			}
 			if (canon.equals("noisetex")) return new Res("sampled_image", null, noiseTexture(), null, sampler("linear", "none", "repeat", null));
-			return new Res("sampled_image", null, null, canon + "_atlas", null); // normals / specular
+			throw new IllegalArgumentException("no builtin resource " + canon);
 		}
 
 		Res resolveImage(String name) {
@@ -987,7 +986,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 	static Command copyDepth(String from, String to) { return new Command("copy_depth", null, null, null, null, null, from, to, null, null); }
 
 	static Manifest.Set0Ref set0Ref(String name) {
-		String type = name.startsWith("Sampler") ? "combined_image_sampler" : name.equals("CloudFaces") ? "texel_buffer" : "uniform_buffer";
+		String type = name.startsWith("Sampler") || name.startsWith("Emrion") ? "combined_image_sampler" : name.equals("CloudFaces") ? "texel_buffer" : "uniform_buffer";
 		return new Manifest.Set0Ref(name, type);
 	}
 }

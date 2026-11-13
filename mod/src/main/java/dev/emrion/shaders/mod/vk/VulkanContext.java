@@ -57,9 +57,16 @@ public final class VulkanContext {
 		return pipelineCache;
 	}
 
-	/** Saves the pipeline cache if this session created one (called on client shutdown). */
-	public static void onShutdown() {
-		if (instance != null && instance.pipelineCache != null) instance.pipelineCache.save();
+	/**
+	 * Client shutdown: saves and destroys the pipeline cache if this session created one. Only once no background build can
+	 * use it any more ({@code buildsDone}); otherwise it is saved and left to the driver's device teardown.
+	 */
+	public static void onShutdown(boolean buildsDone) {
+		if (instance == null || instance.pipelineCache == null) return;
+		instance.pipelineCache.save();
+		if (!buildsDone) return;
+		org.lwjgl.vulkan.VK10.vkDestroyPipelineCache(instance.vk, instance.pipelineCache.handle, null);
+		instance.pipelineCache = null;
 	}
 
 	public VkPhysicalDeviceLimits limits() {
@@ -72,6 +79,13 @@ public final class VulkanContext {
 	}
 
 	static void check(int result, String what) {
-		if (result != VK10.VK_SUCCESS) throw new IllegalStateException(what + " failed: VkResult " + result);
+		if (result == VK10.VK_SUCCESS) return;
+		String name = switch (result) {
+			case VK10.VK_ERROR_OUT_OF_HOST_MEMORY -> "out of memory";
+			case VK10.VK_ERROR_OUT_OF_DEVICE_MEMORY -> "out of GPU memory";
+			case VK10.VK_ERROR_DEVICE_LOST -> "GPU device lost";
+			default -> "VkResult " + result;
+		};
+		throw new IllegalStateException(what + " failed: " + name);
 	}
 }

@@ -26,9 +26,13 @@ public final class VertexLayouts {
 		return i;
 	}
 
-	/** Placeholder set-0 bindings used in converter SPIR-V; the mod patches them to the vanilla pipeline's order. */
+	/**
+	 * Placeholder set-0 bindings used in converter SPIR-V; the mod patches them to the vanilla pipeline's order.
+	 * {@code EmrionNormals}/{@code EmrionSpecular} are the labPBR maps of the draw's Sampler0, which the mod pushes itself.
+	 */
 	public static final List<String> SET0_CANONICAL = List.of(
-			"DynamicTransforms", "TerrainUniform", "ChunkSection", "Sampler0", "Sampler1", "Sampler2", "CloudInfo", "CloudFaces");
+			"DynamicTransforms", "TerrainUniform", "ChunkSection", "Sampler0", "Sampler1", "Sampler2", "CloudInfo", "CloudFaces",
+			"EmrionNormals", "EmrionSpecular");
 
 	/** Fixed set-1 bindings that every dimension plan shares. Resource bindings start at {@link #FIRST_RESOURCE_BINDING}. */
 	public static final int BINDING_UNIFORMS = 0;

@@ -15,12 +15,13 @@ It also lists the baseline numbers.
 | Window | `--width 1920 --height 1080` launch args (the screenshots are 1920×1080 on Wayland at scale 1). |
 | World | `-Demrion.autotest.world=scenes`: the reference run creates it on first use (seed **2026**, default world type, peaceful) in `mod/run-iris/saves/scenes` and keeps reusing it. `runClient -Pcompare` deletes its own `mod/run/saves/scenes` and copies that world over it before every start (the source is only read; `session.lock` is skipped), so both runs render the same blocks. `-PsceneWorld=<dir>` picks another source, for example another checkout's `mod/run-iris/saves/scenes`. |
 | Scenes | `mod/emrion-scenes.txt` (see below). |
+| Resource packs | None by default. `-Demrion.autotest.resourcepacks=/abs/a.zip;/abs/b.zip` (same value for both runs) symlinks them into `resourcepacks/` of the run dir and enables exactly them in `options.txt`, in `runClient` and `runIrisReference` alike. |
 
 Iris only (written by `runIrisReference`): `config/iris.properties` with `shaderPack=<name>`, `enableShaders=true`,
 `maxShadowRenderDistance=24`, `colorSpace=SRGB` (the user's values), plus `config/sodium-options.json` copied from the
 instance next to `-PirisModsDir` when it exists.
 
-Not reproduced in the dev runs: the user's resource packs (Prime's HD 256x, Fresh Animations and others) and the other
+Not reproduced in the dev runs unless passed as above: the user's resource packs (Prime's HD 256x, Fresh Animations and others); never: the other
 mods of the instance (Sodium Extra, ImmediatelyFast, Lithium, EntityCulling, Continuity, and so on). Both dev runs use
 vanilla textures, so the comparison stays fair. The FPS numbers are not the numbers of the user's full instance.
 
@@ -88,6 +89,10 @@ waits 5 s and 200 frames so TAA and other temporal effects settle, hides HUD/F3/
 
 The positions and commands are plain vanilla commands, so they can be typed into any 26.3 client.
 
+`mod/emrion-hand-scenes.txt` has the first-person scene `hand` (survival, HUD on, an empty map in the main hand); its header
+lists the script that turns it into a filled map and shoots `<tag>-heldmap.png`. World text (maps, signs, name tags) uses
+Iris's GLYPH layout with real face normals; before that the held map was grey (map region MAE 13.2 → 1.4 against Iris).
+
 ## Comparing
 
 `compareScenes` writes, per scene, a half-size image with three panels (Iris | Emrion | |difference| × 4) and the
@@ -133,6 +138,22 @@ Water varies by about ±0.05 between our own runs. Night stays above the floor b
 `worldAgeSmooth`, a `smooth()` custom uniform that converges frame-time dependently after the time jump between scenes.
 ("before v1" already includes the nearest terrain sampler; unpinned, the M4 numbers were forest 7.33 / 0.76 and
 entities 5.49 / 0.83.)
+
+Final M6 numbers (2026-11-14, `m6/x1-polish`, pinned `frameTimeCounter=100`, validation layer on, against the pinned Iris
+references; the layer reported nothing, also nothing alive at exit):
+
+| Scene | MAE mean | SSIM |
+|---|---|---|
+| overview | 0.50 | 0.995 |
+| forest | 0.51 | 0.996 |
+| water | 0.74 | 0.986 |
+| cave | 0.29 | 0.997 |
+| sunset | 0.60 | 0.994 |
+| night | 0.52 | 0.989 |
+| rain | 0.85 | 0.983 |
+| entities | 1.00 | 0.989 |
+
+Entities is above the floor only through the chicken's wing flap (entity animation time is not pinned).
 
 ## Benchmark with Iris + Sodium
 
@@ -253,3 +274,23 @@ less than Iris against itself (overview 0.40/0.996, cave 0.42/0.997, night 0.23/
 | `-Demrion.debug.timings=true` (`.seconds=5`) | log the full profile every 5 s |
 | `-Demrion.autotest.profile=true` | log the profile averaged over the benchmark window (`Benchmark profile:`) |
 | `-Demrion.perf.deferClears=false`, `-Demrion.perf.computeClears=false` | A/B switches for the clear optimisations |
+
+## Robustness tests (M6)
+
+`-Demrion.autotest.script="step;step;..."` runs after the scene shots (full list in `AutoTest`'s Javadoc): `wait S`,
+`size WxH`, `fullscreen on|off`, `gui N`, `cmd COMMAND`, `shot NAME`, `mem` (FPS and VMA budget per heap), `pack off|on`,
+`reload`, `leave`, `join`, `hud`, `f3 on|off`, `screen pause|inventory|chat|none`, `use down|up`, `press KEY`,
+`repeat N { ... }`. Commands run as the server, so target players with `@a`/`@p`, not `@s`.
+
+Fault injection (dev only): `-Demrion.debug.throwIn=levelStart,shadow,phase,finish` throws once in each FrameExecutor entry
+point after `-Demrion.debug.throwAfter=200` level frames; `-Demrion.debug.failAlloc=N` makes the N-th raw image allocation fail
+with `VK_ERROR_OUT_OF_DEVICE_MEMORY`. `-PgraphicsBackend=opengl` starts `runClient` on OpenGL.
+
+**Validation layers without installing anything:** Steam ships `libVkLayer_khronos_validation.so` (SDK 1.3.284) in
+`~/.local/share/Steam/ubuntu12_64/`. Write a layer manifest for it into any directory (`"name": "VK_LAYER_KHRONOS_validation"`,
+`"library_path"`: that file, `"api_version": "1.3.284"`) and start the game with
+`VK_ADD_LAYER_PATH=<dir> VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation VK_LOADER_LAYERS_DISABLE=VK_LAYER_MND_enable_timeline_semaphore VK_LAYER_MESSAGE_ID_FILTER=0x92d66fc1`.
+The implicit `MND_enable_timeline_semaphore` layer adds a struct that makes the old layer fail `vkCreateDevice`; message
+0x92d66fc1 (pMultisampleState-09026) is a false positive of this layer version for our vertex-only pipelines, and MC's debug
+callback turns every reported error into a failed pipeline creation. Messages appear in the log as `(Minecraft) Validation Error`.
+The layer predates some structs MC and the driver use, so a few `pNext` warnings at startup are expected.

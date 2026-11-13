@@ -17,19 +17,21 @@ import org.spongepowered.asm.mixin.injection.ModifyVariable;
 
 /**
  * Why: every feature draw (entities, block entities, items) gets its vertex format and BufferBuilder here. While the world or
- * hand frame is prepared with a pack active, ENTITY draws become EMRION_ENTITY, written by ExtendedBufferBuilder.
+ * hand frame is prepared with a pack active, ENTITY draws become EMRION_ENTITY and world text GLYPH, written by ExtendedBufferBuilder.
  */
 @Mixin(StagedVertexBuffer.class)
 public class StagedVertexBufferMixin {
 	@ModifyVariable(method = "appendDraw(Lcom/mojang/renderpearl/api/vertex/VertexFormat;Lcom/mojang/renderpearl/api/pipeline/PrimitiveTopology;Lcom/mojang/blaze3d/vertex/VertexSorting;)Lnet/minecraft/client/renderer/StagedVertexBuffer$Draw;",
 			at = @At("HEAD"), argsOnly = true)
 	private VertexFormat emrion$entityFormat(VertexFormat format) {
-		return EntityIds.extending && format == DefaultVertexFormat.ENTITY ? EmrionVertexFormats.ENTITY : format;
+		if (!EntityIds.extending) return format;
+		return format == DefaultVertexFormat.ENTITY ? EmrionVertexFormats.ENTITY
+				: format == DefaultVertexFormat.POSITION_TEX_LIGHTMAP_COLOR ? EmrionVertexFormats.GLYPH : format;
 	}
 
 	@WrapOperation(method = "getVertexBuilder", at = @At(value = "NEW", target = "com/mojang/blaze3d/vertex/BufferBuilder"))
 	private BufferBuilder emrion$extendedBuilder(ByteBufferBuilder buffer, PrimitiveTopology topology, VertexFormat format,
 			Operation<BufferBuilder> original) {
-		return format == EmrionVertexFormats.ENTITY ? new ExtendedBufferBuilder(buffer, topology, format, null) : original.call(buffer, topology, format);
+		return format == EmrionVertexFormats.ENTITY || format == EmrionVertexFormats.GLYPH ? new ExtendedBufferBuilder(buffer, topology, format, null) : original.call(buffer, topology, format);
 	}
 }

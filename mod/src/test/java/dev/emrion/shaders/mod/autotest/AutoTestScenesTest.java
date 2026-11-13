@@ -21,4 +21,10 @@ class AutoTestScenesTest {
 		var scenes = AutoTest.parseScenes(Files.readAllLines(Path.of("emrion-scenes.txt")));
 		assertEquals(List.of("overview", "forest", "water", "cave", "sunset", "night", "rain", "entities"), scenes.stream().map(AutoTest.Scene::name).toList());
 	}
+
+	@Test
+	void expandsRepeat() {
+		assertEquals(List.of("a", "b", "c", "b", "c", "d"), AutoTest.expand(List.of("a", "repeat 2 { b", "c }", "d")));
+		assertEquals(List.of("x", "x"), AutoTest.expand(List.of("repeat 2 {", "x", "}")));
+	}
 }

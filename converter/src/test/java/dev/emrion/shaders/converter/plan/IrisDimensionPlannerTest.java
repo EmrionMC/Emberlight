@@ -185,13 +185,12 @@ class IrisDimensionPlannerTest {
 	@Test
 	void aliasesResolvePerGroup() {
 		var r = plan(props("texture.gbuffers.gaux4", "lib/textures/cloud-water.png"),
-				p("gbuffers_water").samplers("gaux4", "colortex7", "tex", "normals", "depthtex0", "noisetex"),
+				p("gbuffers_water").samplers("gaux4", "colortex7", "tex", "depthtex0", "noisetex"),
 				p("composite").samplers("gaux4", "gdepthtex", "gcolor").draw(7));
 		assertEquals("cloud-water", r.binding("gbuffers_water", "gaux4").texture());
 		assertEquals(r.binding("gbuffers_water", "gaux4"), r.binding("gbuffers_water", "colortex7"));
 		assertEquals("shaders/lib/textures/cloud-water.png", r.plan().textures().getFirst().file());
 		assertNull(r.binding("gbuffers_water", "tex"), "set 0 (MC) sampler");
-		assertEquals("normals_atlas", r.binding("gbuffers_water", "normals").builtin());
 		assertEquals("nearest", r.binding("gbuffers_water", "depthtex0").sampler().filter());
 		assertEquals("repeat", r.binding("gbuffers_water", "noisetex").sampler().wrap());
 		assertEquals("colortex7", r.binding("composite", "gaux4").target());

@@ -20,6 +20,7 @@ import com.mojang.renderpearl.api.pipeline.RenderPipeline;
 import com.mojang.renderpearl.frontend.FrontendRenderPipeline;
 import dev.emrion.shaders.mod.EmrionShadersClient;
 import dev.emrion.shaders.mod.pbr.PbrAtlases;
+import dev.emrion.shaders.mod.pbr.PbrTextures;
 import dev.emrion.shaders.mod.pipeline.GbufferMapping;
 import dev.emrion.shaders.mod.runtime.FrameExecutor;
 import dev.emrion.shaders.mod.runtime.PackPipelines;
@@ -90,6 +91,8 @@ public final class PackManager {
 	/** Completed reload swaps (autotest). */
 	public static volatile int swaps;
 	private static volatile @Nullable Prepared prepared;
+	/** Pipelines the worker built whose render-thread hand-off has not run yet (freed by {@link #shutdown} if it never will). */
+	private static volatile @Nullable PackPipelines unclaimed;
 	private static boolean preparing;
 
 	// render-thread state
@@ -196,18 +199,24 @@ public final class PackManager {
 				progress = total == 0 ? 0 : (float) done / total;
 			}));
 		}
-		List<Diagnostic> errs = result.diagnostics().stream().filter(d -> d.severity() == Diagnostic.Severity.ERROR).toList();
+		List<Diagnostic> errs = result.diagnostics().stream().filter(d -> d.severity() == Diagnostic.Severity.ERROR).distinct().toList(); // distinct: one per dimension otherwise
 		synchronized (errors) {
 			errs.forEach(d -> errors.add(d.toString()));
 		}
 		errs.forEach(d -> EmrionShadersClient.LOG.error("[{}] {}", pack, d));
 		EmrionShadersClient.LOG.info("Converted {} in {} ms{}: {} stages ok, {} failed, {} errors, cache {}", pack, (System.nanoTime() - start) / 1_000_000,
 				result.cacheHit() ? " (cache hit)" : "", result.stagesCompiled(), result.stagesFailed(), errs.size(), result.outputDir());
-		if (result.manifest() == null) throw new IOException(errs.isEmpty() ? "conversion failed" : errs.getFirst().message());
-		if (result.manifest().dimensions().isEmpty()) throw new IOException("the converted pack has no programs (is it a shader pack?)");
-		if (!errs.isEmpty()) chat(Component.literal("Emrion Shaders: " + pack + " converted with " + errs.size()
-				+ " errors (failed programs are skipped, see report.json): " + errs.getFirst().message()).withStyle(ChatFormatting.YELLOW));
+		if (result.manifest() == null) throw new IOException(errs.isEmpty() ? "conversion failed" : where(errs.getFirst()));
+		if (result.manifest().dimensions().isEmpty()) throw new IOException(errs.isEmpty() ? "it has no shader programs" : where(errs.getFirst()));
+		if (!errs.isEmpty()) chat(Component.literal("Emrion Shaders: " + pack + ": " + errs.size() + " shader error" + (errs.size() == 1 ? "" : "s")
+				+ ", the failing programs are skipped. " + where(errs.getFirst()) + (errs.size() > 1 ? " (all in the log)" : "")).withStyle(ChatFormatting.YELLOW));
 		return new Loaded(result.outputDir(), result.manifest(), readLang(source));
+	}
+
+	/** "file:line [program.stage]: message" for chat. */
+	private static String where(Diagnostic d) {
+		return (d.file() == null ? "" : d.file() + (d.line() > 0 ? ":" + d.line() : "") + " ")
+				+ (d.program() == null ? "" : "[" + d.program() + (d.stage() == null ? "" : "." + d.stage()) + "] ") + d.message();
 	}
 
 	/** Iris LanguageMap: every shaders/lang/*.lang, UTF-8 properties, keyed by the lowercased file name. */
@@ -311,12 +320,17 @@ public final class PackManager {
 	/** The executor while it renders a level (between LevelRenderer.render HEAD and the end of the plan), else null. */
 	public static @Nullable FrameExecutor levelExecutor() {
 		FrameExecutor e = executor;
-		return e != null && e.inLevel() ? e : null;
+		return e != null && e.inLevel() && selected != null ? e : null; // a failure clears selected: vanilla from the next hook on
 	}
 
 	/** True while a pack is installed and renders the world. */
 	public static boolean running() {
-		return executor != null;
+		return executor != null && selected != null;
+	}
+
+	/** A geometry hook failed in the middle of a frame: disable the pack; the rest of the frame renders vanilla. */
+	public static void frameFailed(Throwable t) {
+		if (selected != null) fail("Shader pack " + selected + " failed", t);
 	}
 
 	/** LevelRenderer.render HEAD (the level projection is known; Iris: beginLevelRendering). */
@@ -383,7 +397,9 @@ public final class PackManager {
 				long start = System.nanoTime();
 				var pipelines = new PackPipelines(ctx, l.dir(), l.manifest(), l.manifest().dimensions().get(folder), vanilla);
 				EmrionShadersClient.LOG.info("Built {} pipelines for {}/{} in {} ms", pipelines.pipelines.size(), selected, folder, (System.nanoTime() - start) / 1_000_000);
+				unclaimed = pipelines;
 				Minecraft.getInstance().execute(() -> {
+					unclaimed = null;
 					Prepared old = prepared;
 					if (gen != generation) {
 						pipelines.destroyLater();
@@ -451,9 +467,36 @@ public final class PackManager {
 		executor = new FrameExecutor(runtime);
 	}
 
+	/**
+	 * Client shutdown (render thread): waits for a running conversion/pipeline build, then queues the pack's GPU objects for
+	 * destruction before MC destroys the device. Returns false if the build did not finish in time (it may still create objects).
+	 */
+	public static boolean shutdown() {
+		generation++;
+		WORKER.shutdown();
+		boolean done;
+		try {
+			done = WORKER.awaitTermination(60, java.util.concurrent.TimeUnit.SECONDS);
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			done = false;
+		}
+		if (!done) EmrionShadersClient.LOG.warn("Shader pack build still running at exit; not waiting for it any longer");
+		PackPipelines u = unclaimed; // built, but its hand-off to the render thread will never run now
+		unclaimed = null;
+		if (u != null) u.destroyLater();
+		Prepared p = prepared;
+		prepared = null;
+		if (p != null) p.pipelines().destroyLater();
+		deactivateKeepingFormats(); // switching the vertex formats back would rebuild every chunk while MC shuts down
+		return done;
+	}
+
 	private static void deactivate() {
 		if (current != null) EmrionVertexFormats.setActive(false);
 		deactivateKeepingFormats();
+		PbrTextures.clear(); // entity/item maps load lazily again when a pack runs
+		PbrAtlases.releaseLazy();
 	}
 
 	private static void deactivateKeepingFormats() {
@@ -480,7 +523,7 @@ public final class PackManager {
 		synchronized (errors) {
 			errors.add(String.valueOf(t));
 		}
-		chat(Component.literal("Emrion Shaders: " + what + " (" + t.getMessage() + "). Back to vanilla rendering; details in the log.")
+		chat(Component.literal("Emrion Shaders: " + what + ": " + t.getMessage() + ". Back to vanilla rendering, details in the log.")
 				.withStyle(ChatFormatting.RED));
 		Minecraft.getInstance().execute(() -> {
 			try {
@@ -491,8 +534,21 @@ public final class PackManager {
 		});
 	}
 
+	/** Messages from before a world was joined (MC drops chat on the title screen); render thread only. */
+	private static final List<Component> pendingChat = new ArrayList<>();
+
 	private static void chat(Component message) {
 		Minecraft mc = Minecraft.getInstance();
-		mc.execute(() -> mc.gui.chatListener().handleSystemMessage(message, false));
+		mc.execute(() -> {
+			pendingChat.add(message);
+			flushChat(mc);
+		});
+	}
+
+	/** Client tick: shows the queued messages once a world is joined. */
+	public static void flushChat(Minecraft mc) {
+		if (mc.player == null || pendingChat.isEmpty()) return;
+		pendingChat.forEach(m -> mc.gui.chatListener().handleSystemMessage(m, false));
+		pendingChat.clear();
 	}
 }

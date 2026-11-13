@@ -29,6 +29,12 @@ public final class EmrionShadersClient implements ClientModInitializer {
 		return active;
 	}
 
+	private static void vulkanNotice(net.minecraft.client.Minecraft mc) {
+		net.minecraft.client.gui.components.toasts.SystemToast.addOrUpdate(mc.gui.toastManager(),
+				net.minecraft.client.gui.components.toasts.SystemToast.SystemToastId.PACK_LOAD_FAILURE, Component.literal("Emrion Shaders needs Vulkan"),
+				Component.literal("Options > Video > Graphics API: Prefer Vulkan, then restart"));
+	}
+
 	@Override
 	public void onInitializeClient() {
 		AutoTest.registerIfEnabled();
@@ -38,12 +44,13 @@ public final class EmrionShadersClient implements ClientModInitializer {
 		KeyMapping reloadKey = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.emrionshaders.reload", InputConstants.KEY_R, category));
 		KeyMapping profilerKey = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.emrionshaders.profiler", InputConstants.KEY_F7, category));
 		ClientTickEvents.END_CLIENT_TICK.register(mc -> {
-			while (packKey.consumeClick()) if (active) mc.gui.setScreen(new PackScreen(mc.gui.screen()));
+			while (packKey.consumeClick()) mc.gui.setScreen(new PackScreen(mc.gui.screen())); // on OpenGL it explains how to get Vulkan
 			while (profilerKey.consumeClick()) if (active) Profiler.visible = !Profiler.visible;
 			while (reloadKey.consumeClick()) if (active && PackManager.selected() != null) {
 				PackManager.reload();
 				mc.gui.chatListener().handleSystemMessage(Component.literal("Emrion Shaders: reloading " + PackManager.selected() + "..."), false);
 			}
+			if (active) PackManager.flushChat(mc);
 			// in game the conversion progress goes to the action bar (the pack screen has its own bar)
 			if (active && PackManager.progress >= 0 && mc.gui.screen() == null)
 				mc.gui.hud.setOverlayMessage(Component.literal(PackManager.status + " " + (int) (PackManager.progress * 100) + "%"), false);
@@ -53,10 +60,17 @@ public final class EmrionShadersClient implements ClientModInitializer {
 			if (!"Vulkan".equals(backend)) {
 				LOG.warn("Emrion Shaders needs the Vulkan backend but the game runs on {}. The mod stays inert. "
 						+ "Set Options > Video > Graphics API to 'Prefer Vulkan' (or launch with --graphicsBackend vulkan) and restart.", backend);
+				// once per start; not when Iris is installed (then OpenGL is the user's choice for Iris)
+				if (!net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("iris")) vulkanNotice(client);
 				return;
 			}
 			active = true;
-			ClientLifecycleEvents.CLIENT_STOPPING.register(c -> VulkanContext.onShutdown());
+			ClientLifecycleEvents.CLIENT_STOPPING.register(c -> {
+				boolean buildsDone = PackManager.shutdown();
+				dev.emrion.shaders.mod.runtime.HorizonBox.close();
+				dev.emrion.shaders.mod.pbr.PbrTextures.closeDefaults();
+				VulkanContext.onShutdown(buildsDone);
+			});
 			VulkanContext.get().pipelineCache(); // render thread: background pipeline builds only read these
 			PackManager.init();
 			if (DebugVertex.ENABLED) DebugVertex.init();

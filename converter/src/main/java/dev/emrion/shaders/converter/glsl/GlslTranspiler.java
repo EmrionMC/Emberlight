@@ -413,6 +413,9 @@ public final class GlslTranspiler implements Transpiler {
 		if (ALBEDO.contains(name)) return "Sampler0";
 		if (name.equals("lightmap")) return "Sampler2";
 		if (name.equals("iris_overlay")) return "Sampler1";
+		// Iris binds the PBR maps of the albedo texture per draw (PBRTextureManager), so they follow Sampler0
+		if (name.equals("normals")) return "EmrionNormals";
+		if (name.equals("specular")) return "EmrionSpecular";
 		return null;
 	}
 

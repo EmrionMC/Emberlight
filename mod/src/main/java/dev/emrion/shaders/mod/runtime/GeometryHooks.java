@@ -56,8 +56,13 @@ public final class GeometryHooks {
 	public static @Nullable RenderPass openPhase(String phaseName, Context ctx, UniformSystem.Phase phase, int stage) {
 		FrameExecutor e = exec();
 		if (e == null) return null;
-		var cmd = e.advanceTo(phaseName);
-		return cmd == null ? null : e.beginPhase(cmd, ctx, phase, stage);
+		try {
+			var cmd = e.advanceTo(phaseName);
+			return cmd == null ? null : e.beginPhase(cmd, ctx, phase, stage);
+		} catch (Throwable t) { // MC opens its own pass instead
+			PackManager.frameFailed(t);
+			return null;
+		}
 	}
 
 	public static void closePhase() {
@@ -67,7 +72,16 @@ public final class GeometryHooks {
 
 	public static void stage(int stage) {
 		FrameExecutor e = exec();
-		if (e != null) e.setStage(stage);
+		if (e != null) setStage(e, stage);
+	}
+
+	/** Every hook inside MC's draw code goes through here: a failure disables the pack instead of crashing the frame. */
+	private static void setStage(FrameExecutor e, int stage) {
+		try {
+			e.setStage(stage);
+		} catch (Throwable t) {
+			PackManager.frameFailed(t);
+		}
 	}
 
 	/** Runs {@code body} with renderStage {@code stage}, then restores the previous one. */
@@ -78,9 +92,9 @@ public final class GeometryHooks {
 			return;
 		}
 		int before = e.stage();
-		e.setStage(stage);
+		setStage(e, stage);
 		body.run();
-		e.setStage(before);
+		setStage(e, before);
 	}
 
 	public static boolean inPhase() {
@@ -111,7 +125,7 @@ public final class GeometryHooks {
 		if (e == null || e.context() == null) return false;
 		opaque.close();
 		e.endPhase();
-		renderHand("hand_solid", Context.HAND_SOLID, HAND_SOLID);
+		guarded(() -> renderHand("hand_solid", Context.HAND_SOLID, HAND_SOLID));
 		RenderPass pass = openPhase("translucent", Context.WORLD, UniformSystem.Phase.WORLD, ENTITIES);
 		if (pass == null) { // no translucent phase in the plan: MC's own pass, vanilla pipelines
 			var main = Minecraft.getInstance().gameRenderer.mainRenderTarget();
@@ -123,13 +137,22 @@ public final class GeometryHooks {
 			translucents.accept(p);
 		}
 		e.endPhase();
-		renderHand("hand_translucent", Context.HAND_TRANSLUCENT, HAND_TRANSLUCENT);
+		guarded(() -> renderHand("hand_translucent", Context.HAND_TRANSLUCENT, HAND_TRANSLUCENT));
 		return true;
+	}
+
+	private static void guarded(Runnable hook) {
+		try {
+			hook.run();
+		} catch (Throwable t) {
+			PackManager.frameFailed(t);
+		}
 	}
 
 	/** Renders MC's first-person hand into the gbuffers (Iris HandRenderer): our pass, hand projection, no depth clear. */
 	private static void renderHand(String phaseName, Context ctx, int stage) {
 		FrameExecutor e = exec();
+		if (e == null) return; // failed earlier in this frame
 		var cmd = e.advanceTo(phaseName);
 		if (cmd == null) return;
 		var mc = Minecraft.getInstance();
@@ -149,6 +172,13 @@ public final class GeometryHooks {
 	}
 
 	private static net.minecraft.client.renderer.feature.@Nullable FeatureRenderDispatcher handDispatcher;
+	private static net.minecraft.client.renderer.@Nullable RenderBuffers handBuffers;
+
+	/** GameRenderer.render TAIL: our dispatchers' vertex buffer pools recycle per frame, as MC's own RenderBuffers. */
+	public static void endFrame() {
+		if (handBuffers != null) handBuffers.endFrame();
+		ShadowPass.endFrame();
+	}
 
 	/**
 	 * GameRenderer.renderItemInHand's feature dispatcher while {@link #renderHand} runs: our own (with its own staged vertex
@@ -158,7 +188,7 @@ public final class GeometryHooks {
 		if (hand == null) return null;
 		if (handDispatcher == null) {
 			var mc = Minecraft.getInstance();
-			handDispatcher = new net.minecraft.client.renderer.feature.FeatureRenderDispatcher(new net.minecraft.client.renderer.RenderBuffers(0),
+			handDispatcher = new net.minecraft.client.renderer.feature.FeatureRenderDispatcher(handBuffers = new net.minecraft.client.renderer.RenderBuffers(0),
 					mc.getModelManager(), mc.getAtlasManager(), mc.font, mc.gameRenderer.gameRenderState());
 		}
 		return handDispatcher;
@@ -170,7 +200,12 @@ public final class GeometryHooks {
 		FrameExecutor e = exec();
 		if (h == null || e == null) return null;
 		hand = null;
-		return e.beginPhase(h.command(), h.context(), UniformSystem.Phase.HAND, h.stage());
+		try {
+			return e.beginPhase(h.command(), h.context(), UniformSystem.Phase.HAND, h.stage());
+		} catch (Throwable t) {
+			PackManager.frameFailed(t);
+			return null;
+		}
 	}
 
 	// ---- block entities (Iris BLOCK_ENTITIES phase) ----
@@ -217,7 +252,7 @@ public final class GeometryHooks {
 	/** Before MC adds its main pass (Iris renderShadows): the shadow pass, if the plan has one. */
 	public static void renderShadows(net.minecraft.client.renderer.LevelRenderer level) {
 		FrameExecutor e = exec();
-		if (e != null) e.renderShadows(level);
+		if (e != null) guarded(() -> e.renderShadows(level));
 	}
 
 	/** Iris turns vanilla entity (blob) shadows off when the pack renders a shadow map. */

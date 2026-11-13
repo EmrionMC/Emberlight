@@ -39,6 +39,7 @@ public final class RawImage {
 			var alloc = VmaAllocationCreateInfo.calloc(stack).usage(VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
 			LongBuffer p = stack.mallocLong(1);
 			PointerBuffer pAlloc = stack.mallocPointer(1);
+			if (dev.emrion.shaders.mod.debug.FaultInjection.failAlloc()) VulkanContext.check(VK_ERROR_OUT_OF_DEVICE_MEMORY, "vmaCreateImage " + label);
 			VulkanContext.check(vmaCreateImage(ctx.vma, info, alloc, p, pAlloc, null), "vmaCreateImage " + label);
 			image = p.get(0);
 			allocation = pAlloc.get(0);

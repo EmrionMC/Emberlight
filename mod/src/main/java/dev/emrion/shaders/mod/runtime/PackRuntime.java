@@ -77,7 +77,7 @@ public final class PackRuntime {
 	final Manifest.Dimension dim;
 	final UniformSystem uniforms;
 	public final int width, height;
-	final UboRing ring;
+	UboRing ring;
 
 	final Map<String, Img[]> images = new HashMap<>();
 	final Map<String, Buf> buffers = new HashMap<>();
@@ -85,17 +85,17 @@ public final class PackRuntime {
 	private final Map<Manifest.SamplerDef, Long> samplers = new HashMap<>();
 	private final List<GpuTexture> ownedTextures = new ArrayList<>();
 	private final List<GpuTextureView> ownedViews = new ArrayList<>();
-	private final Img dummy;
-	/** FORMAT builtin resources; the PBR atlases are Iris's 1×1 defaults until {@link PbrAtlases} built them. */
+	private Img dummy;
+	/** FORMAT builtin resources. */
 	private final Map<String, Img> builtins = new HashMap<>();
-	private final DescriptorPool pool;
+	private DescriptorPool pool;
 	/** {@link PbrAtlases#generation()} of the bound atlas views; the runtime must be rebuilt when it changes. */
 	public final int atlasGeneration = PbrAtlases.generation();
 	/** flip state id → descriptor set. */
-	final long[] sets;
+	long[] sets;
 	/** flip state id → binding → resource the binding reads (for barriers); null for UBOs and unresolved bindings. */
-	final Hazards.Tracked[][] bindingResource;
-	final String[] bindingKind;
+	Hazards.Tracked[][] bindingResource;
+	String[] bindingKind;
 
 	public PackRuntime(VulkanContext ctx, PackPipelines pipelines, Path cacheDir, Manifest manifest, Manifest.Dimension dim,
 			UniformSystem uniforms, int width, int height) {
@@ -106,6 +106,15 @@ public final class PackRuntime {
 		this.uniforms = uniforms;
 		this.width = width;
 		this.height = height;
+		try {
+			init(cacheDir);
+		} catch (RuntimeException | Error failed) { // e.g. out of GPU memory half-way: release what was allocated
+			destroyLater();
+			throw failed;
+		}
+	}
+
+	private void init(Path cacheDir) {
 		long align = ctx.limits().minUniformBufferOffsetAlignment();
 		ring = new UboRing(ctx, manifest.uniforms().size() + FrameExecutor.PHASE_BLOCKS * (manifest.uniforms().phase().size() + align) + align);
 
@@ -116,11 +125,7 @@ public final class PackRuntime {
 		builtins.put("white", dummy);
 		PbrAtlases.request();
 		var atlas = PbrAtlases.blockAtlas();
-		var normals = PbrAtlases.normals();
-		var specular = PbrAtlases.specular();
 		builtins.put("block_atlas", atlas != null ? view("block atlas", atlas) : dummy);
-		builtins.put("normals_atlas", normals != null ? view("normals atlas", normals) : mcTexture("emrion flat normals", solid(0xFFFF7F7F))); // ABGR: Iris's (127, 127, 255, 255)
-		builtins.put("specular_atlas", specular != null ? view("specular atlas", specular) : mcTexture("emrion no specular", solid(0)));
 		builtins.put("white_depth", whiteDepth());
 		for (var tex : manifest.textures()) textures.put(tex.name(), loadTexture(cacheDir, tex));
 
@@ -161,6 +166,7 @@ public final class PackRuntime {
 			return;
 		}
 		Img[] sides = new Img[2];
+		images.put(t.name(), sides); // before allocating, so a failure releases a created main side
 		for (int side = 0; side < (t.hasAlt() ? 2 : 1); side++) {
 			String label = "emrion " + t.name() + (side == 1 ? " alt" : "");
 			Img img = new Img(label, t);
@@ -188,7 +194,6 @@ public final class PackRuntime {
 			}
 			sides[side] = img;
 		}
-		images.put(t.name(), sides);
 	}
 
 	/** The physical image of {@code target} on {@code side} ("main"/"alt"); null if the target does not exist. */
@@ -305,8 +310,7 @@ public final class PackRuntime {
 					if (img == null) img = dummy;
 					if (img.target != null) res[r.binding()] = img;
 					Manifest.SamplerDef def = r.sampler();
-					if (def == null && r.builtin() != null && r.builtin().endsWith("_atlas")) // shortcut: no anisotropy (MC's terrain sampler has it)
-						def = r.builtin().equals("specular_atlas") && PbrAtlases.labPbr() ? LABPBR_SPECULAR_SAMPLER : ATLAS_SAMPLER;
+					if (def == null && "block_atlas".equals(r.builtin())) def = ATLAS_SAMPLER;
 					if (def == null) {
 						var tex = r.texture() == null ? null : manifest.textures().stream().filter(t -> t.name().equals(r.texture())).findFirst().orElse(null);
 						def = new Manifest.SamplerDef(tex == null ? "nearest" : tex.filter(), "none", tex == null ? "repeat" : tex.wrap(), null);
@@ -336,6 +340,11 @@ public final class PackRuntime {
 		});
 	}
 
+	/** The sampler of the per-draw PBR maps (Iris: labPBR specular is not interpolated). shortcut: no anisotropy (Iris's terrain sampler has it). */
+	long pbrSampler(boolean specular) {
+		return sampler(specular && PbrAtlases.labPbr() ? LABPBR_SPECULAR_SAMPLER : ATLAS_SAMPLER);
+	}
+
 	long nearestSampler() {
 		return sampler(new Manifest.SamplerDef("nearest", "none", "clamp", null));
 	}
@@ -356,8 +365,8 @@ public final class PackRuntime {
 
 	/** Releases everything after the frames in flight retired. The pipelines are shared and released by the owner. */
 	public void destroyLater() {
-		pool.destroyLater();
-		ring.destroyLater();
+		if (pool != null) pool.destroyLater();
+		if (ring != null) ring.destroyLater();
 		for (Img[] sides : images.values()) for (Img img : sides) if (img != null) release(img);
 		buffers.values().forEach(b -> b.buffer.destroyLater());
 		ownedViews.forEach(GpuTextureView::close);

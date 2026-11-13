@@ -16,8 +16,10 @@ import com.mojang.renderpearl.backend.vulkan.VulkanGpuTextureView;
 import dev.emrion.shaders.format.Manifest;
 import dev.emrion.shaders.mod.EmrionShadersClient;
 import dev.emrion.shaders.mod.pipeline.GbufferPipelines;
+import dev.emrion.shaders.mod.pbr.PbrTextures;
 import dev.emrion.shaders.mod.pipeline.GeometryPipelines;
 import dev.emrion.shaders.mod.uniforms.UniformSystem;
+import dev.emrion.shaders.mod.debug.FaultInjection;
 import dev.emrion.shaders.mod.debug.Profiler;
 import dev.emrion.shaders.mod.vk.RawCommands;
 import dev.emrion.shaders.mod.vk.RawPass;
@@ -126,6 +128,7 @@ public final class FrameExecutor {
 	/** Before MC's main pass (Iris renderShadows): the shadow geometry phases, if the plan has them. */
 	public void renderShadows(net.minecraft.client.renderer.LevelRenderer level) {
 		if (cursor < 0) return;
+		FaultInjection.maybeThrow("shadow");
 		long t = Profiler.cpuStart(), raw = Profiler.rawSoFar();
 		ShadowPass.render(this, level);
 		Profiler.shadowEnd(t, raw);
@@ -140,6 +143,8 @@ public final class FrameExecutor {
 
 	/** LevelRenderer.render HEAD: the level projection of this frame is known, no MC render pass is open. */
 	public void levelStart(float partialTick) {
+		FaultInjection.frame();
+		FaultInjection.maybeThrow("levelStart");
 		long t = Profiler.cpuStart();
 		uniforms.beginFrame(partialTick);
 		rt.ring.nextFrame();
@@ -157,6 +162,9 @@ public final class FrameExecutor {
 		GeometryPipelines.EXTRA_VIEWS[2] = ((VulkanGpuTextureView) gr.lightmap()).vkImageView();
 		GeometryPipelines.EXTRA_SAMPLERS[0] = GeometryPipelines.EXTRA_SAMPLERS[1] = nearest;
 		GeometryPipelines.EXTRA_SAMPLERS[2] = linear;
+		GeometryPipelines.EXTRA_SAMPLERS[3] = rt.pbrSampler(false);
+		GeometryPipelines.EXTRA_SAMPLERS[4] = rt.pbrSampler(true);
+		PbrTextures.onNewFrame();
 		GeometryPipelines.defaultsBuffer = pp.defaults.handle;
 		Profiler.cpuEnd(Profiler.UNIFORMS, t);
 
@@ -195,6 +203,7 @@ public final class FrameExecutor {
 		int j = cursor;
 		while (j < dim.frame().size() && !(dim.frame().get(j).cmd().equals("geometry") && dim.frame().get(j).phase().equals(phaseName))) j++;
 		if (j == dim.frame().size()) return null;
+		FaultInjection.maybeThrow("phase");
 		runRange(cursor, j);
 		cursor = j + 1;
 		return dim.frame().get(j);
@@ -203,6 +212,7 @@ public final class FrameExecutor {
 	/** After the level's frame graph: composites, final (into MC's main colour target) and the end-of-frame copies. */
 	public void finish() {
 		if (cursor < 0) return;
+		FaultInjection.maybeThrow("finish");
 		RenderTarget main = Minecraft.getInstance().gameRenderer.mainRenderTarget();
 		mcColor.attach = mcColor.sampled = ((VulkanGpuTextureView) main.getColorTextureView()).vkImageView();
 		mcColor.image = ((VulkanGpuTexture) main.getColorTexture()).vkImage();
