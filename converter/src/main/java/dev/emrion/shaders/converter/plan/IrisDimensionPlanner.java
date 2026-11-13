@@ -500,7 +500,11 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 				Set<Integer> storage = new TreeSet<>();
 				boolean water = a.samplers().stream().anyMatch(s -> s.name().equals("watershadow"));
 				for (var s : a.samplers()) {
-					Res r = resolveSampler(c, a.group(), s.name(), s.glslType(), water);
+					Res r = switch (s.name()) { // RT helpers (RtPatcher): the TLAS and the block atlas for alpha tests
+						case "emrRtTlas" -> new Res("acceleration_structure", null, null, "emrion_tlas", null);
+						case "emrRtAtlas" -> new Res("sampled_image", null, null, "block_atlas", null);
+						default -> resolveSampler(c, a.group(), s.name(), s.glslType(), water);
+					};
 					if (r == SET0) continue;
 					if (r == null) {
 						// GL reads texture unit 0 through an unbound sampler: colortex0 in composite-like passes. In gbuffers it
@@ -524,6 +528,10 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 					if (!"readonly".equals(i.access())) storage.add(b.get(i.name()));
 				}
 				for (var buf : a.buffers()) {
+					if (buf.blockName().equals("EmrRtSections")) { // RT helper section table (RtPatcher)
+						b.put(buf.blockName(), bind(new Res("storage_buffer", null, null, "emrion_rt_sections", null)));
+						continue;
+					}
 					String key = "bufferObject." + buf.declaredBinding();
 					if (!props.containsKey(key)) {
 						warn(name, "SSBO binding " + buf.declaredBinding() + " has no " + key + "; left unbound");

@@ -23,6 +23,9 @@ import dev.emrion.shaders.mod.pbr.PbrAtlases;
 import dev.emrion.shaders.mod.pbr.PbrTextures;
 import dev.emrion.shaders.mod.pipeline.GbufferMapping;
 import dev.emrion.shaders.mod.pipeline.GeometryPipelines;
+import dev.emrion.shaders.mod.rt.RtCapability;
+import dev.emrion.shaders.mod.rt.RtConfig;
+import dev.emrion.shaders.mod.rt.RtScene;
 import dev.emrion.shaders.mod.runtime.FrameExecutor;
 import dev.emrion.shaders.mod.runtime.PackPipelines;
 import dev.emrion.shaders.mod.runtime.PackRuntime;
@@ -123,6 +126,7 @@ public final class PackManager {
 	/** Called once on the render thread at client start. */
 	public static void init() {
 		Properties p = readConfig();
+		RtConfig.load(p);
 		if (Boolean.parseBoolean(p.getProperty("debug"))) {
 			debug = true;
 			dev.emrion.shaders.mod.debug.Profiler.visible = true;
@@ -179,6 +183,10 @@ public final class PackManager {
 	private static void saveConfig(String key, String value) {
 		Properties p = readConfig();
 		p.setProperty(key, value);
+		writeConfig(p);
+	}
+
+	private static void writeConfig(Properties p) {
 		try {
 			Files.createDirectories(CONFIG.getParent());
 			try (Writer w = Files.newBufferedWriter(CONFIG)) {
@@ -206,11 +214,12 @@ public final class PackManager {
 			var converter = new DefaultConverter(PackSource::open, new DefaultPackLoader(), CustomUniformParser::parse, new GlslTranspiler(),
 					new Std140LayoutBuilder(), new IrisDimensionPlanner(), compiler,
 					new Manifest.Environment(env.mcVersion(), StandardMacros.build(env)), Math.max(1, Runtime.getRuntime().availableProcessors() - 1));
+			// RT off: an empty set, the exact Iris-equivalent request (same cache key and output)
 			result = converter.convert(new Converter.Request(source, settings, CACHE, null, (stage, done, total) -> {
 				if (gen != generation) return;
 				status = "Converting " + pack + ": " + stage + " " + done + "/" + total;
 				progress = total == 0 ? 0 : (float) done / total;
-			}));
+			}, true, RtConfig.request()));
 		}
 		List<Diagnostic> errs = result.diagnostics().stream().filter(d -> d.severity() == Diagnostic.Severity.ERROR).distinct().toList(); // distinct: one per dimension otherwise
 		synchronized (errors) {
@@ -327,6 +336,38 @@ public final class PackManager {
 		}
 		chat(Component.literal("Emrion Shaders: reloading " + pack + " failed (" + t.getMessage() + "). "
 				+ (loaded != null ? "The previous version keeps running; d" : "D") + "etails in the log.").withStyle(ChatFormatting.RED));
+	}
+
+	// ---- RT (RAYTRACING.md §5) ----------------------------------------------------------------------------------------
+
+	/**
+	 * Saves the RT options and, if the converter request changes, reconverts and swaps runtimes (RtScene follows the runtime).
+	 * @return true if a reload was started
+	 */
+	public static boolean applyRt() {
+		Properties p = readConfig();
+		RtConfig.store(p);
+		writeConfig(p);
+		Loaded l = next != null ? next : loaded;
+		java.util.Set<String> want = RtConfig.request();
+		java.util.Set<String> have = l == null || l.manifest().rt() == null ? java.util.Set.of() : rtRequestOf(l.manifest());
+		if (want.equals(have) || selected == null) return false;
+		reload();
+		return true;
+	}
+
+	/** The effect set a manifest was converted with: applied plus unavailable effects (both were requested). */
+	private static java.util.Set<String> rtRequestOf(Manifest m) {
+		// shortcut: the request is not stored in the manifest; applied entries keep their options, unavailable ones only the name
+		java.util.Set<String> s = new java.util.TreeSet<>(m.rt().effects());
+		s.addAll(m.rt().unavailable().keySet());
+		return s;
+	}
+
+	/** The RT section of the newest loaded version (null: converted without RT). */
+	public static Manifest.@Nullable Rt rtState() {
+		Loaded l = next != null ? next : loaded;
+		return l == null ? null : l.manifest().rt();
 	}
 
 	// ---- render-thread hooks ------------------------------------------------------------------------------------------
@@ -501,6 +542,10 @@ public final class PackManager {
 			EmrionVertexFormats.setActive(true); // rebuilds chunks in the extended terrain format
 		}
 		if (uniforms instanceof IrisUniformSystem u) u.setBlockIdLookup(ids::block);
+		// the RT runtime owns the scene: created before its descriptor sets (TLAS, section table), gone with a non-RT runtime
+		var rt = l.manifest().rt();
+		if (rt != null && !rt.effects().isEmpty() && RtCapability.enabled) RtScene.activate();
+		else if (!RtCapability.DEBUG) RtScene.shutdown();
 		var main = mc.gameRenderer.mainRenderTarget();
 		resize(l, main.width, main.height);
 		status = selected + ": active (" + p.folder() + ")";
@@ -549,6 +594,8 @@ public final class PackManager {
 		deactivateKeepingFormats();
 		PbrTextures.clear(); // entity/item maps load lazily again when a pack runs
 		PbrAtlases.releaseLazy();
+		if (!RtCapability.DEBUG) RtScene.shutdown();
+		dev.emrion.shaders.mod.runtime.ForcedSections.clear();
 	}
 
 	/** Toggled off: vanilla rendering, but the pipelines stay as {@link #prepared}, so switching back only re-installs them. */

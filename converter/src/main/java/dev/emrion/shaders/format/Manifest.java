@@ -22,9 +22,24 @@ public record Manifest(
 		IdMaps idMaps,
 		List<TextureDef> textures,
 		List<DimensionMapping> dimensionMap,
-		Map<String, Dimension> dimensions
+		Map<String, Dimension> dimensions,
+		Rt rt
 ) {
 	public static final int FORMAT_VERSION = 2;
+
+	/** Without the optional {@code rt} section (every conversion without RT effects). */
+	public Manifest(int formatVersion, String converterVersion, String cacheKey, PackInfo pack, Environment environment, Options options,
+	                Map<String, Object> properties, UniformLayout uniforms, IdMaps idMaps, List<TextureDef> textures,
+	                List<DimensionMapping> dimensionMap, Map<String, Dimension> dimensions) {
+		this(formatVersion, converterVersion, cacheKey, pack, environment, options, properties, uniforms, idMaps, textures, dimensionMap,
+				dimensions, null);
+	}
+
+	/**
+	 * §9 RT variant (absent = no RT requested). effects: applied effects with their mode ("shadows" or "shadows:full");
+	 * unavailable: requested effect → reason; patched: effect → "dim/program.stage" list where a function was replaced.
+	 */
+	public record Rt(List<String> effects, Map<String, String> unavailable, Map<String, List<String>> patched) {}
 
 	public record PackInfo(String name, String sha256) {}
 
@@ -132,7 +147,8 @@ public record Manifest(
 	public record Set0Ref(String name, String type) {}
 
 	/**
-	 * kind: uniform_buffer_dynamic | sampled_image | storage_image | storage_buffer.
+	 * kind: uniform_buffer_dynamic | sampled_image | storage_image | storage_buffer | acceleration_structure.
+	 * RT variants only: builtin emrion_tlas (acceleration_structure) and emrion_rt_sections (storage_buffer).
 	 * Exactly one of target (a {@link Target#name()}), texture (a {@link TextureDef#name()}) or builtin is set for images.
 	 * builtin: block_atlas | white | white_depth. sampler null = the texture's own sampling (custom textures:
 	 * TextureDef filter/wrap; atlases: MC's atlas sampler).

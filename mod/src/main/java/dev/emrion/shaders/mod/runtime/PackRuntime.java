@@ -12,6 +12,7 @@ import com.mojang.renderpearl.backend.vulkan.VulkanGpuTexture;
 import com.mojang.renderpearl.backend.vulkan.VulkanGpuTextureView;
 import dev.emrion.shaders.format.Manifest;
 import dev.emrion.shaders.mod.pbr.PbrAtlases;
+import dev.emrion.shaders.mod.rt.RtScene;
 import dev.emrion.shaders.mod.uniforms.UniformSystem;
 import dev.emrion.shaders.mod.vk.DescriptorPool;
 import dev.emrion.shaders.mod.vk.Descriptors;
@@ -137,9 +138,16 @@ public final class PackRuntime {
 		sets = new long[maxFlip + 1];
 		bindingResource = new Hazards.Tracked[maxFlip + 1][maxBinding + 1];
 		int n = dim.flipStates().size();
-		pool = new DescriptorPool(ctx, n,
-				VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 2 * n, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, Math.max(1, count("sampled_image") * n),
-				VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, Math.max(1, count("storage_image") * n), VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, Math.max(1, count("storage_buffer") * n));
+		int[] sizes = {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 2 * n, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, Math.max(1, count("sampled_image") * n),
+				VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, Math.max(1, count("storage_image") * n), VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, Math.max(1, count("storage_buffer") * n)};
+		int as = count("acceleration_structure"); // RT variants only: the type needs the RT device extensions
+		if (as > 0) {
+			if (RtScene.get() == null) throw new IllegalStateException("RT runtime without an RtScene");
+			sizes = java.util.Arrays.copyOf(sizes, 10);
+			sizes[8] = org.lwjgl.vulkan.KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+			sizes[9] = as * n;
+		}
+		pool = new DescriptorPool(ctx, n, sizes);
 		for (var fs : dim.flipStates()) sets[fs.id()] = buildSet(fs);
 	}
 
@@ -293,7 +301,12 @@ public final class PackRuntime {
 					int size = r.binding() == 0 ? manifest.uniforms().size() : manifest.uniforms().phase().size();
 					Descriptors.writeBuffer(ctx, set, r.binding(), VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, ring.buffer.handle, 0, Math.max(16, size));
 				}
+				case "acceleration_structure" -> Descriptors.writeAccelerationStructure(ctx, set, r.binding(), RtScene.get().tlasHandle());
 				case "storage_buffer" -> {
+					if ("emrion_rt_sections".equals(r.builtin())) { // host-written per frame by RtScene, read only by ray queries
+						Descriptors.writeBuffer(ctx, set, r.binding(), VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, RtScene.get().sectionTable().handle, 0, VK_WHOLE_SIZE);
+						continue;
+					}
 					Buf b = buffers.get(r.target());
 					if (b == null) continue;
 					res[r.binding()] = b;

@@ -1,0 +1,20 @@
+{
+  "id": "complementary-r5",
+  "detect": ["lib/lighting/shadowSampling.glsl"],
+  "effects": {
+    "shadows": {
+      "requires": ["gbuffers_terrain"],
+      "options": {"full": "0", "rays": "1", "cone": "30.0"},
+      "helpers": "rt/complementary/shadows.glsl",
+      "uniforms": {"shadowModelViewInverse": "mat4", "shadowProjectionInverse": "mat4"},
+      "needs": ["SampleShadow", "InterleavedGradientNoiseForShadows", "shadowMapBias", "shadowtex0", "shadowtex1"],
+      "skipIds": [10003, 10005, 10015, 10017, 10019, 10021, 10023, 10029, 10031, 10039],
+      "skipIdsWhen": "10003",
+      "patches": [
+        {"function": "vec3 SampleTAAFilteredShadow(vec3,float,int,bool,float,float)", "body": "rt/complementary/shadow_taa.glsl"},
+        {"function": "vec3 SampleFilteredShadow(vec3,float,float,float)", "body": "rt/complementary/shadow_filtered.glsl"},
+        {"function": "vec3 SampleBasicFilteredShadow(vec3,float)", "body": "rt/complementary/shadow_basic.glsl"}
+      ]
+    }
+  }
+}

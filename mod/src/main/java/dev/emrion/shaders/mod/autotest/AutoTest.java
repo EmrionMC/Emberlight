@@ -51,7 +51,7 @@ import org.jspecify.annotations.Nullable;
  * emrion.autotest.script=step;step  then run these steps (robustness tests), one after the other:
  *     wait S | size WxH | fullscreen on|off | gui N | cmd COMMAND | shot NAME (&lt;tag&gt;-NAME.png) | mem (log FPS and VMA budget)
  *     pack off|on (on waits until the pack renders) | reload (waits for the swap) | leave | join | hud | f3 on|off
- *     screen pause|inventory|chat|packs|none | key KEY [ctrl] (into the open screen) | drop PATH[;PATH] (onto the open screen) | use down|up (hold the use key) | press KEY (key.keyboard.KEY) | irisapi (logs what the Iris API reports) | repeat N { steps } (no nesting)
+ *     rt off|on|hybrid|full (Emrion RT page Apply, waits for the swap) | screen pause|inventory|chat|packs|none | key KEY [ctrl] (into the open screen) | drop PATH[;PATH] (onto the open screen) | use down|up (hold the use key) | press KEY (key.keyboard.KEY) | irisapi (logs what the Iris API reports) | repeat N { steps } (no nesting)
  * </pre>
  * With only {@code quit=true} the game exits as soon as the title screen is up (smoke test).
  */
@@ -407,6 +407,15 @@ public final class AutoTest {
 				}
 				// "on" is done once the pack renders, or when it failed (selection cleared)
 				return arg.equals("off") ? !PackManager.running() || ticks > 2 : PackManager.running() || PackManager.selected() == null;
+			}
+			case "rt" -> { // "rt off|on|hybrid|full": the RT options page's Apply; waits for the swapped runtime
+				if (first) {
+					swapsBefore = PackManager.swaps;
+					dev.emrion.shaders.mod.rt.RtConfig.enabled = !arg.equals("off");
+					if (arg.equals("hybrid") || arg.equals("full")) dev.emrion.shaders.mod.rt.RtConfig.shadows = arg;
+					if (!PackManager.applyRt()) swapsBefore = -2; // nothing to swap
+				}
+				return swapsBefore == -2 || PackManager.swaps != swapsBefore || PackManager.selected() == null;
 			}
 			case "reload" -> {
 				if (first) {

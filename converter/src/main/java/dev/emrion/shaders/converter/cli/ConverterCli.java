@@ -20,12 +20,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Supplier;
 
-/** {@code java -jar converter-all.jar <pack.zip|dir> <settings.txt|-> <out-dir> [--dimension world0] [--no-cache] [--verbose]} */
+/** {@code java -jar converter-all.jar <pack.zip|dir> <settings.txt|-> <out-dir> [--dimension world0] [--rt shadows[:full]] [--no-cache] [--verbose]} */
 public final class ConverterCli {
 	private ConverterCli() {}
 
 	static final int SHOWN_DIAGNOSTICS = 20;
-	static final String USAGE = "usage: <pack.zip|dir> <settings.txt|-> <out-dir> [--dimension <folder>]... [--no-cache] [--verbose]";
+	static final String USAGE = "usage: <pack.zip|dir> <settings.txt|-> <out-dir> [--dimension <folder>]... [--rt <effect[:option]>]... [--no-cache] [--verbose]";
 
 	public static void main(String[] args) {
 		int code;
@@ -44,7 +44,7 @@ public final class ConverterCli {
 
 	/** @return exit code: 0 no errors, 1 conversion errors, 2 usage */
 	static int run(String[] args, Supplier<Converter> converter, PrintStream out) {
-		List<String> positional = new ArrayList<>(), dimensions = new ArrayList<>();
+		List<String> positional = new ArrayList<>(), dimensions = new ArrayList<>(), rt = new ArrayList<>();
 		boolean useCache = true, verbose = false;
 		for (int i = 0; i < args.length; i++) {
 			switch (args[i]) {
@@ -53,6 +53,10 @@ public final class ConverterCli {
 				case "--dimension" -> {
 					if (++i == args.length) return usage(out, "--dimension needs a value");
 					dimensions.add(args[i]);
+				}
+				case "--rt" -> {
+					if (++i == args.length) return usage(out, "--rt needs a value");
+					rt.add(args[i]);
 				}
 				default -> {
 					if (args[i].startsWith("--")) return usage(out, "unknown option " + args[i]);
@@ -69,7 +73,7 @@ public final class ConverterCli {
 		long start = System.nanoTime();
 		var result = converter.get().convert(new Converter.Request(Path.of(positional.get(0)),
 				positional.get(1).equals("-") ? null : Path.of(positional.get(1)), Path.of(positional.get(2)),
-				dimensions.isEmpty() ? null : dimensions, progress, useCache));
+				dimensions.isEmpty() ? null : dimensions, progress, useCache, java.util.Set.copyOf(rt)));
 		long ms = (System.nanoTime() - start) / 1_000_000;
 
 		int programs = result.manifest() == null || result.manifest().dimensions() == null ? 0

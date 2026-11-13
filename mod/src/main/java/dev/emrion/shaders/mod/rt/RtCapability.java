@@ -18,8 +18,21 @@ import org.lwjgl.vulkan.VkPhysicalDeviceRayQueryFeaturesKHR;
 public final class RtCapability {
 	private RtCapability() {}
 
-	/** Kill switch: false restores today's device exactly (no extensions, no BDA flag, no extra usage bits). */
-	public static final boolean REQUESTED = !"false".equals(System.getProperty("emrion.rt.device"));
+	/**
+	 * Kill switch ({@code -Demrion.rt.device=false} or {@code rt.device=false} in config/emrionshaders.properties): false restores
+	 * today's device exactly (no extensions, no BDA flag, no extra usage bits). Read once, before the device exists.
+	 */
+	public static final boolean REQUESTED = !"false".equals(System.getProperty("emrion.rt.device", configDevice()));
+
+	private static String configDevice() {
+		var p = new java.util.Properties();
+		try (var r = java.nio.file.Files.newBufferedReader(net.fabricmc.loader.api.FabricLoader.getInstance().getConfigDir().resolve("emrionshaders.properties"))) {
+			p.load(r);
+		} catch (java.io.IOException ignored) {
+			// no config yet
+		}
+		return p.getProperty("rt.device", "true").trim();
+	}
 	/** RT-1 debug view ({@code -Demrion.rt.debug=true}): the only thing that creates an {@link RtScene} in this step. */
 	public static final boolean DEBUG = Boolean.getBoolean("emrion.rt.debug");
 

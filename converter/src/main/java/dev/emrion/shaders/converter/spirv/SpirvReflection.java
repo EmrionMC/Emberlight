@@ -50,6 +50,7 @@ public record SpirvReflection(List<Descriptor> descriptors, int pushConstantSize
 			addDescriptors(descriptors, compiler, resources, SPVC_RESOURCE_TYPE_SAMPLED_IMAGE, "sampled_image", context);
 			addDescriptors(descriptors, compiler, resources, SPVC_RESOURCE_TYPE_SEPARATE_IMAGE, "separate_image", context);
 			addDescriptors(descriptors, compiler, resources, SPVC_RESOURCE_TYPE_SEPARATE_SAMPLERS, "separate_sampler", context);
+			addDescriptors(descriptors, compiler, resources, SPVC_RESOURCE_TYPE_ACCELERATION_STRUCTURE, "acceleration_structure", context);
 			descriptors.sort(Comparator.comparingInt(Descriptor::set).thenComparingInt(Descriptor::binding));
 
 			int pushConstantSize = 0;

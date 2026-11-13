@@ -35,6 +35,17 @@ class CacheTest {
 	}
 
 	@Test
+	void rtEffectsChangeTheKeyOnlyWhenRequested() throws Exception {
+		var macros = Map.of("MC_VERSION", "260300");
+		String off = key(null, macros, null);
+		assertEquals(off, CacheKey.compute("packhash", null, "26.3", macros, null, java.util.Set.of()));
+		String rt = CacheKey.compute("packhash", null, "26.3", macros, null, java.util.Set.of("shadows", "shadows:full"));
+		assertNotEquals(off, rt);
+		assertEquals(rt, CacheKey.compute("packhash", null, "26.3", macros, null, new java.util.TreeSet<>(java.util.Set.of("shadows:full", "shadows"))));
+		assertNotEquals(rt, CacheKey.compute("packhash", null, "26.3", macros, null, java.util.Set.of("shadows")));
+	}
+
+	@Test
 	void commitIsAtomicAndValidityChecksKey() throws Exception {
 		Path tmp = CacheDir.begin(dir, "k1");
 		var m = new Manifest(Manifest.FORMAT_VERSION, "0.1.0", "k1", null, null, null, null, null, null, null, null, null);

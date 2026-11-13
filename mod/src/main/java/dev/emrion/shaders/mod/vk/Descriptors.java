@@ -65,6 +65,16 @@ public final class Descriptors {
 		}
 	}
 
+	public static void writeAccelerationStructure(VulkanContext ctx, long set, int binding, long accelerationStructure) {
+		try (MemoryStack stack = MemoryStack.stackPush()) {
+			var as = org.lwjgl.vulkan.VkWriteDescriptorSetAccelerationStructureKHR.calloc(stack).sType$Default()
+					.pAccelerationStructures(stack.longs(accelerationStructure));
+			var write = VkWriteDescriptorSet.calloc(1, stack).sType$Default().pNext(as.address()).dstSet(set).dstBinding(binding)
+					.descriptorType(org.lwjgl.vulkan.KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR).descriptorCount(1);
+			vkUpdateDescriptorSets(ctx.vk, write, null);
+		}
+	}
+
 	public static void writeBuffer(VulkanContext ctx, long set, int binding, int type, long buffer, long offset, long range) {
 		try (MemoryStack stack = MemoryStack.stackPush()) {
 			var info = VkDescriptorBufferInfo.calloc(1, stack).buffer(buffer).offset(offset).range(range);

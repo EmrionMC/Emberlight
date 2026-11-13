@@ -1,6 +1,7 @@
 # Emrion Shaders — Optional hardware ray tracing (M7 design)
 
-Status: RT-1 (infrastructure) implemented and measured on `m7/rt1-infra` (2026-11-13, §9); RT-2…RT-5 are design. This document answers *how* M7 plugs hardware ray tracing (RT) into
+Status: RT-1 (infrastructure) implemented and measured on `m7/rt1-infra` (2026-11-13, §9); RT-2 (variants, patch table, UI,
+toggle) and RT-3 (RT shadows, Hybrid and Full) implemented and measured on `m7/rt2-shadows` (2026-11-13, §10); RT-4/RT-5 are design. This document answers *how* M7 plugs hardware ray tracing (RT) into
 the existing renderer without touching the Iris-equivalent path. Read [ARCHITECTURE.md](ARCHITECTURE.md) (§4.1 transpiler,
 §5 runtime, §6 mixins) and [FORMAT.md](FORMAT.md) first. Pack code is only referenced by file:line (paths relative to
 `testpacks/unbound-euphoria/shaders/`). It is never copied.
@@ -444,3 +445,75 @@ that loop), which also costs chunk-meshing time and vertex-heap memory.
 - **FPS** (overview, 30 s, interleaved): RT-capable device, RT off 135.8 / 136.4 / 139.0 (mean **137.1**, 1 % low 111.1 /
   56.7* / 111.9) vs `-Demrion.rt.device=false` 137.6 / 139.6 / 135.5 (mean **137.6**, 1 % low 110.7 / 114.5 / 64.7*);
   *one hitch each. The difference is inside the ±2 FPS run-to-run spread, so the boot-time device setup stays on by default.
+
+## 10. RT-2 and RT-3 results (2026-11-13, `m7/rt2-shadows`)
+
+### 10.1 What is built
+
+| Piece | Where |
+|---|---|
+| `Converter.Request.rt` (`Set<String>`: `shadows`, `shadows:full`, `shadows:rays=N`). The cache key gets `rt=<sorted set>` plus a fingerprint of the RT tables and bodies **only when the set is non-empty**, so editing an RT body invalidates RT caches without a `VERSION` bump that would change the RT-off key | `Converter`, `CacheKey`, `RtPatchTable.fingerprint` |
+| Patch table (our JSON, no pack code): detect files, per effect `requires`, `options` (emitted as `const emrRt_<effect>_<option>`), helper library, built-in uniforms declared only if missing, `needs`, foliage skip ids (only when the dimension's shadow pass discards them), patches by signature | `converter/src/main/resources/rt/complementary-r5.json` |
+| `RtPatcher`: parses the preprocessed stages, matches `returnType name(paramTypes)`, checks `needs` (declared before the first patched function), replaces bodies and inserts the helpers on one line so `#line`/LineMap stay valid. All or nothing per effect: a dimension with no match stays untouched; a partial match or a missing symbol drops the effect (the pack object is returned unchanged, the reason goes to `manifest.rt.unavailable`) | `converter/glsl/RtPatcher` |
+| Helpers: `emrRtVisibility` (ray query, TerminateOnFirstHit, mask 0x01, cutout candidates alpha-tested at mip 0 against the block atlas, vertex UVs fetched through `GL_EXT_buffer_reference_uvec2` from MC's heaps, max 32 candidates); `emrRtShadowOrigin` (exact inverse of `GetShadowPos`, so all of the pack's biases stay); cone around the shadow light from `shadowModelViewInverse`, jittered with the pack's `InterleavedGradientNoiseForShadows` (TAA accumulates) | `rt/emrion_rt.glsl`, `rt/complementary/shadows.glsl` |
+| Transpiler: `#version 460` + `GL_EXT_ray_query` + buffer-reference extensions only for stages with the helper type; `accelerationStructureEXT` is an opaque uniform; buffer-reference blocks pass through verbatim. Planner: `emrRtTlas` → `acceleration_structure/emrion_tlas`, `EmrRtSections` → `storage_buffer/emrion_rt_sections`, `emrRtAtlas` → block atlas. `SpirvReflection` reports AS bindings | `GlslTranspiler`, `IrisDimensionPlanner`, FORMAT.md §10 |
+| Config `config/emrionshaders.properties`: `rt.enabled`, `rt.shadows` (hybrid/full/off), `rt.shadowRays`, `rt.distance`, `rt.device` (now read at boot too); `-Demrion.rt.<key>` overrides | `rt/RtConfig`, `RtCapability` |
+| "Emrion RT..." button on the root of the shader options screen → our own page (master switch, shadow mode, rays, RT distance, status "unsupported GPU" / "unavailable: reason" / "active (hybrid)", BLAS summary). Key `key.emrionshaders.rt` (unbound) toggles `rt.enabled` with an action-bar message | `gui/RtOptionsScreen`, `EmrionShadersClient` |
+| Swap: `PackManager.applyRt` reconverts only if the request changes, then the existing reload path swaps. `install` creates `RtScene` before the runtime's descriptor sets (and rebuilds chunks once so every mesh gets a BLAS); a non-RT install, deactivate, park or failure destroys it | `PackManager`, `RtScene.activate/shutdown` |
+| `RtScene`: fixed TLAS capacity 65 536 instances (11 MiB; `-Demrion.rt.maxInstances`), one section-table buffer with 3 frame regions (custom index = region · capacity + slot), so the TLAS and table handles never change and the pre-built descriptor sets stay valid. `rt.distance` limits the instances and the forced compiles | `rt/RtScene` |
+| Forced compilation: the shadow pass (default path, Iris/Sodium behaviour, merged to master separately) and RT (every section within the RT distance, every 8th frame) list sections; the next extraction compiles the dirty ones like MC's visible ones | `runtime/ForcedSections`, `LevelExtractorMixin` |
+| Autotest step `rt off|on|hybrid|full`; scene files `mod/emrion-rt-scenes.txt`, `mod/emrion-shadow-scenes.txt` | `AutoTest` |
+
+Deviations from §3–§5: the manifest `rt` section has no binding numbers (the bindings are ordinary resources, FORMAT.md §10);
+the effect mode is a request option (`shadows:full`), not a separate effect; Hybrid multiplies RT visibility with **one
+jittered** map tap (the pack's TAA turns its edge into a soft penumbra like its own filter) instead of a fixed single tap;
+leaves (`leaves == true` in `SampleTAAFilteredShadow`) start their rays one block out, so a leaf block does not shadow
+itself (the pack's map lets leaves through with its leaves depth offset too).
+
+### 10.2 Converter
+
+- Target pack with `rt={shadows}`: 265 stages, 0 errors, all `spirv-val --target-env vulkan1.2` clean. 28 stages patched
+  (world0 and world1: gbuffers_basic, line, textured, terrain, block, block_translucent, entities, entities_translucent,
+  lightning, entities_glowing, hand, water, hand_water, composite); world-1 has no live patch point (no shadows) and stays
+  unpatched. Unpatched stages stay `#version 450`.
+- RT off: the cache directory is byte-identical to master's for the user's pack (`diff -r` of both converters' output, and
+  the golden hash test `TargetPackRtTest.rtOffOutputMatchesGolden`). A deliberately broken table (an unknown `needs`
+  symbol, or a function the pack does not have) returns the very same pack object and an `unavailable` reason
+  (`brokenTableLeavesThePackUntouched`).
+
+### 10.3 Measured (RTX 4070 Ti, 1080p, RD 16, 25 s, pinned scene world; RT off = with forced shadow sections)
+
+| Scene | RT off | Hybrid | Full | GPU delta (Hybrid) |
+|---|---|---|---|---|
+| overview | 95.2 FPS | 88.2 | 89.3 | +0.84 ms: TLAS 0.15, gbuffers opaque 2.51 → 3.11 |
+| sunset | 145.2 | 129.9 | 129.0 | +0.76 ms: TLAS 0.16, gbuffers opaque 2.14 → 2.82 |
+| forest | 188.5 | 171.5 | 170.5 | +0.48 ms: TLAS 0.16, gbuffers opaque 1.48 → 1.66 |
+
+- The render thread spends +0.4 ms recording (TLAS instance loop over ~15 k entries, the RT forced-section list); the frame
+  stays GPU-bound.
+- With every section of RD 16 forced: 15.0 k BLAS, 11.4 M triangles, 789 MiB BLAS (72 B/triangle); `RtScene` in total
+  (BLAS, TLAS, rings, 64 MiB scratch) 844 MiB.
+- The forced shadow sections themselves (default path, also with RT off) cost FPS: overview 133–137 → 95, sunset 168.6 →
+  145.2, forest 218.2 → 188.5 (master vs. this branch); see PROGRESS (sh1 follows up).
+
+### 10.4 Done criteria
+
+- **Images** (RT off | Hybrid | Full): forest, sunset, cave and sunset_back. Ground shadows match the map's, the penumbrae are
+  soft and noise-free after TAA, there is no acne and no light leak in the cave. Hybrid adds crisp leaf-on-leaf shadows
+  in the canopy; Full keeps the map's translucent colour and has no entity shadows (RT-5).
+- **Block edits** (Full): a 4×4×4 stone block placed in the forest casts its shadow within 4 s of the command (a section
+  rebuilds in one upload), and after removing it the image matches the one from before the edit (MAE 1.1, TAA noise).
+- **5 toggles**: VMA 4752 MiB with RT, 3924 MiB without, the same on every cycle. `RtScene` (844 MiB) is freed completely.
+  The first RT on also meshes every section in render distance (MC chunk heaps 672 → 1568 MiB). That memory is MC's and
+  stays meshed after RT off; it does not grow further.
+- **Validation layer** (Steam's, BENCHMARK.md recipe; confirmed loaded via `/proc/<pid>/maps`): no messages with RT on,
+  through Full/off/Hybrid swaps and at exit.
+
+### 10.5 Open for RT-4/RT-5
+
+- RT-4 reflections: the `voxelRayTrace` patch with pack shading, then vertex-based face data so WSR's 810 MB SSBO can go.
+  A second effect in the same stage must share `emrRtSkip` and the common library (marked `shortcut:` in `RtPatcher`).
+- RT-5: BLAS compaction (about −50 %), entity BLAS per frame (Full mode then gets entity shadows), RTAO.
+- Waving leaves cast static RT shadows (the BLAS uses the unanimated vertices).
+- The RT distance only limits instances and forced compiles; BLAS outside it are still built when MC meshes them.
+

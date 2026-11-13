@@ -409,6 +409,8 @@ public final class GlslTranspiler implements Transpiler {
 					else samplers.putIfAbsent(name, new SamplerDecl(name, type));
 				} else if (GlslTypes.isImage(type)) {
 					images.putIfAbsent(name, new ImageDecl(name, type, imageFormat(u.item()), access(u.item())));
+				} else if (type.equals("accelerationStructureEXT")) { // RT variants only (RtPatcher helpers)
+					samplers.putIfAbsent(name, new SamplerDecl(name, type));
 				} else if (!GlslTypes.isOpaque(type)) {
 					int arr = u.d().hasArray() ? arrayDims(s.t, u.d().arrStart(), u.d().arrEnd()).getFirst() : 0;
 					String init = u.d().hasInit() ? GlslParser.text(s.t, u.d().initStart(), u.d().initEnd()) : null;
@@ -416,7 +418,7 @@ public final class GlslTranspiler implements Transpiler {
 				}
 			}
 			for (Item it : s.items) {
-				if (it.kind == ItemKind.BLOCK && "buffer".equals(it.storage())) {
+				if (it.kind == ItemKind.BLOCK && "buffer".equals(it.storage()) && !bufferReference(it)) {
 					buffers.putIfAbsent(it.name, new BufferDecl(it.name, layoutInt(it, "binding", 0), it.has("readonly")));
 				}
 			}
@@ -489,6 +491,11 @@ public final class GlslTranspiler implements Transpiler {
 		if (name.equals("normals")) return "EmrionNormals";
 		if (name.equals("specular")) return "EmrionSpecular";
 		return null;
+	}
+
+	/** GL_EXT_buffer_reference block type (RT helpers): a pointer type, not a descriptor. */
+	static boolean bufferReference(Item it) {
+		return it.layout != null && it.layout.stream().anyMatch(kv -> kv[0].equals("buffer_reference"));
 	}
 
 	static String imageFormat(Item it) {
@@ -926,6 +933,10 @@ public final class GlslTranspiler implements Transpiler {
 
 		void emitBlock(Item it, StringBuilder out) {
 			String storage = it.storage();
+			if (bufferReference(it)) { // RT helper pointer type: verbatim (no keyword renames, no binding)
+				out.append('\n').append(GlslParser.text(t, it.start, it.end));
+				return;
+			}
 			List<String> layout = new ArrayList<>();
 			String packing = null;
 			if (it.layout != null) for (String[] kv : it.layout) {
@@ -935,7 +946,7 @@ public final class GlslTranspiler implements Transpiler {
 			}
 			int b;
 			if ("buffer".equals(storage)) {
-				b = binding("bufferObject" + layoutInt(it, "binding", 0));
+				b = binding(it.name.equals("EmrRtSections") ? it.name : "bufferObject" + layoutInt(it, "binding", 0));
 				packing = "std140".equals(packing) ? "std140" : "std430";
 			} else if ("uniform".equals(storage)) {
 				b = binding(it.name);
@@ -1079,7 +1090,9 @@ public final class GlslTranspiler implements Transpiler {
 					}
 				}
 			}
-			StringBuilder h = new StringBuilder("#version 450\n");
+			// RT-patched stages only (RtPatcher helpers are always kept with their pointer type): ray queries need GLSL 460
+			StringBuilder h = new StringBuilder(ids.contains("EmrRtVerts") ? "#version 460\n#extension GL_EXT_ray_query : require\n"
+					+ "#extension GL_EXT_buffer_reference : require\n#extension GL_EXT_buffer_reference_uvec2 : require\n" : "#version 450\n");
 			for (Item it : s.items) {
 				if (it.kind != ItemKind.DIRECTIVE) continue;
 				String d = t.get(it.start).text.trim();

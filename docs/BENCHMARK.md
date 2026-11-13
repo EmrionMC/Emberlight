@@ -440,6 +440,21 @@ final table (MAE 0.28–1.01).
 Observed but not caused by us: in 256x runs, master included, the benchmark often ends in 180–200 frames pinned at exactly
 33.3 ms. This looks like presentation or compositor throttling. Medians are used where it matters.
 
+## M7 RT shadows (2026-11-13, `m7/rt2-shadows`)
+
+Same hardware and route; 25 s per run with `-Demrion.autotest.profile=true`; "RT off" includes the forced shadow sections
+(master since 2026-11-13). RT on: `-Demrion.rt.enabled=true -Demrion.rt.shadows=hybrid|full`.
+
+| Scene | master before forced sections | RT off | RT Hybrid | RT Full |
+|---|---|---|---|---|
+| overview | 133.4 / 136.7 | 95.9 / 94.5 | 88.2 | 89.3 |
+| sunset | 168.6 | 145.2 | 129.9 | 129.0 |
+| forest | 218.2 | 188.5 | 171.5 | 170.5 |
+
+RT GPU cost per frame: TLAS build 0.15–0.16 ms, plus the ray queries inside `gbuffers opaque` (+0.2 to +0.7 ms). The
+forced shadow sections cost `shadow_opaque` 0.47 → 3.25 ms in the overview (sections behind the camera and in the voxel
+safe zone now have meshes, as under Iris/Sodium). RT comparison images and VRAM numbers: RAYTRACING.md §10.
+
 ## Robustness tests (M6)
 
 `-Demrion.autotest.script="step;step;..."` runs after the scene shots (full list in `AutoTest`'s Javadoc): `wait S`,

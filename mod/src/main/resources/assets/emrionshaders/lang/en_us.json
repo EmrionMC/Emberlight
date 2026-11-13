@@ -4,5 +4,6 @@
   "key.emrionshaders.reload": "Reload Shader Pack",
   "key.emrionshaders.toggle": "Toggle Shaders",
   "key.emrionshaders.wireframe": "Wireframe (debug mode, singleplayer)",
-  "key.category.emrionshaders.main": "Emrion Shaders"
+  "key.category.emrionshaders.main": "Emrion Shaders",
+  "key.emrionshaders.rt": "Toggle ray tracing (Emrion RT)"
 }

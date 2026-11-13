@@ -101,6 +101,25 @@ export JAVA_HOME=/path/to/jdk25+   # Java 25 or newer
 | Distant Horizons / Voxy / Colorwheel / Photonics hooks | ❌ |
 | OpenGL backend | ❌ (Vulkan only, by design) |
 
+## Optional ray tracing (Emrion RT)
+
+Off by default. With RT off the pack is converted and rendered exactly as without RT support (same cache, same shaders, no
+RT objects). On GPUs with `VK_KHR_ray_query` (tested: RTX 4070 Ti) RT can replace the pack's shadow-map lookups with
+hardware ray-traced sun and moon shadows, while the pack's own lighting, noise and TAA stay in charge.
+
+- **Enable:** shader options → **Emrion RT...** (top left of the main options screen) → *Ray tracing: ON* → Apply. Or bind the
+  key *Toggle ray tracing (Emrion RT)* in Controls → Emrion Shaders. The first switch reconverts the pack (a few seconds),
+  later switches hit the cache.
+- **Modes:** *Hybrid* (default): RT terrain shadows times one jittered tap of the pack's shadow map, which keeps entity
+  shadows, coloured glass and water caustics. *Full*: RT shadows only; the map adds coloured glass and caustics, entities cast
+  no shadow yet. *Shadow rays per pixel* (default 1, the pack's TAA accumulates) and *RT distance* are on the same page.
+- **Cost** (1080p, RD 16): 0.5–0.8 ms GPU per frame, 9–11 % FPS (sunset 145 → 130, forest 189 → 172). About 0.85 GB of extra
+  VRAM for the acceleration structures, and MC keeps every section within the render distance meshed.
+- **Config:** `config/emrionshaders.properties` (`rt.enabled`, `rt.shadows=hybrid|full|off`, `rt.shadowRays`, `rt.distance`,
+  `rt.device=false` turns the RT device setup off entirely). The Iris settings file is never touched.
+- **Packs:** Complementary Reimagined/Unbound r5 (and Euphoria Patches). Other packs show "unavailable: no RT patch table".
+  Details: docs/RAYTRACING.md.
+
 ## Known limitations
 
 - Developed and tested against one pack (Complementary Unbound + Euphoria Patches). Other packs may hit unimplemented paths.

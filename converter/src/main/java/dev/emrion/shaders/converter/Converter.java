@@ -18,8 +18,18 @@ public interface Converter {
 	 * @param cacheRoot output root; result goes to cacheRoot/&lt;cacheKey&gt;/
 	 * @param dimensions dimension folders to convert, null or empty = all
 	 * @param useCache  false = convert even if a valid cache directory exists (and replace it)
+	 * @param rt        RT effects to patch in (RAYTRACING.md §3.2), e.g. "shadows" or "shadows:full"; empty = today's output exactly
 	 */
-	record Request(Path pack, Path settings, Path cacheRoot, List<String> dimensions, ProgressListener progress, boolean useCache) {
+	record Request(Path pack, Path settings, Path cacheRoot, List<String> dimensions, ProgressListener progress, boolean useCache,
+	               java.util.Set<String> rt) {
+		public Request {
+			rt = rt == null ? java.util.Set.of() : java.util.Set.copyOf(rt);
+		}
+
+		public Request(Path pack, Path settings, Path cacheRoot, List<String> dimensions, ProgressListener progress, boolean useCache) {
+			this(pack, settings, cacheRoot, dimensions, progress, useCache, java.util.Set.of());
+		}
+
 		public Request(Path pack, Path settings, Path cacheRoot, List<String> dimensions, ProgressListener progress) {
 			this(pack, settings, cacheRoot, dimensions, progress, true);
 		}

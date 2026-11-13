@@ -5,7 +5,7 @@ public final class GlslTypes {
 	private GlslTypes() {}
 
 	public static boolean isOpaque(String type) {
-		return type.matches("[iu]?(sampler|image|texture|subpassInput).*") || type.equals("atomic_uint");
+		return type.matches("[iu]?(sampler|image|texture|subpassInput).*") || type.equals("atomic_uint") || type.equals("accelerationStructureEXT");
 	}
 
 	public static boolean isSampler(String type) { return type.matches("[iu]?sampler.*"); }

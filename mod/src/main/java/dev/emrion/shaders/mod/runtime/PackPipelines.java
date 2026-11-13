@@ -107,6 +107,7 @@ public final class PackPipelines {
 			case "sampled_image" -> VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 			case "storage_image" -> VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
 			case "storage_buffer" -> VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+			case "acceleration_structure" -> org.lwjgl.vulkan.KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
 			default -> throw new IllegalArgumentException("unknown resource kind " + kind);
 		};
 	}

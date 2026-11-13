@@ -47,6 +47,7 @@ public final class EmrionShadersClient implements ClientModInitializer {
 		KeyMapping profilerKey = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.emrionshaders.profiler", InputConstants.KEY_F7, category));
 		// unbound like Iris's; works only in debug mode and singleplayer
 		KeyMapping wireframeKey = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.emrionshaders.wireframe", InputConstants.UNKNOWN.getValue(), category));
+		KeyMapping rtKey = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.emrionshaders.rt", InputConstants.UNKNOWN.getValue(), category));
 		ClientTickEvents.END_CLIENT_TICK.register(mc -> {
 			while (packKey.consumeClick()) mc.gui.setScreen(new PackScreen(mc.gui.screen())); // on OpenGL it explains how to get Vulkan
 			while (toggleKey.consumeClick()) if (active) {
@@ -66,6 +67,18 @@ public final class EmrionShadersClient implements ClientModInitializer {
 				mc.gui.hud.setOverlayMessage(Component.literal(msg), false);
 			}
 			if (dev.emrion.shaders.mod.pipeline.GeometryPipelines.wireframe && !mc.isLocalServer()) PackManager.setWireframe(false); // left singleplayer
+			while (rtKey.consumeClick()) if (active) {
+				String msg;
+				if (!dev.emrion.shaders.mod.rt.RtCapability.enabled) msg = "RT: not supported by this GPU";
+				else {
+					dev.emrion.shaders.mod.rt.RtConfig.enabled = !dev.emrion.shaders.mod.rt.RtConfig.enabled;
+					PackManager.applyRt();
+					var req = dev.emrion.shaders.mod.rt.RtConfig.request();
+					msg = !dev.emrion.shaders.mod.rt.RtConfig.enabled ? "RT off" : req.isEmpty() ? "RT on, but no effect selected"
+							: "RT on: shadows (" + dev.emrion.shaders.mod.rt.RtConfig.shadows + ")";
+				}
+				mc.gui.hud.setOverlayMessage(Component.literal(msg), false);
+			}
 			while (profilerKey.consumeClick()) if (active) Profiler.visible = !Profiler.visible;
 			while (reloadKey.consumeClick()) if (active && PackManager.selected() != null) {
 				PackManager.reload();

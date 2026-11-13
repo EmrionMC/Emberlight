@@ -7,6 +7,7 @@ import static org.lwjgl.vulkan.VK12.*;
 import com.mojang.renderpearl.backend.vulkan.VulkanGpuBuffer;
 import dev.emrion.shaders.mod.EmrionShadersClient;
 import dev.emrion.shaders.mod.debug.Profiler;
+import dev.emrion.shaders.mod.runtime.ForcedSections;
 import dev.emrion.shaders.mod.runtime.Formats;
 import dev.emrion.shaders.mod.vertex.EmrionVertexFormats;
 import dev.emrion.shaders.mod.vk.Barriers;
@@ -27,6 +28,7 @@ import net.minecraft.client.renderer.chunk.ChunkSectionLayer;
 import net.minecraft.client.renderer.chunk.CompiledSectionMesh;
 import net.minecraft.client.renderer.chunk.SectionMesh;
 import net.minecraft.client.renderer.chunk.SectionRenderDispatcher;
+import net.minecraft.core.SectionPos;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
 import org.lwjgl.PointerBuffer;
@@ -60,6 +62,11 @@ public final class RtScene {
 	private static final long BUDGET = Long.getLong("emrion.rt.blasBudget", 2_000_000L); // triangles per frame
 	private static final long SCRATCH_SIZE = 64L << 20;
 	private static final int RING = UboRing.REGIONS;
+	/**
+	 * Fixed TLAS capacity: the TLAS and the section table never move, so the pack's descriptor sets (written once per runtime)
+	 * stay valid. 64 k instances cover RD 16 with every section forced (26 k sections x up to 3 layers, mostly empty).
+	 */
+	private static final int CAPACITY = Integer.getInteger("emrion.rt.maxInstances", 65536);
 	private static final long AS_BUILD = KHRSynchronization2.VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
 	private static final long AS_READ = KHRSynchronization2.VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
 	private static final long AS_WRITE = KHRSynchronization2.VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
@@ -96,11 +103,13 @@ public final class RtScene {
 	private final RawBuffer scratch;
 	private @Nullable RawBuffer indices;
 	private int indexQuads;
-	// TLAS: fixed capacity, re-created when outgrown; instance + section table rings (host-written per frame)
-	private int capacity;
+	// TLAS: fixed capacity; instance + section table rings (host-written per frame)
 	private long tlas, tlasAddr;
 	private @Nullable RawBuffer tlasStorage, tlasScratch;
-	private final RawBuffer[] instances = new RawBuffer[RING], sections = new RawBuffer[RING];
+	private final RawBuffer[] instances = new RawBuffer[RING];
+	/** EmrionRtSections: RING regions of CAPACITY entries; instanceCustomIndex = region * CAPACITY + slot. */
+	private @Nullable RawBuffer sections;
+	private boolean overflowWarned;
 	private int frame;
 	private boolean tlasValid;
 	// stats
@@ -118,10 +127,23 @@ public final class RtScene {
 			scratchAlign = Math.max(1, as.minAccelerationStructureScratchOffsetAlignment());
 		}
 		scratch = new RawBuffer(ctx, SCRATCH_SIZE, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false, "rt blas scratch");
-		EmrionShadersClient.LOG.info("RT: scene created (BLAS budget {} triangles/frame, scratch alignment {})", BUDGET, scratchAlign);
+		ensureCapacity();
+		EmrionShadersClient.LOG.info("RT: scene created, TLAS capacity {} instances, BLAS budget {} triangles/frame, scratch alignment {}", CAPACITY, BUDGET, scratchAlign);
 	}
 
 	public static @Nullable RtScene get() {
+		return instance;
+	}
+
+	/**
+	 * An RT runtime is being installed (PackManager): creates the scene, then rebuilds all chunks so every section's mesh is
+	 * uploaded again and gets its BLAS (MC keeps no CPU copy to walk). Render thread.
+	 */
+	public static RtScene activate() {
+		if (instance != null) return instance;
+		instance = new RtScene();
+		Minecraft mc = Minecraft.getInstance();
+		mc.execute(() -> mc.levelExtractor.allChanged());
 		return instance;
 	}
 
@@ -129,8 +151,11 @@ public final class RtScene {
 
 	/** RenderSection.vertexBufferUploadCallback HEAD (render thread, inside the upload): the layer's vertices were just copied. */
 	public static void onVertexUploaded(SectionRenderDispatcher.RenderSection section, CompiledSectionMesh mesh, ChunkSectionLayer layer) {
-		if (!RtCapability.enabled || !RtCapability.DEBUG || !EmrionVertexFormats.active()) return;
-		if (instance == null) instance = new RtScene();
+		if (!RtCapability.enabled || !EmrionVertexFormats.active()) return;
+		if (instance == null) {
+			if (!RtCapability.DEBUG) return; // only an RT runtime (activate) or the RT-1 debug view create the scene
+			instance = new RtScene();
+		}
 		instance.uploaded.add(new Entry(section, mesh, layer));
 	}
 
@@ -161,7 +186,8 @@ public final class RtScene {
 		onDispose();
 		s.scratch.destroyLater();
 		if (s.indices != null) s.indices.destroyLater();
-		for (int r = 0; r < RING; r++) if (s.instances[r] != null) { s.instances[r].destroyLater(); s.sections[r].destroyLater(); }
+		for (int r = 0; r < RING; r++) if (s.instances[r] != null) s.instances[r].destroyLater();
+		if (s.sections != null) s.sections.destroyLater();
 		if (s.tlas != 0) {
 			long t = s.tlas;
 			s.ctx.destroyLater(() -> vkDestroyAccelerationStructureKHR(s.ctx.vk, t, null));
@@ -170,6 +196,7 @@ public final class RtScene {
 		}
 		s.timer.close();
 		instance = null;
+		EmrionShadersClient.LOG.info("RT: scene destroyed");
 	}
 
 	// ---- BLAS ---------------------------------------------------------------------------------------------------------------
@@ -340,14 +367,19 @@ public final class RtScene {
 	public void buildTlas(VkCommandBuffer cb) {
 		Vec3 cam = Minecraft.getInstance().gameRenderer.mainCamera().position();
 		frame = (frame + 1) % RING;
-		int n = 0;
-		for (Entry[] arr : entries.values()) for (Entry e : arr) if (e != null && e.blas != 0) n++;
-		ensureCapacity(n);
-		long inst = instances[frame].mapped, sec = sections[frame].mapped;
+		if ((++wantCounter & 7) == 0) wantSections(cam);
+		long inst = instances[frame].mapped, sec = sections.mapped + (long) frame * CAPACITY * 16;
+		double maxDist = RtConfig.distanceBlocks();
 		int i = 0;
 		for (Entry[] arr : entries.values()) {
 			for (Entry e : arr) {
 				if (e == null || e.blas == 0 || e.section.getSectionMesh() != e.mesh) continue; // a newer mesh is not complete yet
+				if (maxDist > 0 && Math.max(Math.abs(e.x + 8 - cam.x), Math.abs(e.z + 8 - cam.z)) > maxDist + 8) continue;
+				if (i == CAPACITY) {
+					if (!overflowWarned) EmrionShadersClient.LOG.warn("RT: more than {} instances, the rest is left out (-Demrion.rt.maxInstances)", CAPACITY);
+					overflowWarned = true;
+					break;
+				}
 				long a = inst + (long) i * VkAccelerationStructureInstanceKHR.SIZEOF;
 				// 3x4 row-major: identity rotation, camera-relative translation
 				MemoryUtil.memPutFloat(a, 1f); MemoryUtil.memPutFloat(a + 4, 0f); MemoryUtil.memPutFloat(a + 8, 0f);
@@ -357,7 +389,7 @@ public final class RtScene {
 				MemoryUtil.memPutFloat(a + 32, 0f); MemoryUtil.memPutFloat(a + 36, 0f); MemoryUtil.memPutFloat(a + 40, 1f);
 				MemoryUtil.memPutFloat(a + 44, (float) (e.z - cam.z));
 				int mask = e.layer == ChunkSectionLayer.TRANSLUCENT ? 0x02 : 0x01;
-				MemoryUtil.memPutInt(a + 48, i | mask << 24); // instanceCustomIndex = section table slot
+				MemoryUtil.memPutInt(a + 48, (frame * CAPACITY + i) | mask << 24); // instanceCustomIndex = section table entry
 				MemoryUtil.memPutInt(a + 52, VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR << 24);
 				MemoryUtil.memPutLong(a + 56, e.blasAddr);
 				long s = sec + i * 16L; // EmrionRtSections: uvec2 vertexAddr, uint layer, uint pad
@@ -385,21 +417,30 @@ public final class RtScene {
 		tlasValid = true;
 	}
 
-	private void ensureCapacity(int n) {
-		if (n <= capacity && tlas != 0) return;
-		int cap = Math.max(4096, Integer.highestOneBit(Math.max(1, n)) << 1);
-		for (int r = 0; r < RING; r++) {
-			if (instances[r] != null) { instances[r].destroyLater(); sections[r].destroyLater(); }
+	private int wantCounter;
+
+	/**
+	 * RT sees everything within the RT distance, not only what the camera's visibility graph reached: asks for those sections to
+	 * be compiled (ForcedSections; every 8th frame, a compile takes longer than that anyway).
+	 */
+	private static void wantSections(Vec3 cam) {
+		var area = Minecraft.getInstance().levelRenderer.viewArea();
+		if (area == null) return;
+		var center = area.getCameraSectionPos();
+		int r = area.getViewDistance();
+		double maxDist = RtConfig.distanceBlocks();
+		if (maxDist > 0) r = Math.min(r, (int) Math.ceil(maxDist / 16));
+		for (int sx = center.x() - r; sx <= center.x() + r; sx++)
+			for (int sz = center.z() - r; sz <= center.z() + r; sz++)
+				for (int sy = area.minSectionY(); sy < area.maxSectionY(); sy++) ForcedSections.want(SectionPos.asLong(sx, sy, sz));
+	}
+
+	private void ensureCapacity() {
+		int cap = CAPACITY;
+		for (int r = 0; r < RING; r++)
 			instances[r] = new RawBuffer(ctx, (long) cap * VkAccelerationStructureInstanceKHR.SIZEOF,
 					VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, true, "rt instances");
-			sections[r] = new RawBuffer(ctx, cap * 16L, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, "rt section table");
-		}
-		if (tlas != 0) {
-			long old = tlas;
-			ctx.destroyLater(() -> vkDestroyAccelerationStructureKHR(ctx.vk, old, null));
-			tlasStorage.destroyLater();
-			tlasScratch.destroyLater();
-		}
+		sections = new RawBuffer(ctx, RING * (long) cap * 16, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, "rt section table");
 		try (MemoryStack stack = MemoryStack.stackPush()) {
 			var geom = VkAccelerationStructureGeometryKHR.calloc(1, stack);
 			geom.get(0).sType$Default().geometryType(VK_GEOMETRY_TYPE_INSTANCES_KHR).geometry().instances().sType$Default();
@@ -416,7 +457,6 @@ public final class RtScene {
 			tlas = p.get(0);
 			tlasAddr = vkGetAccelerationStructureDeviceAddressKHR(ctx.vk, VkAccelerationStructureDeviceAddressInfoKHR.calloc(stack).sType$Default().accelerationStructure(tlas));
 		}
-		capacity = cap;
 		EmrionShadersClient.LOG.info("RT: TLAS capacity {} instances ({} KiB)", cap, tlasBytes >> 10);
 	}
 
@@ -425,9 +465,14 @@ public final class RtScene {
 		return tlasValid ? tlas : 0;
 	}
 
-	/** This frame's section table (EmrionRtSections), indexed by instanceCustomIndex. */
+	/** The TLAS handle for descriptor sets (fixed for the scene's lifetime; built every frame before any pass reads it). */
+	public long tlasHandle() {
+		return tlas;
+	}
+
+	/** The section table (EmrionRtSections), indexed by instanceCustomIndex; fixed for the scene's lifetime. */
 	public RawBuffer sectionTable() {
-		return sections[frame];
+		return sections;
 	}
 
 	// ---- helpers ------------------------------------------------------------------------------------------------------------
@@ -450,11 +495,16 @@ public final class RtScene {
 		long now = System.nanoTime();
 		if (now - lastLog < 5_000_000_000L) return;
 		lastLog = now;
-		long ring = RING * (long) capacity * (VkAccelerationStructureInstanceKHR.SIZEOF + 16);
+		long ring = RING * (long) CAPACITY * (VkAccelerationStructureInstanceKHR.SIZEOF + 16);
 		EmrionShadersClient.LOG.info("RT: {} BLAS ({} pending), {} triangles, BLAS {} MiB (avg {} B/tri), TLAS {} instances {} KiB, scratch {} MiB, "
 						+ "instance+table rings {} MiB; GPU BLAS build time so far {} ms for {} builds, worst frame {} us",
 				entriesBuilt(), pending.size(), triangles, blasBytes >> 20, triangles == 0 ? 0 : blasBytes / triangles, instanceCount, tlasBytes >> 10,
 				SCRATCH_SIZE >> 20, ring >> 20, gpuBuildNs / 1_000_000, built, maxFrameBuildNs / 1000);
+	}
+
+	/** One line for the RT options page. */
+	public String summary() {
+		return String.format("BLAS: %d MiB, %d section layers, %.1f M triangles; TLAS %d instances", blasBytes >> 20, entriesBuilt(), triangles / 1e6, instanceCount);
 	}
 
 	private int entriesBuilt() {

@@ -85,7 +85,7 @@ public final class DefaultConverter implements Converter {
 		try (PackSource source = opener.open(request.pack());
 		     ExecutorService pool = Executors.newFixedThreadPool(threads)) {
 			String packHash = source.contentHash();
-			String key = CacheKey.compute(packHash, request.settings(), environment.mcVersion(), environment.macros(), request.dimensions());
+			String key = CacheKey.compute(packHash, request.settings(), environment.mcVersion(), environment.macros(), request.dimensions(), request.rt());
 			if (request.useCache()) {
 				Result hit = cached(request.cacheRoot().resolve(key), key);
 				if (hit != null) return hit;
@@ -140,6 +140,13 @@ public final class DefaultConverter implements Converter {
 
 		Result execute() throws IOException {
 			ResolvedPack pack = loader.load(source, request.settings(), environment.macros(), diagnostics);
+			Manifest.Rt rt = null;
+			if (!request.rt().isEmpty()) { // RT variant (RAYTRACING.md §3.2); an empty set never gets here
+				var patched = dev.emrion.shaders.converter.glsl.RtPatcher.apply(pack, request.rt());
+				pack = patched.pack();
+				rt = patched.rt();
+				diagnostics.addAll(patched.diagnostics());
+			}
 			progress.progress("load", 1, 1);
 			List<Manifest.CustomUniform> custom = customUniforms.parse(pack.properties(), diagnostics);
 			List<String> dims = selectDimensions(pack);
@@ -180,7 +187,7 @@ public final class DefaultConverter implements Converter {
 			}
 			Manifest manifest = new Manifest(Manifest.FORMAT_VERSION, VERSION, key, new Manifest.PackInfo(source.name(), packHash),
 					environment, pack.options(), packProperties(pack), layout, pack.idMaps(), copyTextures(plans, tmp),
-					pack.dimensionMap(), dimensions);
+					pack.dimensionMap(), dimensions, rt);
 			ManifestJson.write(tmp.resolve(CacheDir.MANIFEST), manifest);
 			List<Diagnostic> all = diagnostics.all();
 			ManifestJson.write(tmp.resolve(CacheDir.REPORT), new Report(!diagnostics.hasErrors(), programs, compiled, failed[0], all));

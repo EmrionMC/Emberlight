@@ -49,7 +49,8 @@ The JSON examples below show intent. Where an example and `Manifest.java` disagr
   "idMaps": { … §8 … },
   "textures": [ … §7.3 … ],               // custom textures (files in textures/)
   "dimensionMap": [ { "match": "minecraft:overworld", "folder": "world0" }, … ],  // exact ids win; then globs ("*:*") in list order
-  "dimensions": { "world0": { … §7 … }, "world-1": { … }, "world1": { … } }
+  "dimensions": { "world0": { … §7 … }, "world-1": { … }, "world1": { … } },
+  "rt": { … §10 … }                       // only in RT variants (the request had RT effects)
 }
 ```
 
@@ -344,3 +345,27 @@ resolves them against the registry. First match wins in file order.
 ```
 Errors are collected per stage and never abort the run. A failed stage leaves its program out of the plan, and the mod
 falls back as Iris does (the program is skipped and its fallback chain is used for gbuffers).
+
+## 10. rt (RT variants only, RAYTRACING.md §3.2)
+
+Present only when the converter request carried RT effects; the RT-off output has no `rt` key and is byte-identical to a
+conversion without RT support. The cache key adds `rt=<sorted request>` only then.
+
+```jsonc
+"rt": {
+  "effects": ["shadows", "shadows:full"],                       // applied request entries (effect[:option])
+  "unavailable": { "reflections": "table complementary-r5 has no reflections patches" },
+  "patched": { "shadows": ["world0/gbuffers_terrain.fsh", "world0/composite.fsh", …] }
+}
+```
+
+Resources added to set 1 of the patched programs (bindings assigned like any other resource):
+
+| kind | builtin | What the mod binds |
+|---|---|---|
+| `acceleration_structure` | `emrion_tlas` | `RtScene`'s TLAS (fixed for the scene's lifetime, rebuilt every frame) |
+| `storage_buffer` | `emrion_rt_sections` | `RtScene`'s section table (`uvec4`: vertex heap address lo/hi, layer, pad), indexed by `instanceCustomIndex` |
+| `sampled_image` | `block_atlas` | the block atlas (alpha test of cutout hits) |
+
+Patched stages are emitted as `#version 460` with `GL_EXT_ray_query`, `GL_EXT_buffer_reference` and
+`GL_EXT_buffer_reference_uvec2`; every other stage stays `#version 450`.

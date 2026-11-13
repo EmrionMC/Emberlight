@@ -73,6 +73,9 @@ public final class ShaderOptionsScreen extends Screen {
 		}
 		int bw = 98, y = height - 26;
 		boolean root = id.isEmpty();
+		// our own page, outside the pack's screen tree (RAYTRACING.md §5)
+		if (root) addRenderableWidget(Button.builder(Component.literal("Emrion RT..."), b -> minecraft.gui.setScreen(new RtOptionsScreen(this)))
+				.bounds(6, 6, 80, 20).build());
 		addRenderableWidget(Button.builder(Component.literal(root ? "Cancel" : "Back"), b -> onClose()).bounds(width / 2 - 151, y, bw, 20).build());
 		addRenderableWidget(Button.builder(Component.literal("Apply"), b -> apply()).bounds(width / 2 - 49, y, bw, 20).build());
 		addRenderableWidget(Button.builder(Component.literal("Done"), b -> {
