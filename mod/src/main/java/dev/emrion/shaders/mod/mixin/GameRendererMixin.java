@@ -49,6 +49,7 @@ public class GameRendererMixin {
 	@Inject(method = "renderLevel", at = @At("TAIL"))
 	private void emrion$afterLevel(CallbackInfo ci) {
 		if (EmrionShadersClient.active() && DebugPost.ENABLED) DebugPost.onRenderLevelEnd();
+		if (EmrionShadersClient.active() && dev.emrion.shaders.mod.rt.RtCapability.DEBUG) dev.emrion.shaders.mod.rt.RtDebugView.onRenderLevelEnd();
 	}
 
 	@Inject(method = "useImprovedTransparency", at = @At("HEAD"), cancellable = true)

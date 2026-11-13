@@ -1,6 +1,6 @@
 # Emrion Shaders — Optional hardware ray tracing (M7 design)
 
-Status: design (2026-11-13), nothing implemented yet. This document answers *how* M7 plugs hardware ray tracing (RT) into
+Status: RT-1 (infrastructure) implemented and measured on `m7/rt1-infra` (2026-11-13, §9); RT-2…RT-5 are design. This document answers *how* M7 plugs hardware ray tracing (RT) into
 the existing renderer without touching the Iris-equivalent path. Read [ARCHITECTURE.md](ARCHITECTURE.md) (§4.1 transpiler,
 §5 runtime, §6 mixins) and [FORMAT.md](FORMAT.md) first. Pack code is only referenced by file:line (paths relative to
 `testpacks/unbound-euphoria/shaders/`). It is never copied.
@@ -103,7 +103,7 @@ New package `dev.emrion.shaders.mod.rt`:
   does, `EmrionVertexFormats.rebuildChunks`). This is simpler than walking MC's allocation maps and costs about 1–2 s of chunk
   rebuilding, which only happens when the user switches RT on.
 
-### 2.4 Memory budget at RD 16 (estimate; step 1 logs the real numbers)
+### 2.4 Memory budget at RD 16 (estimate; measured numbers in §9.2)
 
 - RD 16 → 33² = 1089 columns × 24 sections = 26 k sections. About 30–50 % are non-empty: the surface plus cave walls
   (underground stone is face-culled).
@@ -372,3 +372,75 @@ is used (bias, colour, fog, TAA), which keeps the look close to Iris apart from 
 Order rationale: RT-1 can be built and verified without touching the converter or the pack (debug view only). RT-2 can be
 verified without any visible RT effect (patch plumbing, toggling, bit-identity). Each later step adds one effect behind its
 own switch.
+
+## 9. RT-1 results (2026-11-13, `m7/rt1-infra`)
+
+### 9.1 What is built
+
+| Piece | Where |
+|---|---|
+| "Emrion RT" `FeatureSet` (3 extensions, `accelerationStructure`, `rayQuery`, `bufferDeviceAddress`), requested unless `-Demrion.rt.device=false` | `rt/RtCapability`, `VulkanFeatureSetsMixin` |
+| `RtCapability.enabled` from a `createDevice` HEAD inject; VMA `BUFFER_DEVICE_ADDRESS` flag only then | `VulkanBackendRtMixin` |
+| `Formats.USAGE_RT_INPUT` (1 << 12) on vertex heaps only, mapped to `SHADER_DEVICE_ADDRESS | AS_BUILD_INPUT_READ_ONLY` | `UberGpuBufferRtMixin`, `VulkanConstMixin.bufferUsageToVk` |
+| Section events: `vertexBufferUploadCallback` HEAD (add), `releaseSectionMesh` HEAD (remove, any thread, queued), `uploadTerrainBuffersToGpu` TAIL (apply + build), `dispose` HEAD (drop all) | `RenderSectionRtMixin`, `SectionRenderDispatcherRtMixin` |
+| BLAS per (section mesh, layer), budgeted batches, 64 MiB scratch ring; TLAS per frame in `FrameExecutor.levelStart`'s raw command buffer, camera-relative, plus the `EmrionRtSections` table (uvec2 vertex address, layer) | `rt/RtScene` |
+| Debug view `-Demrion.rt.debug=true`: compute ray query from the camera (face normals faded by distance, cutout alpha test against the block atlas), copied over the final image | `rt/RtDebugView`, `glsl/rt_debug.comp` |
+| Geometry check: raster | traced | raster with traced edges | `mod/tools/rt_overlay.py <raster-dir> <traced-dir> <out>` |
+| F7 / `-Demrion.debug.timings`: "RT: BLAS builds", "RT: TLAS build", "RT: debug view"; with the debug switch a 5 s log line with counts, memory and build times | `Profiler` marks, `RtScene.log` |
+
+Deviations from §2: no `AccelPool` (each BLAS is its own VMA buffer; VMA already sub-allocates them from its blocks, and 4.5 k
+buffers caused no measurable cost), no separate `SectionTracker` class (the queue lives in `RtScene`), BLAS built with
+`PREFER_FAST_TRACE` only (`ALLOW_COMPACTION` comes with compaction in RT-5), instance and section-table data are rewritten
+per frame into a 3-slot host-visible ring (custom index = slot), and the config key `rt.device` is not read yet (only the
+system property). An instance is only added while its mesh is the section's current mesh, so a half-uploaded re-mesh never
+doubles geometry. The debug view has one mode (normals), not normals/instances/albedo.
+
+**Finding for RT-3:** MC 26.3 compiles only sections that the frustum + occlusion graph has reached
+(`LevelExtractor`: `sectionUpdateRenderStates` from `visibleSections()`). The TLAS therefore holds what was ever visible:
+sections behind the camera at join, unseen caves and dirty sections outside the view keep no or stale meshes. For shadows
+and reflections from off-screen geometry, RT-2/3 must schedule compiles for all sections within the RT distance (a mixin on
+that loop), which also costs chunk-meshing time and vertex-heap memory.
+
+### 9.2 Measured (RTX 4070 Ti, NVIDIA 615.78, 1080p, RD 16, scene world seed 2026)
+
+| | Overview at load | Overview after a full turn (4 yaws, up, down) | Forest |
+|---|---|---|---|
+| BLAS (section × layer) | 1 623 | 4 450 | 1 223 |
+| Triangles | 1.22 M | 5.04 M | 1.62 M |
+| BLAS memory (uncompacted) | 84 MiB | 346 MiB | 110 MiB |
+| Bytes per triangle | 72 | 71 | 71 |
+
+- TLAS: 1.4 MiB at 8 192-instance capacity (0.7 MiB at 4 096), build **0.13 ms** GPU per frame (0.12–0.21). Scratch 64 MiB,
+  TLAS scratch and instance/table rings ≈ 1 MiB. Total at the full turn ≈ 410 MiB.
+- BLAS builds: ≈ 16 µs GPU per section BLAS on average (80 ms for 5 020 builds incl. re-meshes); worst single frame during
+  the initial load 1.9 ms with the default budget of 2 M triangles per frame (`-Demrion.rt.blasBudget`), 1.35 ms at 100 k.
+  MC's own upload rate spreads the load over many frames, so the budget rarely binds.
+- The §2.4 estimate (10–20 M triangles, 0.6–1.8 GB) assumed every non-empty section is meshed. With MC's visibility-driven
+  meshing the real set is 1–5 M triangles; forcing all sections (finding above) would move it towards the estimate.
+- Debug view (one ray per pixel, alpha-tested candidates): 0.2–1.1 ms.
+
+### 9.3 Done criteria
+
+- **Geometry:** the traced image matches the raster image at RD 16 in overview, forest and cave, including cutout holes
+  (leaves, glass, torches, fence). Block break/place test in the cave (hole in the wall, leaves/glass/stone/fence placed,
+  six break/restore cycles, restore): every state matches the raster run, no stale geometry
+  (`rt_overlay.py` panels).
+- **Validation layer** (Steam's layer, BENCHMARK.md recipe) with the debug view and the edit test: no messages, nothing
+  alive at exit (`RtScene.shutdown`, `RtDebugView.shutdown` on client stop).
+- **RT off = master** (pinned `frameTimeCounter=100`, 8 scenes, MAE / SSIM):
+
+| Scene | RT off vs master | `rt.device=false` vs master | master vs master (floor) | RT off vs Iris (pinned refs) |
+|---|---|---|---|---|
+| overview | 0.44 / 0.996 | 0.33 / 0.997 | 0.41 / 0.996 | 0.47 / 0.996 |
+| forest | 0.46 / 0.994 | 0.62 / 0.992 | 0.55 / 0.994 | 0.67 / 0.993 |
+| water | 0.49 / 0.993 | 0.62 / 0.989 | 0.57 / 0.991 | 0.78 / 0.985 |
+| cave | 0.24 / 0.998 | 0.27 / 0.997 | 0.27 / 0.998 | 0.28 / 0.997 |
+| sunset | 0.33 / 0.996 | 0.34 / 0.996 | 0.35 / 0.996 | 0.57 / 0.995 |
+| night | 0.21 / 0.998 | 0.09 / 0.999 | 0.22 / 0.998 | 0.49 / 0.989 |
+| rain | 0.91 / 0.980 | 0.74 / 0.984 | 0.89 / 0.981 | 0.98 / 0.979 |
+| entities | 0.51 / 0.992 | 0.52 / 0.991 | 0.82 / 0.989 | 0.72 / 0.992 |
+
+  All inside master's own run-to-run floor (rain 0.91 vs 0.89 and overview 0.44 vs 0.41 are within the ±0.05 spread).
+- **FPS** (overview, 30 s, interleaved): RT-capable device, RT off 135.8 / 136.4 / 139.0 (mean **137.1**, 1 % low 111.1 /
+  56.7* / 111.9) vs `-Demrion.rt.device=false` 137.6 / 139.6 / 135.5 (mean **137.6**, 1 % low 110.7 / 114.5 / 64.7*);
+  *one hitch each. The difference is inside the ±2 FPS run-to-run spread, so the boot-time device setup stays on by default.

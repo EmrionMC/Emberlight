@@ -49,7 +49,11 @@
     "StagedVertexBufferMixin",
     "VertexDebugMixin",
     "VramLabelMixin",
-    "VramBufferLabelMixin"
+    "VramBufferLabelMixin",
+    "VulkanBackendRtMixin",
+    "UberGpuBufferRtMixin",
+    "SectionRenderDispatcherRtMixin",
+    "RenderSectionRtMixin"
   ],
   "injectors": {
     "defaultRequire": 1

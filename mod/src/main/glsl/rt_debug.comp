@@ -1,0 +1,48 @@
+#version 460
+// RT-1 debug view (-Demrion.rt.debug=true): traces the TLAS from the camera, writes face normals faded by distance.
+// Cutout/translucent candidates are alpha-tested against the block atlas (cutoff 0.1, mip 0) like the pack's cutout.
+#extension GL_EXT_ray_query : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform accelerationStructureEXT tlas;
+layout(set = 0, binding = 1, rgba8) uniform writeonly image2D outImg;
+layout(set = 0, binding = 2, std430) readonly buffer Sections { uvec4 sections[]; }; // xy vertex address, z layer
+layout(set = 0, binding = 3) uniform sampler2D atlas;
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Verts { float f[]; };
+layout(push_constant) uniform Push { mat4 invViewProj; vec4 size; } pc;
+
+const uint STRIDE = 14u; // EMRION_BLOCK, 56 B
+vec3 pos(Verts v, uint i) { uint b = i * STRIDE; return vec3(v.f[b], v.f[b + 1u], v.f[b + 2u]); }
+vec2 uv(Verts v, uint i) { uint b = i * STRIDE + 4u; return vec2(v.f[b], v.f[b + 1u]); }
+// RtQuadIndices: triangle 0 = (0,1,2), triangle 1 = (2,3,0) of each quad
+uvec3 tri(uint prim) { uint q = (prim >> 1) * 4u; return (prim & 1u) == 0u ? uvec3(q, q + 1u, q + 2u) : uvec3(q + 2u, q + 3u, q); }
+
+void main() {
+    ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(px, ivec2(pc.size.xy)))) return;
+    vec2 ndc = (vec2(px) + 0.5) / pc.size.xy * 2.0 - 1.0; // MC on Vulkan: NDC y down, like the framebuffer
+    vec4 p = pc.invViewProj * vec4(ndc, 0.5, 1.0);
+    vec3 dir = normalize(p.xyz / p.w);
+
+    rayQueryEXT q;
+    rayQueryInitializeEXT(q, tlas, gl_RayFlagsNoneEXT, 0xFF, vec3(0.0), 0.05, dir, 2048.0);
+    while (rayQueryProceedEXT(q)) {
+        Verts v = Verts(sections[rayQueryGetIntersectionInstanceCustomIndexEXT(q, false)].xy);
+        uvec3 t = tri(uint(rayQueryGetIntersectionPrimitiveIndexEXT(q, false)));
+        vec2 b = rayQueryGetIntersectionBarycentricsEXT(q, false);
+        vec2 u = uv(v, t.x) * (1.0 - b.x - b.y) + uv(v, t.y) * b.x + uv(v, t.z) * b.y;
+        if (textureLod(atlas, u, 0.0).a >= 0.1) rayQueryConfirmIntersectionEXT(q);
+    }
+    vec3 color = vec3(0.0);
+    if (rayQueryGetIntersectionTypeEXT(q, true) == gl_RayQueryCommittedIntersectionTriangleEXT) {
+        Verts v = Verts(sections[rayQueryGetIntersectionInstanceCustomIndexEXT(q, true)].xy);
+        uvec3 t = tri(uint(rayQueryGetIntersectionPrimitiveIndexEXT(q, true)));
+        vec3 p0 = pos(v, t.x);
+        vec3 n = normalize(cross(pos(v, t.y) - p0, pos(v, t.z) - p0));
+        if (dot(n, dir) > 0.0) n = -n;
+        float d = rayQueryGetIntersectionTEXT(q, true);
+        color = (n * 0.5 + 0.5) * mix(1.0, 0.4, clamp(d / 256.0, 0.0, 1.0));
+    }
+    imageStore(outImg, px, vec4(color, 1.0));
+}

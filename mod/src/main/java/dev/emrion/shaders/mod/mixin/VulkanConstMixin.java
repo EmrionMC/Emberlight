@@ -19,4 +19,11 @@ public class VulkanConstMixin {
 	private static void emrion$storage(int usage, GpuFormat format, CallbackInfoReturnable<Integer> cir) {
 		if ((usage & Formats.USAGE_STORAGE) != 0) cir.setReturnValue(cir.getReturnValueI() | VK10.VK_IMAGE_USAGE_STORAGE_BIT);
 	}
+
+	/** RT: MC's terrain vertex heaps get {@link Formats#USAGE_RT_INPUT} (UberGpuBufferRtMixin) so BLAS builds and ray queries can read them. */
+	@Inject(method = "bufferUsageToVk", at = @At("RETURN"), cancellable = true)
+	private static void emrion$rtInput(int usage, CallbackInfoReturnable<Integer> cir) {
+		if ((usage & Formats.USAGE_RT_INPUT) != 0) cir.setReturnValue(cir.getReturnValueI() | org.lwjgl.vulkan.VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
+				| org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR);
+	}
 }

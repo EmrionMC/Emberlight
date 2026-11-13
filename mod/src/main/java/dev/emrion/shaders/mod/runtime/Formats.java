@@ -11,6 +11,8 @@ public final class Formats {
 
 	/** Custom texture usage bit: {@code VulkanConstMixin} turns it into VK_IMAGE_USAGE_STORAGE_BIT. */
 	public static final int USAGE_STORAGE = 1 << 8;
+	/** Custom buffer usage bit (above MC's 1..512): {@code VulkanConstMixin} turns it into SHADER_DEVICE_ADDRESS | AS_BUILD_INPUT_READ_ONLY. */
+	public static final int USAGE_RT_INPUT = 1 << 12;
 
 	private static final Pattern PLAIN = Pattern.compile("(R|RG|RGB|RGBA)(8|16|32)(F|I|UI|_SNORM)?");
 

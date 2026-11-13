@@ -171,6 +171,11 @@ public final class FrameExecutor {
 		t = Profiler.cpuStart();
 		VkCommandBuffer cb = begin();
 		Profiler.mark(cb, "MC: before the level");
+		var rtScene = dev.emrion.shaders.mod.rt.RtScene.get();
+		if (rtScene != null) {
+			rtScene.buildTlas(cb);
+			Profiler.mark(cb, "RT: TLAS build");
+		}
 		if (oncePending) {
 			for (int i = 0; i < dim.once().size(); i++) {
 				run(cb, dim.once().get(i));

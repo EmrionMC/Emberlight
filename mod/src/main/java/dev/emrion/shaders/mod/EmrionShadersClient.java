@@ -89,6 +89,8 @@ public final class EmrionShadersClient implements ClientModInitializer {
 			ClientLifecycleEvents.CLIENT_STOPPING.register(c -> {
 				boolean buildsDone = PackManager.shutdown();
 				dev.emrion.shaders.mod.runtime.HorizonBox.close();
+				dev.emrion.shaders.mod.rt.RtDebugView.shutdown();
+				dev.emrion.shaders.mod.rt.RtScene.shutdown();
 				dev.emrion.shaders.mod.pbr.PbrTextures.closeDefaults();
 				VulkanContext.onShutdown(buildsDone);
 			});
