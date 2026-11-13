@@ -6,7 +6,7 @@
   "description": "Runs OptiFine/Iris shaderpacks on Minecraft's Vulkan renderer.",
   "license": "LGPL-3.0-only",
   "environment": "client",
-  "entrypoints": { "client": ["dev.emrion.shaders.mod.EmrionShadersClient"] },
+  "entrypoints": { "client": ["dev.emrion.shaders.mod.EmrionShadersClient"], "preLaunch": ["dev.emrion.shaders.mod.compat.IrisApiShim"] },
   "mixins": ["emrionshaders.mixins.json", "emrionshaders.iris.mixins.json"],
   "depends": { "fabricloader": ">=0.20.1", "minecraft": "~26.3", "fabric-api": "*" }
 }

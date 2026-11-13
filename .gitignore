@@ -15,3 +15,4 @@ mod/run-iris/
 mod/run-compare/
 /testpacks
 *.log
+mod/tools/testworld/torch_hall.schem

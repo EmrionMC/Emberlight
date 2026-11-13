@@ -42,9 +42,30 @@ public final class EmrionShadersClient implements ClientModInitializer {
 		KeyMapping packKey = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.emrionshaders.packs", InputConstants.KEY_O, category));
 		// R: free in vanilla 26.3 (Iris uses it for the same purpose)
 		KeyMapping reloadKey = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.emrionshaders.reload", InputConstants.KEY_R, category));
+		// K: Iris's toggle key, free in vanilla 26.3
+		KeyMapping toggleKey = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.emrionshaders.toggle", InputConstants.KEY_K, category));
 		KeyMapping profilerKey = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.emrionshaders.profiler", InputConstants.KEY_F7, category));
+		// unbound like Iris's; works only in debug mode and singleplayer
+		KeyMapping wireframeKey = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.emrionshaders.wireframe", InputConstants.UNKNOWN.getValue(), category));
 		ClientTickEvents.END_CLIENT_TICK.register(mc -> {
 			while (packKey.consumeClick()) mc.gui.setScreen(new PackScreen(mc.gui.screen())); // on OpenGL it explains how to get Vulkan
+			while (toggleKey.consumeClick()) if (active) {
+				boolean on = PackManager.selected() != null && !PackManager.enabled();
+				if (PackManager.selected() != null) PackManager.setEnabled(on);
+				mc.gui.hud.setOverlayMessage(Component.literal(PackManager.selected() == null ? "Shaders: no pack selected" : "Shaders: " + (on ? "on" : "off")), false);
+			}
+			while (wireframeKey.consumeClick()) if (active) {
+				String msg;
+				if (!PackManager.debugMode()) msg = "Wireframe needs debug mode (Ctrl+D in the shader pack screen)";
+				else if (!mc.isLocalServer()) msg = "No cheating; wireframe only in singleplayer!"; // Iris's wording
+				else if (!VulkanContext.get().fillModeNonSolid) msg = "Wireframe: not supported by this GPU (fillModeNonSolid)";
+				else {
+					PackManager.setWireframe(!dev.emrion.shaders.mod.pipeline.GeometryPipelines.wireframe);
+					msg = "Wireframe: " + (dev.emrion.shaders.mod.pipeline.GeometryPipelines.wireframe ? "on" : "off");
+				}
+				mc.gui.hud.setOverlayMessage(Component.literal(msg), false);
+			}
+			if (dev.emrion.shaders.mod.pipeline.GeometryPipelines.wireframe && !mc.isLocalServer()) PackManager.setWireframe(false); // left singleplayer
 			while (profilerKey.consumeClick()) if (active) Profiler.visible = !Profiler.visible;
 			while (reloadKey.consumeClick()) if (active && PackManager.selected() != null) {
 				PackManager.reload();

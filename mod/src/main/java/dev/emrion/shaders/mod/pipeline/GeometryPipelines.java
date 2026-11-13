@@ -195,6 +195,9 @@ public final class GeometryPipelines {
 		return b.build(ctx, true);
 	}
 
+	/** Wireframe debug view (PackManager.setWireframe): read when pipelines are built; needs fillModeNonSolid. */
+	public static volatile boolean wireframe;
+
 	/**
 	 * Builder preset from the vanilla pipeline: vertex input (canonical locations, VertexLayouts), raster state and depth
 	 * state converted to our forward-Z depth (ARCHITECTURE §4.1 step 8: compare mirrored, bias negated). The caller adds
@@ -208,7 +211,7 @@ public final class GeometryPipelines {
 	public static GraphicsPipelineBuilder builderFor(RenderPipeline vanilla, FrontendRenderPipeline compiled, boolean forwardZ) {
 		var b = new GraphicsPipelineBuilder()
 				.cull(vanilla.isCull() ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE)
-				.polygonMode(VulkanConst.toVk(vanilla.getPolygonMode()))
+				.polygonMode(wireframe ? VK_POLYGON_MODE_LINE : VulkanConst.toVk(vanilla.getPolygonMode()))
 				.topology(VulkanConst.toVk(vanilla.getPrimitiveTopology()));
 		List<VertexFormat> formats = compiled.vertexFormats();
 		for (int slot = 0; slot < formats.size(); slot++) {

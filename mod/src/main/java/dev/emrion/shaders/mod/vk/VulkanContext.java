@@ -26,6 +26,8 @@ public final class VulkanContext {
 	public final VkPhysicalDeviceProperties properties = VkPhysicalDeviceProperties.malloc();
 	/** VulkanFeatureSetsMixin requests this as optional, so MC enables it exactly when the device supports it. */
 	public final boolean storageWriteWithoutFormat;
+	/** Wireframe (polygon mode LINE); requested the same way. */
+	public final boolean fillModeNonSolid;
 
 	private VulkanContext(VulkanDevice device) {
 		this.device = device;
@@ -38,6 +40,7 @@ public final class VulkanContext {
 			var features = org.lwjgl.vulkan.VkPhysicalDeviceFeatures.calloc(stack);
 			VK10.vkGetPhysicalDeviceFeatures(vk.getPhysicalDevice(), features);
 			storageWriteWithoutFormat = features.shaderStorageImageWriteWithoutFormat();
+			fillModeNonSolid = features.fillModeNonSolid();
 		}
 	}
 

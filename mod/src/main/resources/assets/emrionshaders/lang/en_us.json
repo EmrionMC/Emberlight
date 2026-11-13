@@ -2,5 +2,7 @@
   "key.emrionshaders.packs": "Shader Packs",
   "key.emrionshaders.profiler": "Profiler Overlay (ms per pass)",
   "key.emrionshaders.reload": "Reload Shader Pack",
+  "key.emrionshaders.toggle": "Toggle Shaders",
+  "key.emrionshaders.wireframe": "Wireframe (debug mode, singleplayer)",
   "key.category.emrionshaders.main": "Emrion Shaders"
 }

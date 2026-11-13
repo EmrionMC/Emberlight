@@ -60,7 +60,19 @@ final class ShadowPass {
 	/** Sections drawn last frame (debug overlay / log). */
 	static int sectionCount, entityCount;
 
+	/** True while the shadow phases render (Iris API isRenderingShadowPass). */
+	static volatile boolean rendering;
+
 	static void render(FrameExecutor e, LevelRenderer level) {
+		rendering = true;
+		try {
+			renderPhases(e, level);
+		} finally {
+			rendering = false;
+		}
+	}
+
+	private static void renderPhases(FrameExecutor e, LevelRenderer level) {
 		Manifest.Command opaque = e.advanceTo("shadow_opaque");
 		if (opaque == null) return;
 		var mc = Minecraft.getInstance();

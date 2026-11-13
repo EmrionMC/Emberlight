@@ -45,11 +45,27 @@ These numbers come from the dev environment: vanilla textures and no other perfo
 5. In game, press **O**, or use **Video Settings → Shader Packs (Emrion)…**, and select a pack. The first load converts the
    pack (a few seconds, with a progress bar); later loads come from the cache in `.minecraft/emrionshaders/cache`.
 
+All keys are in the **Emrion Shaders** category of Options → Controls and can be rebound. Defaults follow Iris.
+
 | Key | Action |
 |---|---|
-| O | Shader pack screen (Shader Options… inside it) |
+| O | Shader pack screen (Shader Options… inside it). Also bound by vanilla 26.3 to **Friends** (`key.friends`): both fire, rebind one of them if that bothers you |
 | R | Reload the active pack from disk |
+| K | Toggle shaders on/off (vanilla rendering while off; switching back reuses the built pipelines). Action bar shows "Shaders: on/off" |
 | F7 | Profiler overlay (GPU and CPU ms per pass) |
+| unbound | Wireframe (toggle; only in debug mode and in singleplayer, as Iris) |
+
+Inside the shader pack screen, as in Iris:
+
+| Key | Action |
+|---|---|
+| Tab | Open the shader options; Tab in the options applies the changes and goes back to the pack list (Shift+Tab still moves the focus) |
+| F1 | Hide the screen to look at the world (F1 again shows it) |
+| Ctrl+D | Debug mode on/off (asks first): every shader error in chat, profiler overlay on, wireframe key allowed. Saved in `config/emrionshaders.properties` |
+| Drag & drop | Dropped pack zips and pack folders are copied into `shaderpacks/` |
+
+Not taken over: Iris's Ctrl+G (load packs Iris does not recognise) has no equivalent, every pack is tried. K, R and F7
+are free in vanilla 26.3.
 
 The FPS counter in the top left corner is always shown. Start with `-Demrion.hideFps=true` to hide it.
 
@@ -79,6 +95,8 @@ export JAVA_HOME=/path/to/jdk25+   # Java 25 or newer
 | labPBR normals/specular for blocks | ✅ |
 | labPBR for entities, items, block entities, particles (per draw, as Iris) | ✅ |
 | Options GUI (screens, sliders, profiles, lang files) and hot reload | ✅ |
+| Iris keys: toggle (K), reload, pack screen, wireframe, debug mode, pack-screen shortcuts | ✅ |
+| Iris API for other mods (`net.irisshaders.iris.api.v0`, revision 4) when Iris is not installed | ✅ (partly: see below) |
 | Geometry shaders, tessellation | ❌ (not needed by the target pack) |
 | Distant Horizons / Voxy / Colorwheel / Photonics hooks | ❌ |
 | OpenGL backend | ❌ (Vulkan only, by design) |
@@ -92,6 +110,22 @@ export JAVA_HOME=/path/to/jdk25+   # Java 25 or newer
 - The first item or shulker box drawn with a 256× PBR pack causes a one-time hitch of about 0.3 s while its PBR atlas uploads.
 - Some hooks depend on Fabric API internals (Indigo block rendering) and may need an update when Fabric API changes.
 - A compute pass named like a fullscreen pass (`composite.csh` next to `composite.fsh`) is not supported yet.
+
+## Iris API for other mods
+
+Mods such as Entity Model/Texture Features ask Iris's public API (`IrisApi.getInstance().isShaderPackInUse()`,
+`isRenderingShadowPass()`, …) to adapt to shaders. When Iris is **not** installed, Emrion Shaders puts its own copy of
+that API (Iris's LGPL-3.0 API classes, identical signatures to Iris 1.11.7 for 26.3) on the class path at pre-launch and
+answers from its own state: `isShaderPackInUse` = a pack is rendering, `isRenderingShadowPass` = inside our shadow pass,
+`getConfig().areShadersEnabled/setShadersEnabledAndApply` = the K toggle, `getSunPathRotation`, `openMainIrisScreenObj` =
+our pack screen. With Iris installed nothing is added.
+
+- Only mods that detect the API by **class presence** see it (EMF, ETF; Sodium Extra also needs an Iris internal class and
+  keeps treating Iris as absent). Mods that check `FabricLoader.isModLoaded("iris")` (Particle Rain, Litematica, MaLiLib)
+  do not, on purpose: Emrion Shaders does **not** claim the `iris` mod id, because mods that see it also mix into and call
+  Iris internals (ImmediatelyFast, Euphoria Patcher, VoxelMap, …) and would crash or misbehave.
+- `assignPipeline`, `assignPipelineShadow` and `registerShadowRenderCallback` are accepted and ignored;
+  `createTextVertexSink` throws `UnsupportedOperationException`.
 
 ## Robustness
 

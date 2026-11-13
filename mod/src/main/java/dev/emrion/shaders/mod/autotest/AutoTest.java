@@ -51,7 +51,7 @@ import org.jspecify.annotations.Nullable;
  * emrion.autotest.script=step;step  then run these steps (robustness tests), one after the other:
  *     wait S | size WxH | fullscreen on|off | gui N | cmd COMMAND | shot NAME (&lt;tag&gt;-NAME.png) | mem (log FPS and VMA budget)
  *     pack off|on (on waits until the pack renders) | reload (waits for the swap) | leave | join | hud | f3 on|off
- *     screen pause|inventory|chat|none | use down|up (hold the use key) | press KEY (key.keyboard.KEY) | repeat N { steps } (no nesting)
+ *     screen pause|inventory|chat|packs|none | key KEY [ctrl] (into the open screen) | drop PATH[;PATH] (onto the open screen) | use down|up (hold the use key) | press KEY (key.keyboard.KEY) | irisapi (logs what the Iris API reports) | repeat N { steps } (no nesting)
  * </pre>
  * With only {@code quit=true} the game exits as soon as the title screen is up (smoke test).
  */
@@ -436,12 +436,34 @@ public final class AutoTest {
 					case "pause" -> new net.minecraft.client.gui.screens.PauseScreen(true);
 					case "inventory" -> new net.minecraft.client.gui.screens.inventory.InventoryScreen(mc.player);
 					case "chat" -> new net.minecraft.client.gui.screens.ChatScreen("", false);
+					case "packs" -> new dev.emrion.shaders.mod.pack.PackScreen(null);
 					default -> null;
 				});
 				return true;
 			}
 			case "press" -> { // a key as if typed, e.g. "press o" (key.keyboard.o)
 				net.minecraft.client.KeyMapping.click(com.mojang.blaze3d.platform.InputConstants.getKey("key.keyboard." + arg));
+				return true;
+			}
+			case "key" -> { // a key typed into the open screen, e.g. "key f1", "key d ctrl"
+				String[] k = arg.split(" ");
+				int code = com.mojang.blaze3d.platform.InputConstants.getKey("key.keyboard." + k[0]).getValue();
+				int mods = k.length > 1 && k[1].equals("ctrl") ? com.mojang.blaze3d.platform.InputConstants.MOD_CONTROL : 0;
+				if (mc.gui.screen() != null) mc.gui.screen().keyPressed(new net.minecraft.client.input.KeyEvent(code, 0, mods));
+				return true;
+			}
+			case "drop" -> { // files dropped onto the open screen
+				if (mc.gui.screen() != null) mc.gui.screen().onFilesDrop(java.util.Arrays.stream(arg.split(";")).map(java.nio.file.Path::of).toList());
+				return true;
+			}
+			case "irisapi" -> { // test consumer: what a mod asking the Iris API sees (only present when Iris is not installed)
+				try {
+					var api = net.irisshaders.iris.api.v0.IrisApi.getInstance();
+					EmrionShadersClient.LOG.info("Autotest: IrisApi rev {} isShaderPackInUse={} areShadersEnabled={}", api.getMinorApiRevision(),
+							api.isShaderPackInUse(), api.getConfig().areShadersEnabled());
+				} catch (Throwable t) {
+					EmrionShadersClient.LOG.info("Autotest: IrisApi unavailable: {}", t.toString());
+				}
 				return true;
 			}
 			case "use" -> {

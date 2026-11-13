@@ -22,6 +22,7 @@ import dev.emrion.shaders.mod.EmrionShadersClient;
 import dev.emrion.shaders.mod.pbr.PbrAtlases;
 import dev.emrion.shaders.mod.pbr.PbrTextures;
 import dev.emrion.shaders.mod.pipeline.GbufferMapping;
+import dev.emrion.shaders.mod.pipeline.GeometryPipelines;
 import dev.emrion.shaders.mod.runtime.FrameExecutor;
 import dev.emrion.shaders.mod.runtime.PackPipelines;
 import dev.emrion.shaders.mod.runtime.PackRuntime;
@@ -94,6 +95,10 @@ public final class PackManager {
 	/** Pipelines the worker built whose render-thread hand-off has not run yet (freed by {@link #shutdown} if it never will). */
 	private static volatile @Nullable PackPipelines unclaimed;
 	private static boolean preparing;
+	/** Toggle key (Iris K): false renders vanilla while the pack stays selected; its pipelines are kept for a fast switch back. */
+	private static volatile boolean enabled = true;
+	/** Iris's debug mode (Ctrl+D in the pack screen): every shader error in chat, profiler overlay on; enables wireframe. */
+	private static volatile boolean debug;
 
 	// render-thread state
 	private static @Nullable Prepared current;
@@ -117,23 +122,30 @@ public final class PackManager {
 
 	/** Called once on the render thread at client start. */
 	public static void init() {
-		String pack = System.getProperty("emrion.pack");
-		if (pack == null) {
-			Properties p = new Properties();
-			try (Reader r = Files.newBufferedReader(CONFIG)) {
-				p.load(r);
-			} catch (IOException ignored) {
-				// no config yet: off
-			}
-			pack = p.getProperty("pack", "");
+		Properties p = readConfig();
+		if (Boolean.parseBoolean(p.getProperty("debug"))) {
+			debug = true;
+			dev.emrion.shaders.mod.debug.Profiler.visible = true;
 		}
+		String pack = System.getProperty("emrion.pack", p.getProperty("pack", ""));
 		if (!pack.isBlank()) select(pack, false);
+	}
+
+	private static Properties readConfig() {
+		Properties p = new Properties();
+		try (Reader r = Files.newBufferedReader(CONFIG)) {
+			p.load(r);
+		} catch (IOException ignored) {
+			// no config yet: defaults
+		}
+		return p;
 	}
 
 	/** {@code null} = off. */
 	public static void select(@Nullable String pack, boolean save) {
 		int gen = ++generation;
 		selected = pack;
+		enabled = true;
 		loaded = null;
 		next = null;
 		Prepared stale = prepared;
@@ -142,7 +154,7 @@ public final class PackManager {
 		synchronized (errors) {
 			errors.clear();
 		}
-		if (save) saveConfig(pack);
+		if (save) saveConfig("pack", pack == null ? "" : pack);
 		if (pack == null) {
 			status = "Off";
 			progress = -1;
@@ -163,9 +175,10 @@ public final class PackManager {
 		});
 	}
 
-	private static void saveConfig(@Nullable String pack) {
-		Properties p = new Properties();
-		p.setProperty("pack", pack == null ? "" : pack);
+	/** Sets one key, keeping the others. */
+	private static void saveConfig(String key, String value) {
+		Properties p = readConfig();
+		p.setProperty(key, value);
 		try {
 			Files.createDirectories(CONFIG.getParent());
 			try (Writer w = Files.newBufferedWriter(CONFIG)) {
@@ -208,6 +221,7 @@ public final class PackManager {
 				result.cacheHit() ? " (cache hit)" : "", result.stagesCompiled(), result.stagesFailed(), errs.size(), result.outputDir());
 		if (result.manifest() == null) throw new IOException(errs.isEmpty() ? "conversion failed" : where(errs.getFirst()));
 		if (result.manifest().dimensions().isEmpty()) throw new IOException(errs.isEmpty() ? "it has no shader programs" : where(errs.getFirst()));
+		if (debug) errs.stream().limit(20).forEach(d -> chat(Component.literal("[" + pack + "] " + where(d)).withStyle(ChatFormatting.RED)));
 		if (!errs.isEmpty()) chat(Component.literal("Emrion Shaders: " + pack + ": " + errs.size() + " shader error" + (errs.size() == 1 ? "" : "s")
 				+ ", the failing programs are skipped. " + where(errs.getFirst()) + (errs.size() > 1 ? " (all in the log)" : "")).withStyle(ChatFormatting.YELLOW));
 		return new Loaded(result.outputDir(), result.manifest(), readLang(source));
@@ -328,6 +342,40 @@ public final class PackManager {
 		return executor != null && selected != null;
 	}
 
+	public static boolean enabled() {
+		return enabled;
+	}
+
+	/** Takes effect at the next level frame start ({@link #onLevelStart}). */
+	public static void setEnabled(boolean on) {
+		enabled = on;
+		if (selected != null && progress < 0) status = selected + (on ? ": on" : ": off (toggle key)");
+	}
+
+	public static boolean debugMode() {
+		return debug;
+	}
+
+	public static void setDebugMode(boolean on) {
+		debug = on;
+		dev.emrion.shaders.mod.debug.Profiler.visible = on;
+		if (!on) setWireframe(false);
+		saveConfig("debug", Boolean.toString(on));
+	}
+
+	/** Pack geometry as lines (Iris wireframe key; the caller checks debug mode and singleplayer): rebuilds the pipelines. */
+	public static void setWireframe(boolean on) {
+		if (GeometryPipelines.wireframe == on) return;
+		GeometryPipelines.wireframe = on;
+		reload();
+	}
+
+	/** The running pack's sunPathRotation (Iris API), 0 without one. */
+	public static float sunPathRotation() {
+		FrameExecutor e = executor;
+		return e == null || selected == null || e.dimension().shadow() == null ? 0 : e.dimension().shadow().sunPathRotation();
+	}
+
 	/** A geometry hook failed in the middle of a frame: disable the pack; the rest of the frame renders vanilla. */
 	public static void frameFailed(Throwable t) {
 		if (selected != null) fail("Shader pack " + selected + " failed", t);
@@ -336,6 +384,10 @@ public final class PackManager {
 	/** LevelRenderer.render HEAD (the level projection is known; Iris: beginLevelRendering). */
 	public static void onLevelStart(float partialTick) {
 		try {
+			if (!enabled) {
+				park();
+				return;
+			}
 			var mc = Minecraft.getInstance();
 			String dim = mc.level == null ? null : mc.level.dimension().identifier().toString();
 			Loaded l = loaded;
@@ -497,6 +549,19 @@ public final class PackManager {
 		deactivateKeepingFormats();
 		PbrTextures.clear(); // entity/item maps load lazily again when a pack runs
 		PbrAtlases.releaseLazy();
+	}
+
+	/** Toggled off: vanilla rendering, but the pipelines stay as {@link #prepared}, so switching back only re-installs them. */
+	private static void park() {
+		Prepared p = current;
+		if (p == null) return;
+		EmrionVertexFormats.setActive(false);
+		current = null; // deactivate() then keeps p's pipelines
+		deactivate();
+		Prepared old = prepared;
+		if (old != null) old.pipelines().destroyLater();
+		prepared = p;
+		EmrionShadersClient.LOG.info("Shader pack {} toggled off (pipelines kept)", selected);
 	}
 
 	private static void deactivateKeepingFormats() {

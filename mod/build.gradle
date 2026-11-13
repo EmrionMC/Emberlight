@@ -180,6 +180,20 @@ dependencies {
 }
 test { useJUnitPlatform() }
 
+// Iris API copy (LGPL-3.0-only, src/irisapi): packed as a nested jar resource that IrisApiShim puts on the class path
+// at pre-launch only when Iris is not installed. Not on main's runtime class path, so the dev run behaves as release.
+sourceSets { irisapi { compileClasspath += sourceSets.main.compileClasspath } }
+def irisApiJar = tasks.register('irisApiJar', Jar) {
+	archiveFileName = 'emrion-irisapi.jar'
+	destinationDirectory = layout.buildDirectory.dir('generated/irisapi')
+	from sourceSets.irisapi.output
+	from rootProject.files('LICENSE', 'COPYING')
+}
+sourceSets.main.resources.srcDir(irisApiJar.map { it.destinationDirectory })
+processResources.dependsOn irisApiJar
+sourceSets.main.compileClasspath += sourceSets.irisapi.output // after the line above: irisapi keeps main's original class path
+dependencies { testImplementation sourceSets.irisapi.output }
+
 // Side-by-side + MAE/SSIM per scene: run-iris/screenshots/iris-*.png vs run/screenshots/emrion-*.png -> run-compare/.
 tasks.register('compareScenes', Exec) {
 	group = 'verification'

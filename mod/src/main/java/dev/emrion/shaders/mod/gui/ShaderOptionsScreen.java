@@ -114,6 +114,17 @@ public final class ShaderOptionsScreen extends Screen {
 		refreshAll();
 	}
 
+	/** Tab (Iris): apply, then back to the pack list; Shift+Tab still moves the focus. */
+	@Override
+	public boolean keyPressed(net.minecraft.client.input.KeyEvent e) {
+		if (e.input() == com.mojang.blaze3d.platform.InputConstants.KEY_TAB && !e.hasShiftDown() && !e.hasControlDown() && !e.hasAltDown() && exit != null) {
+			apply();
+			minecraft.gui.setScreen(exit);
+			return true;
+		}
+		return super.keyPressed(e);
+	}
+
 	/** Back to the parent screen; on the root this is Cancel (the pending edits die with the session). */
 	@Override
 	public void onClose() {

@@ -110,6 +110,10 @@ public final class GeometryHooks {
 		return !(Boolean.FALSE.equals(v) || "off".equals(v));
 	}
 
+	public static boolean inShadowPass() {
+		return ShadowPass.rendering;
+	}
+
 	public static float sunPathRotation() {
 		FrameExecutor e = exec();
 		return e == null || e.dimension().shadow() == null ? 0 : e.dimension().shadow().sunPathRotation();
