@@ -95,6 +95,24 @@ public final class GlslTranspiler implements Transpiler {
 			"output", "hvec2", "hvec3", "hvec4", "fvec2", "fvec3", "fvec4", "sampler3DRect", "namespace", "using",
 			"samplerBuffer", "sampler2DRect", "sampler2DMS", "samplerCubeArray", "demote", "uniform_buffer", "noinline");
 
+	/** Built-in functions by the GLSL version that added them: a pack written for an older version may define its own. */
+	static final Map<String, Integer> LATER_BUILTINS = later(Map.of(
+			120, "transpose outerProduct",
+			130, "sinh cosh tanh asinh acosh atanh trunc round roundEven isnan isinf modf",
+			140, "inverse",
+			150, "determinant",
+			330, "floatBitsToInt floatBitsToUint intBitsToFloat uintBitsToFloat",
+			400, "fma frexp ldexp packUnorm2x16 packUnorm4x8 packSnorm4x8 unpackUnorm2x16 unpackUnorm4x8 unpackSnorm4x8 "
+					+ "packDouble2x32 unpackDouble2x32 uaddCarry usubBorrow umulExtended imulExtended bitfieldExtract "
+					+ "bitfieldInsert bitfieldReverse bitCount findLSB findMSB",
+			420, "packHalf2x16 unpackHalf2x16 packSnorm2x16 unpackSnorm2x16"));
+
+	static Map<String, Integer> later(Map<Integer, String> byVersion) {
+		Map<String, Integer> m = new HashMap<>();
+		byVersion.forEach((v, names) -> { for (String n : names.split(" ")) m.put(n, v); });
+		return Map.copyOf(m);
+	}
+
 	static final Map<String, String> CALL_RENAMES = Map.ofEntries(
 			Map.entry("texture2D", "texture"), Map.entry("texture3D", "texture"), Map.entry("texture1D", "texture"),
 			Map.entry("textureCube", "texture"), Map.entry("texture2DLod", "textureLod"), Map.entry("texture3DLod", "textureLod"),
@@ -137,6 +155,8 @@ public final class GlslTranspiler implements Transpiler {
 		final Map<String, Var> ins = new LinkedHashMap<>(), outs = new LinkedHashMap<>();
 		final List<Var> attributes = new ArrayList<>(), fragOuts = new ArrayList<>(), uniforms = new ArrayList<>();
 		final Set<String> globals = new HashSet<>();
+		/** Functions the pack defines under a built-in name its #version did not have yet (Bliss's tanh in 120): renamed. */
+		final Set<String> shadowed = new HashSet<>();
 
 		Stage(PreprocessedStage src) {
 			this.src = src;
@@ -166,6 +186,16 @@ public final class GlslTranspiler implements Transpiler {
 
 		boolean used(String name) { return counts.containsKey(name); }
 
+		/** A scalar variable (global or local, not an interface or uniform) named {@code name} is declared. */
+		boolean declaresVariable(String name) {
+			for (int i = 1; i + 1 < t.size(); i++) {
+				if (!t.get(i).is(name) || !Set.of("int", "uint", "float").contains(t.get(i - 1).text)) continue;
+				if (i >= 2 && Set.of("uniform", "in", "out", "varying", "attribute", "flat").contains(t.get(i - 2).text)) continue;
+				if (Set.of("=", ";", ",").contains(t.get(i + 1).text)) return true;
+			}
+			return false;
+		}
+
 		int count(String name) { return counts.getOrDefault(name, 0); }
 
 		String type(Item it) { return GlslParser.text(t, it.typeStart, it.typeEnd); }
@@ -183,7 +213,10 @@ public final class GlslTranspiler implements Transpiler {
 							profile = p.length > 1 ? p[1] : null;
 						}
 					}
-					case FUNCTION, PROTOTYPE -> defs.computeIfAbsent(it.name, k -> new ArrayList<>()).add(it);
+					case FUNCTION, PROTOTYPE -> {
+						defs.computeIfAbsent(it.name, k -> new ArrayList<>()).add(it);
+						if (version < LATER_BUILTINS.getOrDefault(it.name, 0)) shadowed.add(it.name);
+					}
 					case DECL -> {
 						String s = it.storage();
 						boolean plain = s == null || s.equals("const") || s.equals("shared");
@@ -246,6 +279,8 @@ public final class GlslTranspiler implements Transpiler {
 		final List<Stage> stages = new ArrayList<>();
 		final Map<String, Integer> locations = new LinkedHashMap<>();
 		final boolean geometry, core, fogVarying, entityColorVarying, entityIdVarying;
+		/** Entity id names the pack also declares as its own variables (Reimagined: int blockEntityId = mat;). */
+		final Set<String> ownIds = new HashSet<>();
 		final List<Diagnostic> diagnostics = new ArrayList<>();
 
 		Program(List<PreprocessedStage> src) {
@@ -264,6 +299,7 @@ public final class GlslTranspiler implements Transpiler {
 			entityColorVarying = geometry && fs != null && vs != null && !gs && fs.used("entityColor");
 			// Iris EntityPatcher: ids come from iris_Entity via a flat varying (programs with a geometry stage keep push constants)
 			boolean usesIds = false;
+			for (Stage s : stages) for (String n : ENTITY_IDS.keySet()) if (s.declaresVariable(n)) ownIds.add(n);
 			for (Stage s : stages) for (String n : ENTITY_IDS.keySet()) usesIds |= s.used(n);
 			entityIdVarying = geometry && vs != null && !gs && usesIds;
 			assignLocations();
@@ -291,15 +327,39 @@ public final class GlslTranspiler implements Transpiler {
 		}
 
 		private int slots(Var v, boolean perVertexArray) {
-			int n = GlslTypes.locations(v.type());
+			Stage s = null;
+			for (Stage st : stages) if (st.items.contains(v.item())) s = st;
+			int n = typeLocations(s.t, v.type());
 			if (v.d().hasArray()) {
-				Stage s = null;
-				for (Stage st : stages) if (st.items.contains(v.item())) s = st;
 				List<Integer> dims = arrayDims(s.t, v.d().arrStart(), v.d().arrEnd());
 				for (int i = perVertexArray ? 1 : 0; i < dims.size(); i++) n *= Math.max(1, dims.get(i));
 			}
 			return n;
 		}
+	}
+
+	static final Set<String> MEMBER_QUALIFIERS = Set.of("lowp", "mediump", "highp", "flat", "smooth", "noperspective", "centroid");
+
+	/** Interface locations of a type; a struct declared in the stage takes the sum of its members (Photon's fog_params). */
+	static int typeLocations(List<Token> t, String type) {
+		for (int i = 0; i + 2 < t.size(); i++) {
+			if (!t.get(i).is("struct") || !t.get(i + 1).is(type) || !t.get(i + 2).is("{")) continue;
+			int close = GlslParser.match(t, i + 2), n = 0;
+			for (int j = i + 3; j < close; j++) {
+				while (MEMBER_QUALIFIERS.contains(t.get(j).text)) j++;
+				int per = typeLocations(t, t.get(j).text);
+				while (j < close && !t.get(j).is(";")) {
+					int name = ++j, end = name + 1;
+					while (end < close && t.get(end).is("[")) end = GlslParser.match(t, end) + 1;
+					int m = per;
+					for (int d : arrayDims(t, name + 1, end)) m *= Math.max(1, d);
+					n += m;
+					j = end;
+				}
+			}
+			return n;
+		}
+		return GlslTypes.locations(type);
 	}
 
 	/** Array dimensions in [from, to); unsized or non-literal dimensions are 0. */
@@ -502,7 +562,11 @@ public final class GlslTranspiler implements Transpiler {
 
 		String in(String canon) { return "emr_in_" + canon; }
 
-		String kw(String name) { return KEYWORDS_450.contains(name) ? "emr_kw_" + name : name; }
+		String kw(String name) {
+			// shared has always been the compute storage qualifier; only older stages may use it as a name
+			return KEYWORDS_450.contains(name) && !(name.equals("shared") && s.type == StageType.COMPUTE) || s.shadowed.contains(name)
+					? "emr_kw_" + name : name;
+		}
 
 		String emit() {
 			buildReplacements();
@@ -559,6 +623,13 @@ public final class GlslTranspiler implements Transpiler {
 				if (repl.containsKey(n)) continue;
 				if (member(PUSH, n)) repl.put(n, "emr_draw." + n);
 				else if (member(PHASE, n)) repl.put(n, "emr_phase." + n);
+			}
+			// a textual replacement would also hit the pack's own declarator; a global copy lets GLSL scoping shadow it
+			for (String n : p.ownIds) {
+				String v = repl.remove(n);
+				if (v == null || !s.used(n)) continue;
+				extraDecls.add("int " + n + ";");
+				prologue.add(n + " = " + v + ";");
 			}
 			if (p.entityColorVarying && (st == StageType.FRAGMENT || vs)) repl.put("entityColor", "emr_entityColor");
 			if (p.entityColorVarying && vs) {
@@ -713,7 +784,7 @@ public final class GlslTranspiler implements Transpiler {
 
 		void emitUniform(Item it, Declarator d, String type, String arr, StringBuilder out) {
 			String name = d.name();
-			if (!s.used(name) || repl.containsKey(name)) return;
+			if (!s.used(name) || repl.containsKey(name) || p.ownIds.contains(name)) return;
 			if (GlslTypes.isOpaque(type)) {
 				String slot = set0Sampler(p, name);
 				String layout;

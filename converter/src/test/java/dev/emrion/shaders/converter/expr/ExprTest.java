@@ -48,7 +48,7 @@ class ExprTest {
 		Diagnostics d = new Diagnostics();
 		List<Manifest.CustomUniform> list = parse(d, "uniform." + type + ".v", expr);
 		assertTrue(list.isEmpty(), () -> expr + " should not resolve");
-		assertTrue(d.hasErrors());
+		assertFalse(d.all().isEmpty());
 		return d.all().getFirst().message();
 	}
 
@@ -160,12 +160,14 @@ class ExprTest {
 				"uniform.float.c1", "c2", "uniform.float.c2", "c1",   // cycle
 				"uniform.float.bad", "unknownThing", "uniform.float.dep", "bad * 2",
 				"uniform.vec3.v", "vec3(1, 2, 3)",
+				"uniform.vec2.s", "vec2(1, 2) * 0.5",  // no vec * scalar overload in Iris either: skipped with a warning
 				"uniform.float.z", "v.z + v.b + v.p + v.2",
 				"uniform.float.x.y", "1");             // malformed key
 		assertEquals(List.of("b", "a", "v", "z"), list.stream().map(Manifest.CustomUniform::name).toList());
 		assertFalse(list.get(1).uniform());
 		long errors = d.all().stream().filter(x -> x.severity() == Diagnostic.Severity.ERROR).count();
-		assertEquals(5, errors, d.all()::toString); // frameTime, c1, c2, bad, dep; the rest are warnings
+		assertEquals(4, errors, d.all()::toString); // frameTime, c1, c2, dep; the rest (bad, s) are warnings like in Iris
+		assertTrue(d.all().toString().contains("Failed to resolve custom uniform s"));
 		CustomUniformRuntime rt = new CustomUniformRuntime(list, host);
 		rt.update(host, 0.05);
 		assertEquals(3f, rt.getFloat("a"));

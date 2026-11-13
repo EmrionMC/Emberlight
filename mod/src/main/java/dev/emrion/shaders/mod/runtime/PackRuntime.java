@@ -162,7 +162,7 @@ public final class PackRuntime {
 		if (t.kind().equals("buffer")) {
 			long bytes = t.relativeSize() != null ? t.bytes() * s[0] * s[1] : t.bytes();
 			buffers.put(t.name(), new Buf(t.name(), new RawBuffer(ctx, bytes,
-					VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false)));
+					VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false, "emrion " + t.name())));
 			return;
 		}
 		Img[] sides = new Img[2];

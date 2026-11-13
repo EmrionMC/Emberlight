@@ -215,6 +215,18 @@ class IrisDimensionPlannerTest {
 	}
 
 	@Test
+	void rawStageTextureOnlyReplacesSamplerOfItsType() {
+		String raw = "lut.dat TEXTURE_3D R8 8 8 8 RED UNSIGNED_BYTE";
+		var r = plan(props("texture.deferred.depthtex0", raw, "texture.composite.colortex0", "lut.dat TEXTURE_2D R8 8 8 RED UNSIGNED_BYTE"),
+				p("deferred").draw(1).samplers("depthtex0"), p("deferred1").draw(1).sampler("depthtex0", "sampler3D"),
+				p("composite").draw(1).samplers("colortex0"));
+		assertEquals("depthtex0", r.binding("deferred", "depthtex0").target()); // a sampler2D keeps the depth buffer
+		// raw textures are unsupported: the typed sampler falls back instead of crashing, even when colortex0 is overridden
+		assertNotNull(r.binding("deferred1", "depthtex0"));
+		assertNotNull(r.binding("composite", "colortex0"));
+	}
+
+	@Test
 	void shadowCompareAndPlainBindings() {
 		var r = plan(props(), p("composite").sampler("shadowtex0", "sampler2DShadow").c("shadowHardwareFiltering", "true"),
 				p("composite1").sampler("shadowtex0", "sampler2D").sampler("shadow", "sampler2DShadow"));

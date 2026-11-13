@@ -389,7 +389,15 @@ public final class AutoTest {
 				return true;
 			}
 			case "mem" -> {
-				EmrionShadersClient.LOG.info("Autotest: {} FPS, GPU memory: {}", mc.getFps(), gpuMemory());
+				EmrionShadersClient.LOG.info("Autotest: {} FPS, GPU memory: {}{}", mc.getFps(), gpuMemory(),
+						dev.emrion.shaders.mod.debug.VramReport.driverUsage(VulkanContext.get()));
+				if (dev.emrion.shaders.mod.debug.VramReport.ENABLED) {
+					try {
+						EmrionShadersClient.LOG.info("Autotest: VMA map {}", dev.emrion.shaders.mod.debug.VramReport.dump(VulkanContext.get(), mc.gameDirectory.toPath()));
+					} catch (java.io.IOException e) {
+						EmrionShadersClient.LOG.warn("VMA dump failed", e);
+					}
+				}
 				return true;
 			}
 			case "pack" -> {

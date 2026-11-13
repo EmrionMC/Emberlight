@@ -19,6 +19,10 @@ public final class RawBuffer {
 	private final long allocation;
 
 	public RawBuffer(VulkanContext ctx, long size, int vkUsage, boolean hostMapped) {
+		this(ctx, size, vkUsage, hostMapped, "buffer");
+	}
+
+	public RawBuffer(VulkanContext ctx, long size, int vkUsage, boolean hostMapped, String label) {
 		this.ctx = ctx;
 		this.size = size;
 		try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -31,6 +35,7 @@ public final class RawBuffer {
 			VulkanContext.check(vmaCreateBuffer(ctx.vma, info, alloc, pBuffer, pAlloc, allocInfo), "vmaCreateBuffer");
 			handle = pBuffer.get(0);
 			allocation = pAlloc.get(0);
+			dev.emrion.shaders.mod.debug.VramReport.name(ctx.vma, allocation, "raw " + label);
 			mapped = hostMapped ? allocInfo.pMappedData() : 0L;
 		}
 	}

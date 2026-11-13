@@ -274,6 +274,171 @@ less than Iris against itself (overview 0.40/0.996, cave 0.42/0.997, night 0.23/
 | `-Demrion.debug.timings=true` (`.seconds=5`) | log the full profile every 5 s |
 | `-Demrion.autotest.profile=true` | log the profile averaged over the benchmark window (`Benchmark profile:`) |
 | `-Demrion.perf.deferClears=false`, `-Demrion.perf.computeClears=false` | A/B switches for the clear optimisations |
+| `-Demrion.perf.sparseAtlases=true` | sparse atlases (M5b): −6.7 GB at 256x, ≈ −10 % FPS there on NVIDIA |
+| `-Demrion.debug.vram=true` | name every VMA allocation; the autotest `mem` step writes `emrion-vma-N.json` (`mod/tools/vram_report.py`) |
+
+## M5b: VRAM and performance without visual loss (2026-11-13, `m5b/p2-vram`)
+
+The brief: more FPS and less VRAM with *no* visual change at all. Hardware and settings as in M5. The clean conditions here:
+other desktop apps were closed, so other processes used about 1.05 GB of VRAM (the desktop compositor and shell). The KDE file
+indexer `baloo_file` ran in the background (95 % CPU, niced). Runs with frame spikes over 50 ms were discarded and repeated.
+
+### Tools
+
+- `-Demrion.debug.vram=true` names every VMA allocation by its owner. MC's textures and buffers get their label through
+  mixins on `VulkanGpuTexture`/`VulkanGpuBuffer.Direct`, and our raw images and buffers get theirs too.
+- The autotest step `mem` logs VMA's per-heap numbers plus the driver's own per-heap usage and budget
+  (`VkPhysicalDeviceMemoryBudgetPropertiesEXT`, a physical-device query; MC creates VMA without
+  `VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT`, so VMA's "usage" is only its own block total). With the switch it also writes
+  VMA's detailed JSON map to `emrion-vma-N.json`.
+- `python3 -I mod/tools/vram_report.py emrion-vma-N.json [--all]` sums that map by owner.
+- `mod/emrion-bench-scenes.txt`: scene `hand_overview` is the overview view, standing on a barrier block in creative with a
+  diamond sword. Run it with `-Demrion.autotest.hud=true`, so the hand and hotbar keep the items atlas and its PBR maps in use, as in normal play.
+
+### VRAM breakdown
+
+Overview scene, MiB, from the VMA map. "256x" = Prime's HD Textures [256x] via `-Demrion.autotest.resourcepacks=…`, measured
+after the items atlas came into use. The default build has the same numbers as master; the last column is the opt-in sparse
+atlases (below).
+
+| Owner | vanilla | 256x (master = default) | 256x, `-Demrion.perf.sparseAtlases=true` |
+|---|---|---|---|
+| MC block atlas (16384² with 4 mips at 256x) | 21 | 1365 | 999 |
+| PBR block atlas, normals / specular | 1×1 defaults | 1365 / 1365 | 556 / 549 |
+| MC items atlas (32768×16384 at 256x) | 2 | 2048 | 1249 |
+| PBR items atlas, normals / specular (47 / 54 maps) | — | 2048 / 2048 | 193 / 204 |
+| other MC atlases (shulker 512, particles, celestials, gui, chest 128 each, …) | 11 | 1106 | ≈ 520 |
+| ours: SSBO `bufferObject0` (pack-declared 810 549 248 B) | 773 | 773 | 773 |
+| ours: `floodfill_img` + `floodfill_img_copy` (512×256×512 RGBA16F) | 1024 | 1024 | 1024 |
+| ours: voxel_img 128, wsr_img 32, leaves_img 2, puddle, wsr_lod | 162 | 162 | 162 |
+| ours: colortex main / alt, depth copies, shadow maps | 128 / 86 / 17 / 64 | same | same |
+| MC chunk geometry (`UberBuffer` solid/cutout/translucent) | 544 | 416 | 416 |
+| MC render targets (main colour/depth, outline, hud depth) | 34 | 34 | 34 |
+| MC other textures (per-sprite animation-frame textures, panorama, fonts) | 31 | 308 | 308 |
+| VMA free space inside its 32–256 MiB blocks | 59 | 1571 | 1878 |
+| **VMA device memory** | **2961** | **9705** | **9174** |
+| **placed in system RAM** (VMA fallback when device allocation fails) | 0 | **6240** (blocks_s, SSBO, items_n, items_s) | 6 |
+| driver-reported usage, device heap / host heap | 3036 / 142 | 9781 (budget 9869) / 6568 | 9249 / 334 |
+
+**Why nvidia-smi showed ≈ 11.95 GB at 256x:** the card was full. Before other desktop apps were closed, other processes held 1.98 GB
+(one chat app alone 756 MiB, the desktop shell and compositor about 350 MiB, …; `nvidia-smi` and `--query-compute-apps`). The game held
+9.8 GB, which is the driver's whole budget for the process (9869 MiB). Everything allocated after that point, 6.2 GB
+(the specular block atlas, the pack's SSBO and both items PBR atlases), went to system RAM. VMA placed it there when
+`vkAllocateMemory` on the device heap failed (MC asks for `AUTO_PREFER_DEVICE`, not device-only).
+It is not driver caching and not leaked staging: MC's transient/staging memory is about 100 MiB. VMA block granularity
+does contribute: after the 256x resource reload, 256 MiB blocks stay alive for a few small textures (fonts, sprite animation
+frames) left between freed per-sprite scratch textures, which pins 1.57 GB of free space.
+**Tip:** closing GPU-accelerated desktop apps (or turning off their hardware acceleration) can free several hundred MiB of VRAM.
+
+### FPS (overview, 30 s, 1080p, RD 16)
+
+| Build | runs (avg FPS) | mean | 1% low | note |
+|---|---|---|---|---|
+| Iris 1.11.7 + Sodium 0.9.3 | 78.5 / 78.6 / 78.3 | **78.5** | 70.8 | 12.74 ms per frame |
+| Emrion master `55a0fbd` | 135.9 / 137.3 / 137.7 (later: 138.5 / 138.2) | **137.0** | 110.6 | 7.30 ms per frame |
+| Emrion M5b final (default), interleaved with master: 135.2 / 134.2 / 137.1 (mean 135.5) | 137.9 / 139.1 / 138.0 | **138.3** | 111.3 | median 7.17–7.21 ms (master 7.27–7.29) |
+| 256x, master | 80.1 / 80.6 / 79.5 | 80.1 | 65.9 | |
+| 256x, sparse atlases (opt-in) | 78.2 / 76.6 / 69.1 | 74.6 | 29.5 (33 ms bursts) | |
+| 256x, VMA 32 MiB blocks (rejected) | 60.4 / 60.2 / 60.0 | 60.2 | 52.0 | |
+
+Emrion master is 1.74× Iris under these clean conditions. Profile of master (GPU-bound, GPU 7.16 ms per frame):
+- render-thread CPU per frame: uniforms 0.03, raw recording 0.18, shadow pass 1.46, MC's rest 0.67 ms, and 4.92 ms blocked on the GPU
+- GPU, biggest passes: opaque 2.44, translucent 1.05, composite1 0.88, shadowcomp 0.61, shadow_opaque 0.47, deferred1 0.31,
+  deferred voxel clears 0.31 ms; composite2 + composite3 together 0.04 ms
+
+### What changed
+
+| Change | Effect | Image |
+|---|---|---|
+| VRAM audit tooling (above) | — | no change: naming only with the switch |
+| **Sparse atlases**, opt-in `-Demrion.perf.sparseAtlases=true` (`SparseAtlas`) | 256x: −6.7 GB in total demand, nothing in system RAM (9174 MiB device vs 9705 device + 6240 host). Costs ≈ 10 % FPS at 256x, so it is off by default | byte-identical (below) |
+
+Sparse atlases: every atlas of 4096² texels or more (MC's own and the PBR copies) is created as a sparse, aliased image. A
+64 KiB tile (128×128 RGBA8) gets its own memory only where a sprite rectangle touches it at that mip level (the rectangle
+includes the sprite's padding, plus one texel). Every other tile is bound to a single shared page. Why every texel keeps its
+value:
+- MC writes an atlas only by blitting sprites into their rectangles, or uniformly: the PBR default clear covers all mips and
+  also fills the shared page with the default value.
+- The atlas render passes use LOAD/STORE, so the shared page only ever receives the value it already holds.
+- In a plain base atlas, the texels outside all sprites were never written either.
+
+The 256x dumps of the block atlas, its normals and its specular atlas (all 4 mips, `-Demrion.debug.pbrDump`) are
+**byte-identical** with the switch on and off. The particle atlas differed only inside the animated `minecraft:vibration`
+sprite, because the two dumps caught different animation frames. Per atlas (sprites cover 71 % of the block atlas; normal
+and specular maps cover 19 % each; on the items atlas, 57 % and 7 %): items_n 2048 → 193 MiB, items_s 2048 → 204, items
+2048 → 1249, blocks_n 1360 → 556, blocks_s 1360 → 549, blocks 1360 → 999, shulker 512 → 232.
+
+**Why it is opt-in:** on NVIDIA 615.78, merely enabling the `sparseBinding` device feature costs about 10 % GPU time at 256x,
+with no sparse image at all (overview with the atlases plain: 79.1 FPS without the feature, 71.4 with `sparseBinding`, 71.7 with
+`sparseResidencyImage2D` added). At vanilla there is no cost (138.1 / 138.6 FPS with sparse on). Keeping things in VRAM
+does not win that back: in the hand scene, master spills 4.9 GB (the SSBO and the items PBR atlases, which are sampled only
+by the held item) and runs at 67.5 / 61.3 FPS; sparse keeps everything in VRAM and runs at 55.2 / 60.7. With the switch off,
+the features are not requested at all.
+
+### Proof that the image is unchanged
+
+Pinned comparison (`frameTimeCounter=100`, 8 scenes) of the final M5b build against the pinned Iris references, and against
+master `55a0fbd` rendered in the same session:
+
+| Scene | final vs Iris (MAE / SSIM) | master vs Iris | final vs master | master vs master (run-to-run floor) |
+|---|---|---|---|---|
+| overview | 0.48 / 0.995 | 0.48 / 0.995 | 0.40 / 0.996 | 0.43 / 0.996 |
+| forest | 0.67 / 0.993 | 0.70 / 0.992 | 0.47 / 0.995 | 0.62 / 0.992 |
+| water | 0.72 / 0.986 | 0.74 / 0.986 | 0.51 / 0.992 | 0.54 / 0.991 |
+| cave | 0.28 / 0.998 | 0.28 / 0.998 | 0.23 / 0.998 | 0.27 / 0.998 |
+| sunset | 0.61 / 0.994 | 0.59 / 0.994 | 0.25 / 0.998 | 0.35 / 0.996 |
+| night | 0.52 / 0.989 | 0.51 / 0.989 | 0.11 / 0.999 | 0.20 / 0.998 |
+| rain | 0.97 / 0.979 | 0.94 / 0.980 | 0.86 / 0.981 | 0.80 / 0.983 |
+| entities | 1.01 / 0.989 | 0.97 / 0.989 | 0.32 / 0.997 | 0.84 / 0.989 |
+
+Final against master is inside master's own run-to-run floor in every scene (rain: 0.86 vs 0.80, within noise). Neither
+build is bit-identical to itself between runs: TAA and frame-time-dependent `smooth()` uniforms vary. Nothing on the default
+path touches pixels: the audit hooks only name allocations, and the sparse code returns before doing anything when the
+switch is off. The opt-in sparse path is proven bit-exact by the atlas dumps above. Against Iris, the numbers match the M6
+final table (MAE 0.28–1.01).
+
+### Tried and rejected
+
+- **VMA blocks of 32 MiB** (instead of VMA's 256 MiB): 1.3 GB less slack at 256x (1878 → 551 MiB), but 60.2 instead of
+  80.1 FPS. The device heap stays at its budget either way. With 32 MiB blocks, the allocation that no longer fits is MC's
+  translucent chunk `UberBuffer` (read every frame, now over PCIe) instead of the pack's SSBO. Which allocation spills
+  matters more than how much is free. At vanilla it was neutral to −2 %. Reverted.
+- **Memory priority + pageable device-local memory** (`VK_EXT_memory_priority`, `VK_EXT_pageable_device_local_memory`,
+  VMA's priority flag; priorities by label: items/other PBR atlases 0.0, UberBuffers and MC's transient memory 1.0, the
+  rest 0.5). It works mechanically: VMA keeps all 14.4 GB "on the device", and the driver keeps 10.6 GB resident and pages
+  5.6 GB out. But at 256x in the hand scene it ties with master (steady-state median frame time 13.96 / 13.52 ms vs 12.92 /
+  14.63 ms). Not kept.
+- **Skipping composite2/composite3:** they are exact identity copies here. `vec4(texelFetch(colortex0, ivec2(gl_FragCoord.xy), 0).rgb, 1.0)`
+  goes into R11G11B10F, which has no alpha. composite2 writes main → alt and composite3 writes alt → main, and no later pass
+  of the frame reads the alt side (flip states 5–8); the frame-start clear resets it. So the skip would be bit-exact. But
+  together they cost 0.04 ms (0.5 %), below the run-to-run noise of ±0.05 ms, so a SPIR-V/GLSL pattern matcher is not worth it.
+- **Aliasing transient targets:** colortex alt sides are 86 MiB at 1080p, under 1 % of the 256x demand, and their contents
+  cross the frame boundary through the end-of-frame copies.
+- **SSBO, floodfill, voxel images:** these are the pack's declared sizes (Iris allocates the same). The SSBO is indexed by
+  voxel face of the world-space reflections and written by the GPU wherever there are faces, and the floodfill volumes are
+  fully read and written every frame, so no region can be left unbacked. `leaves_img` (2 MiB) is unused but too small to matter.
+- **Smaller formats:** none provably holds the data with these settings; not attempted.
+- **Lossless compression:** the driver does not expose `VK_EXT_image_compression_control`. That extension only controls
+  fixed-rate compression (lossy, mainly ARM), and NVIDIA already applies its own transparent lossless framebuffer
+  compression, which saves bandwidth, not memory. `VK_EXT_memory_decompression` (GDeflate) decompresses during copies, so
+  resident size stays the same. BC/ASTC is lossy and forbidden.
+- **Caching:**
+  - Pack load is already cached. Cold: conversion 3.4 s, raw pipelines 4.5 s. Warm (converter cache + `VkPipelineCache`
+    on disk): 0.2 s + 0.2 s, and the gbuffers pipelines build in the background during world load.
+  - Uniform upload is 0.03 ms CPU and descriptor sets are pre-built per flip state. The frame is GPU-bound with ≈ 5 ms of
+    CPU slack, so CPU-side caching cannot raise FPS.
+- **Async compute for shadowcomp:** it reads this frame's voxelisation from shadow_opaque, and every later pass reads its
+  floodfill result. The only possible overlap is shadow_translucent + sky (0.19 ms), and it would need queue-ownership
+  transfers and timeline semaphores in MC's single-queue submit. Not worth it.
+- **Fewer MC render-pass splits:** MC's work between our passes totals ≈ 0.05 ms.
+- **Compact chunk vertex format** (Sodium-style 16-bit positions/UVs): not bit-identical to our current float data (position
+  quantum 1/2048 block, UV quantum 1/65536). It could move us closer to Iris+Sodium, but the brief forbids any change of
+  our image. Upper bound: shadow_opaque, mostly vertex work, is 0.47 ms; the opaque pass (2.44 ms) is fragment-heavy; the
+  UberBuffers (416–544 MiB) would shrink by ≈ 40 %.
+- **Early-Z / depth pre-pass:** the terrain shaders discard (alpha test), and a pre-pass doubles the vertex work. Not exact in general.
+
+Observed but not caused by us: in 256x runs, master included, the benchmark often ends in 180–200 frames pinned at exactly
+33.3 ms. This looks like presentation or compositor throttling. Medians are used where it matters.
 
 ## Robustness tests (M6)
 

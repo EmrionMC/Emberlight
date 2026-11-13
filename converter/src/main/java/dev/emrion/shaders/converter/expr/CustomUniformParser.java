@@ -76,7 +76,9 @@ public final class CustomUniformParser {
 					return other == null ? null : other.type;
 				});
 			} catch (RuntimeException ex) {
-				error(diagnostics, "Failed to resolve custom " + kind(d.uniform) + " " + d.name + " = " + d.source + ": " + ex.getMessage());
+				// Iris (stareval) has the same overloads, e.g. no vec2 * float (MakeUp); it logs a warning and skips the uniform
+				warn(diagnostics, "Failed to resolve custom " + kind(d.uniform) + " " + d.name + " = " + d.source + ": " + ex.getMessage()
+						+ "; skipped like Iris does, the uniform keeps its default value");
 				continue;
 			}
 			if (UniformCatalog.inputType(d.name) != null) {

@@ -247,9 +247,22 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 			});
 		}
 
-		String stageTexture(String stage, String sampler) {
+		/** iris-spec §2.5: a raw texture (value with spaces) only replaces a sampler declared with its type (texture.deferred.colortex6.1). */
+		String stageTexture(String stage, String sampler, String glslType) {
 			var l = stageTextures.get(stage + "." + sampler);
-			return l == null ? null : l.getLast();
+			if (l == null) return null;
+			for (String v : l.reversed()) {
+				String[] p = v.split("\\s+");
+				if (p.length == 1) return v;
+				String dim = switch (p[1].toUpperCase(Locale.ROOT)) {
+					case "TEXTURE_1D" -> "sampler1D";
+					case "TEXTURE_3D" -> "sampler3D";
+					case "TEXTURE_RECTANGLE" -> "sampler2DRect";
+					default -> "sampler2D";
+				};
+				if (glslType.replaceFirst("^[iu]", "").equals(dim)) return v;
+			}
+			return null;
 		}
 
 		void classify() {
@@ -462,8 +475,9 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 						// GL reads texture unit 0 through an unbound sampler: colortex0 in composite-like passes. In gbuffers it
 						// would be the albedo; a white texture (or depth 1.0 for shadow samplers = fully lit) is the safe
 						// equivalent (e.g. shadowtex0 in the Nether, where Iris creates no shadow targets).
-						r = !a.group().isGeometry() ? resolveSampler(c, a.group(), "colortex0", "sampler2D", false)
-								: s.glslType().endsWith("Shadow") ? new Res("sampled_image", null, null, "white_depth", sampler("linear", "none", "clamp", "lequal"))
+						r = !a.group().isGeometry() ? resolveSampler(c, a.group(), "colortex0", "sampler2D", false) : null;
+						// colortex0 itself can be unresolvable (an unsupported texture.composite.colortex0 override, Photon)
+						if (r == null) r = s.glslType().endsWith("Shadow") ? new Res("sampled_image", null, null, "white_depth", sampler("linear", "none", "clamp", "lequal"))
 								: new Res("sampled_image", null, null, "white", sampler("nearest", "none", "clamp", null));
 						info(name, "sampler " + s.name() + " has no Iris source; bound to the unit-0 equivalent");
 					}
@@ -562,7 +576,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 			if (canon != null) {
 				for (String alias : aliases(canon, water)) {
 					if (canon.startsWith("colortex") && c.flippedAtLeastOnce().contains(colortexIndex(canon))) break;
-					String v = stageTexture(c.texStage(), alias);
+					String v = stageTexture(c.texStage(), alias, type);
 					if (v != null) return textureRes(v, alias);
 				}
 				return builtinRes(canon, c, type);

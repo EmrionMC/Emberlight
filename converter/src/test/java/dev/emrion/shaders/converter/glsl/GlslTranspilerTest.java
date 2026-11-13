@@ -104,6 +104,29 @@ class GlslTranspilerTest {
 		assertTrue(o.fs().contains("float emr_kw_texture = emr_kw_filter(texCoord.x)"));
 	}
 
+	@Test
+	void sharedStaysAQualifierInCompute() throws Exception {
+		Out o = run("composite", ProgramGroup.COMPOSITE, null, null, null, null, """
+				#version 430
+				layout(local_size_x = 64) in;
+				shared vec3 cache[64][2];
+				void main() { cache[gl_LocalInvocationIndex][0] = vec3(1.0); }
+				""");
+		assertTrue(o.glsl().get(StageType.COMPUTE).contains("\nshared vec3 cache[64][2];"));
+	}
+
+	@Test
+	void ownFunctionNamedLikeALaterBuiltinIsRenamed() throws Exception {
+		Out o = composite(VS, """
+				#version 120
+				varying vec2 texCoord;
+				float tanh(float x) { return (exp(x) - exp(-x)) / (exp(x) + exp(-x)); }
+				void main() { gl_FragData[0] = vec4(tanh(texCoord.x)); }
+				""");
+		assertTrue(o.fs().contains("float emr_kw_tanh(float x)"));
+		assertTrue(o.fs().contains("vec4(emr_kw_tanh(texCoord.x))"));
+	}
+
 	// ---- step 2: texture functions ----
 
 	@Test
@@ -474,6 +497,21 @@ class GlslTranspilerTest {
 	}
 
 	@Test
+	void packLocalNamedLikeAnEntityIdShadowsTheId() throws Exception {
+		Out o = gbuffers("terrain", VS, """
+				#version 130
+				uniform int blockEntityId;
+				varying vec2 texCoord;
+				int outer() { return blockEntityId; }
+				void main() { int blockEntityId = int(texCoord.x); gl_FragData[0] = vec4(float(blockEntityId + outer())); }
+				""");
+		assertTrue(o.fs().contains("int blockEntityId = int(texCoord.x);"));
+		assertTrue(o.fs().contains("\nint blockEntityId;"));
+		assertTrue(o.fs().contains("blockEntityId = emr_entityInfo.y;"));
+		assertFalse(o.fs().contains("uniform int blockEntityId"));
+	}
+
+	@Test
 	void programsWithAGeometryStageKeepIdsInPushConstants() throws Exception {
 		List<PreprocessedStage> st = List.of(
 				TranspilerTestSupport.stage("gbuffers_entities", ProgramGroup.GBUFFERS, StageType.VERTEX, VS),
@@ -573,6 +611,25 @@ class GlslTranspilerTest {
 		assertFalse(cs.contains("emr_main"));
 		assertEquals(List.of(new Transpiler.ImageDecl("voxel_img", "uimage2D", "r16ui", "readwrite"),
 				new Transpiler.ImageDecl("outImg", "image2D", null, "writeonly")), o.analysis().images());
+	}
+
+	@Test
+	void structVaryingTakesOneLocationPerMember() throws Exception {
+		String common = """
+				struct Fog { vec3 color; mat2 m; float d[2]; };
+				""";
+		Out o = composite("#version 450\n" + common + """
+				flat out Fog fog;
+				flat out vec3 after;
+				void main() { fog = Fog(vec3(0.0), mat2(1.0), float[2](0.0, 1.0)); after = vec3(1.0); gl_Position = vec4(0.0); }
+				""", "#version 450\n" + common + """
+				flat in Fog fog;
+				flat in vec3 after;
+				layout(location = 0) out vec4 c;
+				void main() { c = vec4(fog.color + after, fog.d[1]); }
+				""");
+		assertTrue(o.vs().contains("layout(location = 0) flat out Fog fog;"));
+		assertTrue(o.vs().contains("layout(location = 5) flat out vec3 after;")); // 1 + 2 + 2
 	}
 
 	// ---- step 9 and misc ----

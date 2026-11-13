@@ -308,7 +308,17 @@ public final class PbrAtlases {
 						+ "upload {} ms (render thread), {} MB decoded, {} MB VRAM", location, l.width(), l.height(), l.mipLevel() + 1, l.regions().size(),
 				loaded.normals().size(), loaded.specular().size(), (cpu - start) / 1_000_000, (System.nanoTime() - cpu) / 1_000_000,
 				loaded.bytes() >> 20, ((normals != null ? bytesPerAtlas : 0) + (specular != null ? bytesPerAtlas : 0)) >> 20);
+		EmrionShadersClient.LOG.info("PBR atlases of {}: sprites cover {}% of the atlas, normal maps {}%, specular maps {}%", location,
+				coverage(l, null), coverage(l, loaded.normals()), coverage(l, loaded.specular()));
 		if (DUMP) dump(l);
+	}
+
+	/** Percentage of the atlas area covered by the regions (with padding) of all sprites, or of those in {@code with}. */
+	private static long coverage(Layout l, @Nullable Map<Identifier, TextureAtlasSprite> with) {
+		long area = 0;
+		for (Region r : l.regions())
+			if (with == null || with.containsKey(r.name())) area += (long) (r.width() + 2 * r.padding()) * (r.height() + 2 * r.padding());
+		return area * 100 / ((long) l.width() * l.height());
 	}
 
 	private @Nullable PbrAtlas upload(Layout l, Type type, Map<Identifier, TextureAtlasSprite> sprites) {

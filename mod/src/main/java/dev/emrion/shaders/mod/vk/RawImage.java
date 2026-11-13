@@ -43,6 +43,7 @@ public final class RawImage {
 			VulkanContext.check(vmaCreateImage(ctx.vma, info, alloc, p, pAlloc, null), "vmaCreateImage " + label);
 			image = p.get(0);
 			allocation = pAlloc.get(0);
+			dev.emrion.shaders.mod.debug.VramReport.name(ctx.vma, allocation, "raw " + label);
 
 			var viewInfo = VkImageViewCreateInfo.calloc(stack).sType$Default().image(image)
 					.viewType(is3d ? VK_IMAGE_VIEW_TYPE_3D : VK_IMAGE_VIEW_TYPE_2D).format(format);

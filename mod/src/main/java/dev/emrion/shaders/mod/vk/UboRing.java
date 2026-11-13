@@ -20,7 +20,7 @@ public final class UboRing {
 	public UboRing(VulkanContext ctx, long bytesPerFrame) {
 		this.alignment = ctx.limits().minUniformBufferOffsetAlignment();
 		this.regionSize = align(bytesPerFrame, alignment);
-		this.buffer = new RawBuffer(ctx, regionSize * REGIONS, VK10.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
+		this.buffer = new RawBuffer(ctx, regionSize * REGIONS, VK10.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true, "emrion ubo ring");
 	}
 
 	public void nextFrame() {

@@ -47,7 +47,9 @@
     "SectionCompilerMixin",
     "SectionRenderDispatcherMixin",
     "StagedVertexBufferMixin",
-    "VertexDebugMixin"
+    "VertexDebugMixin",
+    "VramLabelMixin",
+    "VramBufferLabelMixin"
   ],
   "injectors": {
     "defaultRequire": 1
