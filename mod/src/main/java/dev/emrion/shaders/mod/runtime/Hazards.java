@@ -23,7 +23,9 @@ final class Hazards {
 
 	private final List<Tracked> touched = new ArrayList<>();
 	private final List<Tracked> pending = new ArrayList<>();
-	private final List<long[]> pendingAccess = new ArrayList<>();
+	/** Per pending access: stage, access, write (1/0), flattened so that declaring an access allocates nothing. */
+	private long[] pendingAccess = new long[48];
+	private final long[] masks = new long[4];
 	private long src, srcAccess, dst, dstAccess;
 
 	void reset() {
@@ -52,8 +54,12 @@ final class Hazards {
 			src |= t.readStages;
 			dst |= stage;
 		}
+		int n = pending.size() * 3;
+		if (n + 3 > pendingAccess.length) pendingAccess = java.util.Arrays.copyOf(pendingAccess, 2 * pendingAccess.length);
+		pendingAccess[n] = stage;
+		pendingAccess[n + 1] = access;
+		pendingAccess[n + 2] = write ? 1 : 0;
 		pending.add(t);
-		pendingAccess.add(new long[] {stage, access, write ? 1 : 0});
 	}
 
 	/** Emits the barrier for the accesses declared since the last call, then records them as done. */
@@ -62,10 +68,14 @@ final class Hazards {
 		if (m != null) Barriers.memory(cb, m[0], m[1], m[2], m[3]);
 	}
 
-	/** The barrier masks {srcStage, srcAccess, dstStage, dstAccess} the declared accesses need, or null. */
+	/** The barrier masks {srcStage, srcAccess, dstStage, dstAccess} the declared accesses need (reused array), or null. */
 	long[] flushMasks() {
-		long[] masks = src == 0 ? null : new long[] {src, srcAccess, dst, dstAccess};
+		long[] result = src == 0 ? null : masks;
 		if (src != 0) {
+			masks[0] = src;
+			masks[1] = srcAccess;
+			masks[2] = dst;
+			masks[3] = dstAccess;
 			// the barrier made every earlier write visible to these stages
 			for (Tracked t : pending) {
 				t.visibleStages |= dst;
@@ -74,19 +84,17 @@ final class Hazards {
 		}
 		for (int i = 0; i < pending.size(); i++) {
 			Tracked t = pending.get(i);
-			long[] a = pendingAccess.get(i);
 			if (!touched.contains(t)) touched.add(t);
-			if (a[2] == 1) {
-				t.writeStage = a[0];
-				t.writeAccess = a[1];
+			if (pendingAccess[3 * i + 2] == 1) {
+				t.writeStage = pendingAccess[3 * i];
+				t.writeAccess = pendingAccess[3 * i + 1];
 				t.readStages = t.visibleStages = t.visibleAccess = 0;
 			} else {
-				t.readStages |= a[0];
+				t.readStages |= pendingAccess[3 * i];
 			}
 		}
 		pending.clear();
-		pendingAccess.clear();
 		src = srcAccess = dst = dstAccess = 0;
-		return masks;
+		return result;
 	}
 }

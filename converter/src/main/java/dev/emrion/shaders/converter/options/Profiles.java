@@ -65,15 +65,21 @@ public record Profiles(Map<String, Map<String, String>> profiles, Map<String, Li
 	 * the current value. Null means "Custom".
 	 */
 	public String detect(OptionValues values) {
+		return detect(profiles, values.resolved());
+	}
+
+	/**
+	 * Same as {@link #detect(OptionValues)} on resolved values (every option → its effective value, booleans as
+	 * "true"/"false", as in Manifest.Options.values). Constraints on names missing from {@code resolved} are ignored.
+	 */
+	public static String detect(Map<String, Map<String, String>> profiles, Map<String, String> resolved) {
 		List<String> sorted = new ArrayList<>(profiles.keySet());
 		sorted.sort((a, b) -> Integer.compare(profiles.get(b).size(), profiles.get(a).size()));
-		OptionSet set = values.options();
 		for (String name : sorted) {
 			boolean match = true;
 			for (var e : profiles.get(name).entrySet()) {
-				if (set.booleans().containsKey(e.getKey())
-						&& !Boolean.toString(values.booleanOrDefault(e.getKey())).equals(e.getValue())) match = false;
-				if (set.strings().containsKey(e.getKey()) && !e.getValue().equals(values.stringOrDefault(e.getKey()))) match = false;
+				String v = resolved.get(e.getKey());
+				if (v != null && !v.equals(e.getValue())) match = false;
 			}
 			if (match) return name;
 		}

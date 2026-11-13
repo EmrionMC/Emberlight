@@ -1,5 +1,6 @@
 package dev.emrion.shaders.mod.pack;
 
+import dev.emrion.shaders.mod.gui.ShaderOptionsScreen;
 import java.util.List;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
@@ -11,6 +12,7 @@ import org.jspecify.annotations.Nullable;
 public final class PackScreen extends Screen {
 	private static final int ROW = 22;
 	private final @Nullable Screen parent;
+	private Button options;
 
 	public PackScreen(@Nullable Screen parent) {
 		super(Component.literal("Emrion Shaders"));
@@ -26,7 +28,12 @@ public final class PackScreen extends Screen {
 			if (y > height - 90) break;
 			addRenderableWidget(Button.builder(label(pack, pack.equals(PackManager.selected())), b -> pick(pack)).bounds(x, y, 200, 20).build());
 		}
-		addRenderableWidget(Button.builder(Component.literal("Done"), b -> onClose()).bounds(x, height - 28, 200, 20).build());
+		options = addRenderableWidget(Button.builder(Component.literal("Shader Options..."), b -> {
+			var session = PackManager.optionSession();
+			if (session != null) minecraft.gui.setScreen(new ShaderOptionsScreen(this, session));
+		}).bounds(x - 102, height - 28, 200, 20).build());
+		options.active = PackManager.optionSession() != null;
+		addRenderableWidget(Button.builder(Component.literal("Done"), b -> onClose()).bounds(x + 102, height - 28, 200, 20).build());
 	}
 
 	private static Component label(String name, boolean selected) {
@@ -36,6 +43,11 @@ public final class PackScreen extends Screen {
 	private void pick(@Nullable String pack) {
 		PackManager.select(pack, true);
 		rebuildWidgets();
+	}
+
+	@Override
+	public void tick() {
+		if (!options.active) options.active = PackManager.optionSession() != null; // on once the pack finished loading
 	}
 
 	@Override

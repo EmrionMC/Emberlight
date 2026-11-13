@@ -2,6 +2,8 @@ package dev.emrion.shaders.mod.mixin;
 
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.renderpearl.api.textures.FilterMode;
 import com.mojang.renderpearl.api.commands.CommandEncoder;
 import com.mojang.renderpearl.api.commands.RenderPass;
 import com.mojang.renderpearl.api.textures.GpuSampler;
@@ -77,7 +79,9 @@ public class LevelRendererMixin {
 	private void emrion$terrainStage(ChunkSectionsToRender chunks, ChunkSectionLayerGroup group, RenderPass pass, GpuSampler sampler, GpuTextureView atlas,
 			boolean wireframe, Operation<Void> original) {
 		int stage = group == ChunkSectionLayerGroup.TRANSLUCENT ? GeometryHooks.TERRAIN_TRANSLUCENT : GeometryHooks.TERRAIN_SOLID;
-		GeometryHooks.withStage(stage, () -> original.call(chunks, group, pass, sampler, atlas, wireframe));
+		// Iris (IrisSamplers.getTerrainCache, breaksAnisotropy): nearest min/mag with mips, not MC 26.3's linear chunk sampler
+		GpuSampler s = EmrionShadersClient.active() ? RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST, true) : sampler;
+		GeometryHooks.withStage(stage, () -> original.call(chunks, group, pass, s, atlas, wireframe));
 	}
 
 	@WrapOperation(method = "executeSolid", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/feature/FeatureRenderDispatcher$PreparedFrame;executeSolid(Lcom/mojang/renderpearl/api/commands/RenderPass;)V"))

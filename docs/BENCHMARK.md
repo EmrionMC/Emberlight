@@ -62,6 +62,10 @@ Set `JAVA_HOME=/usr/lib/jvm/java-27-temurin` first. In a checkout without `testp
   `runClient` behaves as before.
 - `-Demrion.autotest.only=a,b` renders a subset of the scenes. `-Demrion.autotest.settle=<s>` and `settle.frames=<n>`
   change the settle time (defaults: 5 s and at least 200 frames after the chunks are built).
+- `-Demrion.autotest.frameTimeCounter=<s>` pins `frameTimeCounter` in both runs (ours in `IrisTimer`, Iris's through the
+  optional `IrisTimerMixin`), so waving leaves, water waves, clouds and rain stand still at the same phase. Pass the same value
+  to both runs (we use 100). This takes the animation noise out of the comparison: the Iris-vs-Iris floor drops from
+  MAE 2–5 to 0.2–0.9 (table below), so a remaining difference is a rendering difference.
 
 ## Scene list (`mod/emrion-scenes.txt`)
 
@@ -111,19 +115,24 @@ So for the animated scenes, an MAE of 2–5 and an SSIM around 0.9 is "identical
 shadows, wrong colour grading, missing reflections) shows up as a clearly higher MAE, and you can see it in the diff panel.
 Always look at the diff panel, not only at the numbers.
 
-Emrion against Iris, measured 2026-11-13 on `m4/f1-fixes` after the shadow pass merge (same canonical world, Iris
-reference re-shot in the worktree after the scene-command fix):
+Emrion against Iris, measured 2026-11-13 on `m5/v1-visual` with `-Demrion.autotest.frameTimeCounter=100` in both runs
+(Iris reference re-shot with the same pin; the floor is two pinned Iris runs against each other):
 
-| Scene | MAE mean | SSIM | Iris noise floor (MAE / SSIM) |
-|---|---|---|---|
-| overview | 3.02 | 0.922 | 2.03 / 0.933 |
-| forest | 5.59 | 0.820 | 2.34 / 0.907 |
-| water | 4.10 | 0.888 | 4.62 / 0.894 |
-| cave | 1.43 | 0.963 | 0.50 / 0.997 |
-| sunset | 1.69 | 0.955 | 0.77 / 0.977 |
-| night | 0.50 | 0.989 | 0.20 / 0.998 |
-| rain | 3.47 | 0.919 | 2.96 / 0.930 |
-| entities | 5.35 | 0.838 | 3.33 / 0.883 |
+| Scene | MAE mean | SSIM | Pinned Iris floor (MAE / SSIM) | before v1 (MAE / SSIM, pinned) |
+|---|---|---|---|---|
+| overview | 0.40 | 0.997 | 0.38 / 0.996 | 1.38 / 0.989 |
+| forest | 0.72 | 0.992 | 0.58 / 0.992 | 2.12 / 0.978 |
+| water | 0.76 | 0.985 | 0.63 / 0.989 | 1.02 / 0.985 |
+| cave | 0.26 | 0.998 | 0.24 / 0.998 | 0.39 / 0.997 |
+| sunset | 0.57 | 0.995 | 0.33 / 0.996 | 1.00 / 0.991 |
+| night | 0.50 | 0.989 | 0.18 / 0.998 | 0.50 / 0.989 |
+| rain | 0.87 | 0.981 | 0.88 / 0.980 | 1.29 / 0.977 |
+| entities | 0.78 | 0.991 | 0.80 / 0.990 | 2.24 / 0.978 |
+
+Water varies by about ±0.05 between our own runs. Night stays above the floor because Euphoria's star field moves with
+`worldAgeSmooth`, a `smooth()` custom uniform that converges frame-time dependently after the time jump between scenes.
+("before v1" already includes the nearest terrain sampler; unpinned, the M4 numbers were forest 7.33 / 0.76 and
+entities 5.49 / 0.83.)
 
 ## Benchmark with Iris + Sodium
 
@@ -145,20 +154,102 @@ frame-to-frame times at the `overview` position (render distance 16), writes a C
 
 The full instance has more mods and a 256x resource pack, so its numbers differ from the dev runs. Compare like with like.
 
-## Baseline (Iris + Sodium on OpenGL)
+## Results: Iris + Sodium vs Emrion (M5, 2026-11-13)
 
 Hardware: AMD Ryzen 7 5800X3D, NVIDIA RTX 4070 Ti (driver 615.78), Linux 7.2 (Arch), Wayland. Iris 1.11.7,
-Sodium 0.9.3-beta.1, MC 26.3 dev environment, 1920×1080, render distance 16, scene `overview`, 30 s.
+Sodium 0.9.3-beta.1, MC 26.3 dev environment, 1920×1080, render distance 16, scene `overview`, 30 s, the user's settings.
+Each side was run 3 times, interleaved (Iris, Emrion, Iris, …), same world and settings.
 
-| Metric | Iris 1.11.7 + Sodium 0.9.3 (OpenGL) |
+**Measure only on an otherwise idle GPU.** A second game instance (another agent's scene run, even one still loading)
+cut Emrion from ≈ 131 to 57–98 FPS and Iris from 75 to 36–64 FPS in our first attempts. Runs that overlapped another
+game JVM during the 30 s window were discarded and repeated.
+
+| Metric (mean of 3 runs) | Iris 1.11.7 + Sodium 0.9.3 (OpenGL) | Emrion before M5 | Emrion after M5 |
+|---|---|---|---|
+| Average FPS | **75.3** (13.28 ms); runs 75.3 / 75.4 / 75.2 | 130.7 (7.65 ms); runs 130.0 / 131.7 / 130.3 | **132.9** (7.52 ms); runs 134.2 / 131.0 / 133.5 |
+| Median frame time | 13.30 ms | 7.58 ms | 7.45 ms |
+| 99th percentile | 14.26 ms | 9.28 ms | 9.03 ms |
+| 1% low | 68.9 FPS | 104.4 FPS | 107.1 FPS |
+
+"Before" is the M4 state (the same build with `-Demrion.perf.deferClears=false -Demrion.perf.computeClears=false`, which
+restores the old clears). Emrion is **1.76× Iris's average FPS** (−5.8 ms per frame) and better in every metric. The
+final build (with the shadow-pass CPU fix below) measured 131.9 / 133.6 / 131.8 FPS: the same, because the frame is
+GPU-bound (one of those runs had a burst of 20–39 ms stalls from outside the game, 1% low 52; the other two 108 / 105).
+The earlier one-run baseline (73.8 FPS, 1% low 19.0) included a few long stalls; the re-runs had none.
+
+### Where the time goes (Emrion)
+
+Both sides are **GPU-bound** at 1080p: Iris runs at 100 % GPU utilisation (≈ 210 W), Emrion at 99 % (≈ 245 W), and
+Emrion's render thread spends 4.6–5.1 ms of each 7.5 ms frame blocked on the GPU (MC's wait for the submit two frames
+back, plus acquire/present). Render-thread CPU per frame (after M5, mean of the two undisturbed final runs):
+
+| Render-thread CPU | ms/frame |
 |---|---|
-| Frames in 30 s | 2212 |
-| Average FPS | **73.8** (13.55 ms) |
-| Median frame time | 13.22 ms (≈ 76 FPS) |
-| 99th percentile frame time | 17.90 ms (≈ 56 FPS) |
-| 1% low (avg FPS of the slowest 1 % of frames) | **19.0** FPS (pulled down by a few stalls, max 210.65 ms) |
-| CSV | `mod/run-iris/emrion-benchmark-iris.csv` (git-ignored, `frame,ms`) |
+| uniform update (frame block + phase blocks) | 0.03 |
+| recording our raw passes (barriers, binds, draws) | 0.19 |
+| shadow pass: culling + MC's draw preparation/recording for the shadow view + entities | 1.47 (2.09 before) |
+| MC's own work (everything else: extraction, main-view chunks, entities, GUI, submit) | 0.69 |
+| blocked on the GPU | 5.17 |
 
-The frame times are stable at about 13 ms (GPU-bound with this pack). The 1% low comes from a few long stalls (GC or chunk
-uploads in the first seconds), so report the 99th percentile too. This is one run. Repeat it 2–3 times before you draw
-conclusions from differences under 5 %.
+GPU time per pass (GPU timestamps, mean of 3 runs after M5; "MC draws" = the gbuffers phase that MC's own draw code
+renders with our pipelines):
+
+| Pass | GPU ms | Pass | GPU ms |
+|---|---|---|---|
+| clear (frame start: depthtex0, shadowtex0, colortex) | 0.03 | translucent (water, translucent entities/particles) | 1.09 |
+| shadow_opaque (terrain + voxelisation) | 0.47 | mipmaps colortex5 | 0.03 |
+| shadow_entities | 0.00 | composite | 0.09 |
+| copy shadowtex1 | 0.02 | voxel clears (deferred, compute) | 0.32 |
+| shadow_translucent | 0.12 | composite1 (world-space reflections) | 0.88 |
+| shadowcomp (floodfill compute, 512×256×512) | 0.65 | composite2 + composite3 (identity copies) | 0.08 |
+| sky | 0.07 | composite4–7, final, mipmaps | 0.48 |
+| opaque (terrain, entities, block entities) | 2.52 | end-of-frame copies | 0.09 |
+| copy depthtex1 + mipmaps colortex0 | 0.05 | MC between our passes, before/after the level | 0.09 |
+| deferred1 | 0.33 | **total (frame start to GUI end)** | **7.36** |
+
+Iris cannot be split per pass the same way (OpenGL timer queries would need an Iris patch). What the numbers do show:
+Iris needs 13.3 ms of GPU-bound frame time for the same passes with the same shaders (the comparison scenes match within
+Iris's own noise), so the difference is not in what is rendered but in how: Vulkan with precise barriers inside our
+raw passes and pre-built descriptor sets versus OpenGL's implicit synchronisation and driver work, and pipelines
+built at load time. The GPU draws less power under Iris at 100 % "utilisation", consistent with more idle bubbles.
+
+### What M5 changed and what it gained
+
+| Change | Effect (measured) |
+|---|---|
+| **Profiler** (`debug.Profiler`): GPU timestamps around every raw pass and MC geometry phase, plus frame start/end, so MC's own work between our passes is visible; render-thread CPU sections; time blocked on the GPU (`GpuWaitMixin`, `SurfaceWaitMixin`) | overhead below noise (130.8 FPS without, 130.6 with `-Demrion.debug.timings=true`) |
+| **Overlay**, key *Profiler Overlay* (default **F7**, rebindable in Controls), drawn with the FPS counter so it works with F1; `-Demrion.debug.overlay=true` starts with it shown | — |
+| **Deferred clears** (`DeferredClears`): the per-frame clear of the raw voxel images (voxel_img 128 MB, wsr_img 32 MB, …) moves from the frame start to right after the image's last use in the previous frame (after the first shader pass behind any transfers); `leaves_img`, which no active program uses, is no longer cleared at all | with `vkCmdClearColorImage` alone: none (130.2 vs 130.7 FPS); a transfer clear is waited on by the next pass behind a mipmap/copy |
+| **Compute clears** for unsigned-integer raw images (`emrion_clear2d/3d.comp`): raw-pass barriers never wait on the compute stage, so the clear overlaps composite1–3 | **+2.2 FPS (+1.7 %), −0.13 ms** average and median; clear itself 0.40 → 0.32 ms |
+| **Shadow pass skips empty sections**: every air section in the shadow volume went through MC's `extractSectionDrawGroups` (JFR: 2.3 GB allocated in 28 s by the shadow pass alone) | shadow-pass CPU **2.09 → 1.47 ms**, render-thread allocation 3.7 → 1.6 GB per 28 s; no FPS change (GPU-bound) |
+| No string building per frame for profiler labels; `Hazards` keeps pending accesses in a flat array | no per-pass allocation in our recording code |
+
+Visual regression (MAE / SSIM against the Iris references, after all changes): cave 1.42/0.963, sunset 1.76/0.945,
+overview 2.89/0.921, rain 3.23/0.918, water 4.35/0.884, entities 5.47/0.834, forest 7.35/0.759, night 0.51/0.989, all
+within run-to-run noise of the M4 values. Emrion with the clear optimisations against Emrion without them differs by
+less than Iris against itself (overview 0.40/0.996, cave 0.42/0.997, night 0.23/0.998).
+
+### Investigated, not changed
+
+- **composite2/composite3** are identity copies of colortex0 with these settings, but they cost 0.05–0.08 ms together
+  (0.8 % of the frame). Skipping them needs a SPIR-V or GLSL pattern match plus flip-state remapping; not worth the risk now.
+- **`gl_NormalMatrix` inverse per vertex**: after `spirv-opt -O` each terrain/shadow vertex shader has a single
+  `MatrixInverse` (mat3) per vertex, a few dozen ALU ops; the per-pixel `inverse` in `gbuffers_terrain.fsh` is the pack's
+  own mat2 (derivatives), the same under GL. No SPIR-V pitfalls found in composite1 (fully inlined, no function-local arrays).
+- **MC's global barriers**: the gaps between our passes and MC's work around the level add up to ≈ 0.09 ms per frame.
+  Merging MC render passes could save part of that; small.
+- **Terrain vertex size (56 B vs 28 B)**: not measured directly (needs a second vertex format). Upper bound: the whole
+  shadow_opaque pass, which is mostly vertex work, is 0.47 ms; the opaque pass is fragment-heavy.
+- **Shadow culling** follows Iris (SAFE_ZONE + caster frustum), shadow geometry costs 0.6 ms on the GPU.
+- **CPU**: remaining render-thread hot spots are MC's own (`extractSectionDrawGroups` for both views, the section lookups
+  of the shadow culling loop). The frame is GPU-bound with ≈ 5 ms of slack, so they do not limit FPS here.
+
+### Profiling switches
+
+| Switch | Effect |
+|---|---|
+| F7 (*Profiler Overlay*) | ms per pass and the CPU breakdown, averaged over 0.5 s, top left |
+| `-Demrion.debug.overlay=true` | start with the overlay shown (also in autotest screenshots) |
+| `-Demrion.debug.timings=true` (`.seconds=5`) | log the full profile every 5 s |
+| `-Demrion.autotest.profile=true` | log the profile averaged over the benchmark window (`Benchmark profile:`) |
+| `-Demrion.perf.deferClears=false`, `-Demrion.perf.computeClears=false` | A/B switches for the clear optimisations |

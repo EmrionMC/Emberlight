@@ -3,6 +3,7 @@ package dev.emrion.shaders.mod.pack;
 import dev.emrion.shaders.converter.Converter;
 import dev.emrion.shaders.converter.DefaultConverter;
 import dev.emrion.shaders.converter.cache.CacheDir;
+import dev.emrion.shaders.converter.options.IrisSettings;
 import dev.emrion.shaders.converter.expr.CustomUniformParser;
 import dev.emrion.shaders.converter.glsl.GlslTranspiler;
 import dev.emrion.shaders.converter.pack.DefaultPackLoader;
@@ -79,10 +80,15 @@ public final class PackManager {
 	public static volatile float progress = -1;
 	public static final List<String> errors = new ArrayList<>();
 
-	private record Loaded(Path dir, Manifest manifest) {}
-	private record Prepared(int generation, String folder, PackPipelines pipelines) {}
+	/** @param lang the pack's shaders/lang/*.lang, language code (lowercase) → entries */
+	private record Loaded(Path dir, Manifest manifest, Map<String, Map<String, String>> lang) {}
+	private record Prepared(int generation, Loaded source, String folder, PackPipelines pipelines) {}
 
 	private static volatile @Nullable Loaded loaded;
+	/** A reload's result: replaces {@link #loaded} once its pipelines are built, so the old pack renders until then. */
+	private static volatile @Nullable Loaded next;
+	/** Completed reload swaps (autotest). */
+	public static volatile int swaps;
 	private static volatile @Nullable Prepared prepared;
 	private static boolean preparing;
 
@@ -126,6 +132,9 @@ public final class PackManager {
 		int gen = ++generation;
 		selected = pack;
 		loaded = null;
+		next = null;
+		Prepared stale = prepared;
+		if (stale != null) stale.pipelines().destroyLater();
 		prepared = null;
 		synchronized (errors) {
 			errors.clear();
@@ -170,10 +179,9 @@ public final class PackManager {
 		Path source = SHADERPACKS.resolve(pack);
 		if (!Files.exists(source)) throw new IOException("no such pack in " + SHADERPACKS);
 		source = source.toRealPath(); // the converter's PackSource does not follow a symlinked pack folder
-		if (Files.isRegularFile(source.resolve(CacheDir.MANIFEST))) return new Loaded(source, ManifestJson.readManifest(source.resolve(CacheDir.MANIFEST)));
+		if (Files.isRegularFile(source.resolve(CacheDir.MANIFEST))) return new Loaded(source, ManifestJson.readManifest(source.resolve(CacheDir.MANIFEST)), Map.of());
 
-		Path settings = SHADERPACKS.resolve(pack + ".txt");
-		if (!Files.isRegularFile(settings)) settings = SHADERPACKS.resolve(pack.replaceFirst("\\.zip$", "") + ".txt");
+		Path settings = settingsFile(pack);
 		if (!Files.isRegularFile(settings)) settings = null;
 		long start = System.nanoTime();
 		Converter.Result result;
@@ -199,7 +207,103 @@ public final class PackManager {
 		if (result.manifest().dimensions().isEmpty()) throw new IOException("the converted pack has no programs (is it a shader pack?)");
 		if (!errs.isEmpty()) chat(Component.literal("Emrion Shaders: " + pack + " converted with " + errs.size()
 				+ " errors (failed programs are skipped, see report.json): " + errs.getFirst().message()).withStyle(ChatFormatting.YELLOW));
-		return new Loaded(result.outputDir(), result.manifest());
+		return new Loaded(result.outputDir(), result.manifest(), readLang(source));
+	}
+
+	/** Iris LanguageMap: every shaders/lang/*.lang, UTF-8 properties, keyed by the lowercased file name. */
+	private static Map<String, Map<String, String>> readLang(Path source) {
+		Map<String, Map<String, String>> out = new java.util.HashMap<>();
+		try (PackSource src = PackSource.open(source)) {
+			for (String path : src.list()) {
+				if (!path.startsWith("shaders/lang/") || !path.endsWith(".lang") || path.indexOf('/', 13) >= 0) continue;
+				Properties p = new Properties();
+				p.load(new java.io.StringReader(new String(src.read(path).orElseThrow(), java.nio.charset.StandardCharsets.UTF_8)));
+				Map<String, String> m = new java.util.HashMap<>();
+				p.forEach((k, v) -> m.put((String) k, (String) v));
+				out.put(path.substring(13, path.length() - 5).toLowerCase(java.util.Locale.ROOT), m);
+			}
+		} catch (Exception e) {
+			EmrionShadersClient.LOG.warn("Could not read the lang files of {}", source, e);
+		}
+		return out;
+	}
+
+	/** The Iris settings file of a pack: {@code <pack>.txt} (Iris's name, ".zip" included), or an existing one without ".zip". */
+	public static Path settingsFile(String pack) {
+		Path f = SHADERPACKS.resolve(pack + ".txt");
+		Path alt = SHADERPACKS.resolve(pack.replaceFirst("\\.zip$", "") + ".txt");
+		return !Files.exists(f) && Files.exists(alt) ? alt : f;
+	}
+
+	// ---- options and reload -------------------------------------------------------------------------------------------
+
+	/** Options GUI state for the active pack (the newest loaded version), or null while nothing is loaded. */
+	public static dev.emrion.shaders.mod.gui.@Nullable OptionSession optionSession() {
+		Loaded l = next != null ? next : loaded;
+		if (l == null || l.manifest().options() == null) return null;
+		return new dev.emrion.shaders.mod.gui.OptionSession(l.manifest().options(), l.lang(),
+				Minecraft.getInstance().getLanguageManager().getSelected().toLowerCase(java.util.Locale.ROOT));
+	}
+
+	/** Writes the Iris settings file for these option values (as Iris would) and, if it changed, reloads the pack. */
+	public static void applyOptions(Map<String, String> values) {
+		Loaded l = next != null ? next : loaded;
+		String pack = selected;
+		if (l == null || pack == null) return;
+		Path file = settingsFile(pack);
+		try {
+			var settings = IrisSettings.nonDefault(l.manifest().options().declared(), values, IrisSettings.read(file));
+			if (!IrisSettings.update(file, settings)) return;
+			EmrionShadersClient.LOG.info("Wrote {} ({} non-default values)", file, settings.size());
+		} catch (IOException e) {
+			EmrionShadersClient.LOG.error("Could not write {}", file, e);
+			chat(Component.literal("Emrion Shaders: could not write " + file.getFileName() + ": " + e.getMessage()).withStyle(ChatFormatting.RED));
+			return;
+		}
+		reload();
+	}
+
+	/**
+	 * Reconverts the selected pack from disk (pack files or settings changed; the cache key covers both, so any change
+	 * misses the cache). The current version keeps rendering until the new one's pipelines are built; on failure it stays.
+	 */
+	public static void reload() {
+		String pack = selected;
+		if (pack == null) return;
+		int gen = ++generation;
+		next = null;
+		synchronized (errors) {
+			errors.clear();
+		}
+		status = "Reloading " + pack;
+		progress = 0;
+		long start = System.nanoTime();
+		WORKER.execute(() -> {
+			try {
+				Loaded l = load(pack, gen);
+				Minecraft.getInstance().execute(() -> {
+					if (gen != generation) return;
+					if (current == null) loaded = l;
+					else next = l;
+					status = pack + ": converted in " + (System.nanoTime() - start) / 1_000_000 + " ms";
+					progress = -1;
+				});
+			} catch (Throwable t) {
+				if (gen == generation) reloadFailed(pack, t);
+			}
+		});
+	}
+
+	private static void reloadFailed(String pack, Throwable t) {
+		EmrionShadersClient.LOG.error("Reloading {} failed", pack, t);
+		next = null;
+		status = "Reload of " + pack + " failed: " + t.getMessage();
+		progress = -1;
+		synchronized (errors) {
+			errors.add(String.valueOf(t));
+		}
+		chat(Component.literal("Emrion Shaders: reloading " + pack + " failed (" + t.getMessage() + "). "
+				+ (loaded != null ? "The previous version keeps running; d" : "D") + "etails in the log.").withStyle(ChatFormatting.RED));
 	}
 
 	// ---- render-thread hooks ------------------------------------------------------------------------------------------
@@ -219,17 +323,32 @@ public final class PackManager {
 	public static void onLevelStart(float partialTick) {
 		try {
 			var mc = Minecraft.getInstance();
+			String dim = mc.level == null ? null : mc.level.dimension().identifier().toString();
 			Loaded l = loaded;
-			String folder = l == null || mc.level == null ? null : Dimensions.folder(l.manifest(), mc.level.dimension().identifier().toString());
+			String folder = l == null || dim == null ? null : Dimensions.folder(l.manifest(), dim);
 			if (folder == null || current != null && !folder.equals(current.folder())) deactivate();
-			if (folder != null && (current == null || !folder.equals(current.folder()))) {
-				Prepared p = prepared;
-				if (p != null && p.generation() == generation && p.folder().equals(folder)) install(l, p, mc);
+			Loaded n = next;
+			if (n != null && current == null) { // nothing to keep showing: the reload result simply becomes the pack
+				loaded = l = n;
+				next = n = null;
+				folder = dim == null ? null : Dimensions.folder(l.manifest(), dim);
+			}
+			Prepared p = prepared;
+			if (n != null) { // reload: keep rendering `current` until n's pipelines are ready, then swap within one frame
+				String nf = Dimensions.folder(n.manifest(), dim);
+				if (nf == null) {
+					deactivate();
+					loaded = n;
+					next = null;
+				} else if (p != null && p.generation() == generation && p.source() == n && p.folder().equals(nf)) swap(n, p, mc);
+				else if (!preparing) prepare(n, nf);
+			} else if (folder != null && (current == null || !folder.equals(current.folder()))) {
+				if (p != null && p.generation() == generation && p.source() == l && p.folder().equals(folder)) install(l, p, mc, true);
 				else if (!preparing) prepare(l, folder);
 			}
 			if (runtime != null) {
 				var main = mc.gameRenderer.mainRenderTarget();
-				if (main.width != runtime.width || main.height != runtime.height || runtime.atlasGeneration != PbrAtlases.generation()) resize(l, main.width, main.height);
+				if (main.width != runtime.width || main.height != runtime.height || runtime.atlasGeneration != PbrAtlases.generation()) resize(loaded, main.width, main.height);
 				executor.levelStart(partialTick);
 			}
 		} catch (Throwable t) {
@@ -264,25 +383,55 @@ public final class PackManager {
 				long start = System.nanoTime();
 				var pipelines = new PackPipelines(ctx, l.dir(), l.manifest(), l.manifest().dimensions().get(folder), vanilla);
 				EmrionShadersClient.LOG.info("Built {} pipelines for {}/{} in {} ms", pipelines.pipelines.size(), selected, folder, (System.nanoTime() - start) / 1_000_000);
-				if (gen == generation) prepared = new Prepared(gen, folder, pipelines);
-				else Minecraft.getInstance().execute(pipelines::destroyLater);
+				Minecraft.getInstance().execute(() -> {
+					Prepared old = prepared;
+					if (gen != generation) {
+						pipelines.destroyLater();
+						return;
+					}
+					if (old != null) old.pipelines().destroyLater();
+					prepared = new Prepared(gen, l, folder, pipelines);
+				});
 			} catch (Throwable t) {
-				if (gen == generation) fail("Could not build pipelines for " + selected, t);
+				if (gen != generation) return;
+				if (l == next) reloadFailed(selected, t);
+				else fail("Could not build pipelines for " + selected, t);
 			} finally {
 				Minecraft.getInstance().execute(() -> preparing = false);
 			}
 		});
 	}
 
-	private static void install(Loaded l, Prepared p, Minecraft mc) {
+	/** Replaces the running version with the reloaded one between two frames; chunks rebuild only if their meshes change. */
+	private static void swap(Loaded n, Prepared p, Minecraft mc) {
+		Loaded o = loaded;
+		boolean sameMeshes = o != null && java.util.Objects.equals(o.manifest().idMaps(), n.manifest().idMaps())
+				&& meshFlags(o).equals(meshFlags(n));
+		if (sameMeshes) deactivateKeepingFormats();
+		else deactivate();
+		loaded = n;
+		next = null;
+		install(n, p, mc, !sameMeshes);
+		swaps++;
+		EmrionShadersClient.LOG.info("Reload swapped in {} (chunk rebuild: {})", n.dir().getFileName(), !sameMeshes);
+	}
+
+	private static List<Object> meshFlags(Loaded l) {
+		var props = l.manifest().properties() == null ? Map.<String, Object>of() : l.manifest().properties();
+		return java.util.Arrays.asList(props.get("separateAo"), props.get("oldLighting"));
+	}
+
+	private static void install(Loaded l, Prepared p, Minecraft mc, boolean meshes) {
 		prepared = null;
 		current = p;
 		uniforms = uniformFactory.apply(l.manifest(), p.folder());
-		var ids = BlockIdTable.build(l.manifest().idMaps());
-		var props = l.manifest().properties() == null ? Map.<String, Object>of() : l.manifest().properties();
-		EmrionVertexFormats.setLighting(Boolean.TRUE.equals(props.get("separateAo")), Boolean.TRUE.equals(props.get("oldLighting")));
-		EmrionVertexFormats.setIds(ids);
-		EmrionVertexFormats.setActive(true); // rebuilds chunks in the extended terrain format
+		var ids = meshes ? BlockIdTable.build(l.manifest().idMaps()) : EmrionVertexFormats.ids();
+		if (meshes) {
+			var props = l.manifest().properties() == null ? Map.<String, Object>of() : l.manifest().properties();
+			EmrionVertexFormats.setLighting(Boolean.TRUE.equals(props.get("separateAo")), Boolean.TRUE.equals(props.get("oldLighting")));
+			EmrionVertexFormats.setIds(ids);
+			EmrionVertexFormats.setActive(true); // rebuilds chunks in the extended terrain format
+		}
 		if (uniforms instanceof IrisUniformSystem u) u.setBlockIdLookup(ids::block);
 		var main = mc.gameRenderer.mainRenderTarget();
 		resize(l, main.width, main.height);
@@ -304,6 +453,10 @@ public final class PackManager {
 
 	private static void deactivate() {
 		if (current != null) EmrionVertexFormats.setActive(false);
+		deactivateKeepingFormats();
+	}
+
+	private static void deactivateKeepingFormats() {
 		if (executor != null) executor.close();
 		if (runtime != null) runtime.destroyLater();
 		if (current != null) current.pipelines().destroyLater();
@@ -319,6 +472,7 @@ public final class PackManager {
 		String pack = selected;
 		generation++;
 		loaded = null;
+		next = null;
 		prepared = null;
 		selected = null;
 		status = what + ": " + t;

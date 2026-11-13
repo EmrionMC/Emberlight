@@ -15,6 +15,10 @@ public final class EntityIds {
 	public static int entity, blockEntity, item;
 	/** True while the world or hand feature frame is prepared with a pack active: ENTITY draws use the extended format. */
 	public static boolean extending;
+	/** True while the vertices of a submit made by a block entity are written (bit 48 of a Holder's ids). */
+	public static boolean fromBlockEntity;
+	/** Holder-only flag above the three ids: the submit was made by a block entity. */
+	public static final long BLOCK_ENTITY_SUBMIT = 1L << 48;
 
 	public static long packed() {
 		return (entity & 0xFFFFL) | (blockEntity & 0xFFFFL) << 16 | (item & 0xFFFFL) << 32;
@@ -24,6 +28,7 @@ public final class EntityIds {
 		entity = (short) packed;
 		blockEntity = (short) (packed >>> 16);
 		item = (short) (packed >>> 32);
+		fromBlockEntity = (packed & BLOCK_ENTITY_SUBMIT) != 0;
 	}
 
 	/** Implemented (via mixin) by the submit records whose vertices may use the entity format. */

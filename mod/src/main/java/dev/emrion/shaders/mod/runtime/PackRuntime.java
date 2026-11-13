@@ -41,8 +41,8 @@ public final class PackRuntime {
 	private static final Pattern COLORTEX = Pattern.compile("colortex(\\d+)");
 	private static final int MC_USAGE = GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_COPY_SRC | GpuTexture.USAGE_TEXTURE_BINDING
 			| GpuTexture.USAGE_RENDER_ATTACHMENT;
-	/** Atlases as Iris samples them: MC's terrain sampler (linear, linear mips); labPBR specular nearest (no value blending). */
-	private static final Manifest.SamplerDef ATLAS_SAMPLER = new Manifest.SamplerDef("linear", "linear", "clamp", null);
+	/** Atlases as Iris samples them: its terrain sampler (nearest, linear mips); labPBR specular nearest (no value blending). */
+	private static final Manifest.SamplerDef ATLAS_SAMPLER = new Manifest.SamplerDef("nearest", "linear", "clamp", null);
 	private static final Manifest.SamplerDef LABPBR_SPECULAR_SAMPLER = new Manifest.SamplerDef("nearest", "nearest", "clamp", null);
 
 	/** One physical image: an MC texture (attachable by geometry passes later) or a raw VMA image. */

@@ -1,6 +1,10 @@
 package dev.emrion.shaders.mod.autotest;
 
 import dev.emrion.shaders.mod.EmrionShadersClient;
+import dev.emrion.shaders.mod.debug.Profiler;
+import dev.emrion.shaders.mod.gui.ShaderOptionsScreen;
+import dev.emrion.shaders.mod.pack.PackManager;
+import dev.emrion.shaders.mod.vk.VulkanContext;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -39,14 +43,21 @@ import org.jspecify.annotations.Nullable;
  * emrion.autotest.benchmark.seconds=N   frame-time capture after the screenshots (at the last position)
  * emrion.autotest.quit=true         leave the world (saving it) and exit
  * emrion.autotest.hud=true          keep the HUD (and with it the first-person hand) visible
+ * emrion.autotest.optionScreens=,A   after the shots: open the shader options screen ("" = main, else screen.A) and take
+ *                                  &lt;tag&gt;-options[-A].png of each
+ * emrion.autotest.set=NAME=value[;NAME=value]   then apply these option values like the GUI's Apply (settings file +
+ *                                  reconvert + swap), wait for the swap and take &lt;tag&gt;-set.png
+ * emrion.autotest.hotreload=N      then reload the pack N times (key R), each waiting for the swap; logs GPU memory (VMA)
  * </pre>
  * With only {@code quit=true} the game exits as soon as the title screen is up (smoke test).
  */
 public final class AutoTest {
 	private static final String P = "emrion.autotest.";
 	private static final int TPS = 20;
+	/** -Demrion.autotest.profile=true: the Profiler accumulates over the benchmark window and logs it (Vulkan only). */
+	private static final boolean PROFILE = Boolean.getBoolean(P + "profile");
 
-	private enum State { WAIT_TITLE, WAIT_WORLD, RELOAD, SETUP, WAIT_CHUNKS, SETTLE, SHOT, BENCHMARK, LEAVE, QUIT, DONE }
+	private enum State { WAIT_TITLE, WAIT_WORLD, RELOAD, SETUP, WAIT_CHUNKS, SETTLE, SHOT, BENCHMARK, OPTIONS, SET, HOT_RELOAD, LEAVE, QUIT, DONE }
 
 	private final String world = System.getProperty(P + "world");
 	private final long seed = Long.getLong(P + "seed", 2026L);
@@ -58,6 +69,11 @@ public final class AutoTest {
 	private final int settleTicks = Integer.getInteger(P + "settle", 5) * TPS;
 	private final int settleFrames = Integer.getInteger(P + "settle.frames", 200);
 	private final List<Scene> scenes = new ArrayList<>();
+	private final @Nullable List<String> optionScreens = System.getProperty(P + "optionScreens") == null ? null
+			: Arrays.asList(System.getProperty(P + "optionScreens").split(",", -1));
+	private final String set = System.getProperty(P + "set", "");
+	private int hotReloads = Integer.getInteger(P + "hotreload", 0);
+	private int optionShot, swapsBefore = -1, swapTick;
 
 	/** {@code name == null}: legacy pos mode (emrion-&lt;tag&gt;[-i].png). {@code pos == null}: wherever the player is. */
 	record Scene(String name, String pos, int time, String weather, List<String> commands) {}
@@ -189,7 +205,7 @@ public final class AutoTest {
 				shot++;
 				if (shot < scenes.size()) go(State.SETUP);
 				else if (benchmarkSeconds > 0) go(State.BENCHMARK);
-				else go(State.LEAVE);
+				else go(State.OPTIONS);
 			}
 			case BENCHMARK -> {
 				if (ticks == 1) { // uncapped for the measurement, restored afterwards; 1 s warm-up
@@ -198,13 +214,89 @@ public final class AutoTest {
 					mc.options.enableVsync().set(false);
 					mc.options.framerateLimit().set(260);
 				}
-				if (ticks == TPS) FrameTimeLogger.INSTANCE.start();
+				if (ticks == TPS) {
+					FrameTimeLogger.INSTANCE.start();
+					if (PROFILE && EmrionShadersClient.active()) Profiler.benchmarkStart();
+				}
 				if (ticks >= (benchmarkSeconds + 1) * TPS) {
 					FrameTimeLogger.INSTANCE.stopAndDump(mc.gameDirectory.toPath().resolve("emrion-benchmark-" + tag + ".csv"));
+					if (PROFILE && EmrionShadersClient.active()) Profiler.benchmarkEnd();
 					mc.options.enableVsync().set(vsync);
 					mc.options.framerateLimit().set(fpsLimit);
-					go(State.LEAVE);
+					go(State.OPTIONS);
 				}
+			}
+			case OPTIONS -> {
+				if (optionScreens == null || optionShot >= optionScreens.size()) {
+					if (mc.gui.screen() != null) mc.gui.setScreen(null);
+					go(State.SET);
+					return;
+				}
+				String screen = optionScreens.get(optionShot);
+				if (ticks == 1) {
+					var session = PackManager.optionSession();
+					if (session == null) throw new IllegalStateException("autotest: no pack loaded for the options screen");
+					mc.gui.setScreen(ShaderOptionsScreen.open(session, screen));
+				}
+				if (ticks == 2 * TPS) {
+					shoot(mc, tag + "-options" + (screen.isEmpty() ? "" : "-" + screen) + ".png");
+					optionShot++;
+					go(State.OPTIONS);
+				}
+			}
+			case SET -> {
+				if (set.isBlank()) {
+					go(State.HOT_RELOAD);
+					return;
+				}
+				if (swapsBefore < 0) {
+					var session = PackManager.optionSession();
+					if (session == null) throw new IllegalStateException("autotest: no pack loaded");
+					for (String kv : set.split(";")) session.pending.put(kv.substring(0, kv.indexOf('=')).strip(), kv.substring(kv.indexOf('=') + 1).strip());
+					swapsBefore = PackManager.swaps;
+					swapTick = -1;
+					reloadStart = System.nanoTime();
+					EmrionShadersClient.LOG.info("Autotest: applying {}", set);
+					PackManager.applyOptions(session.pending);
+					return;
+				}
+				if (PackManager.swaps == swapsBefore) {
+					if (ticks > 300 * TPS) throw new IllegalStateException("autotest: no swap after applying " + set);
+					return;
+				}
+				if (swapTick < 0) {
+					EmrionShadersClient.LOG.info("Autotest: option change applied and swapped in after {} ms", (System.nanoTime() - reloadStart) / 1_000_000);
+					swapTick = ticks;
+				}
+				if (ticks - swapTick < settleTicks) return;
+				shoot(mc, tag + "-set.png");
+				swapsBefore = -1;
+				go(State.HOT_RELOAD);
+			}
+			case HOT_RELOAD -> {
+				if (swapsBefore < 0) {
+					if (hotReloads <= 0) {
+						go(State.LEAVE);
+						return;
+					}
+					EmrionShadersClient.LOG.info("Autotest: GPU memory before hot reload: {}", gpuMemory());
+					swapsBefore = PackManager.swaps;
+					reloadStart = System.nanoTime();
+					PackManager.reload();
+					return;
+				}
+				if (PackManager.swaps == swapsBefore) {
+					if (ticks > 300 * TPS) throw new IllegalStateException("autotest: hot reload never swapped");
+					return;
+				}
+				if (reloadStart != 0) {
+					EmrionShadersClient.LOG.info("Autotest: hot reload swapped in after {} ms", (System.nanoTime() - reloadStart) / 1_000_000);
+					reloadStart = 0;
+					go(State.HOT_RELOAD);
+				}
+				if (ticks < 3 * TPS) return; // the deferred destroy queue retires the old version within a few frames
+				EmrionShadersClient.LOG.info("Autotest: GPU memory after hot reload ({} left): {}", --hotReloads, gpuMemory());
+				swapsBefore = -1;
 			}
 			case LEAVE -> {
 				if (ticks < TPS) return; // let the screenshot write finish
@@ -221,6 +313,30 @@ public final class AutoTest {
 				go(State.DONE);
 			}
 			case DONE -> {}
+		}
+	}
+
+	private static void shoot(Minecraft mc, String name) {
+		Screenshot.grab(mc.gameDirectory, name, mc.gameRenderer.mainRenderTarget(), 1,
+				msg -> EmrionShadersClient.LOG.info("Autotest screenshot: {}", msg.getString()));
+	}
+
+	/** VMA's view of device memory: bytes VMA has allocated (MC's and ours) and the driver-reported usage, per heap, in MiB. */
+	private static String gpuMemory() {
+		var ctx = VulkanContext.get();
+		try (var stack = org.lwjgl.system.MemoryStack.stackPush()) {
+			var props = org.lwjgl.vulkan.VkPhysicalDeviceMemoryProperties.malloc(stack);
+			org.lwjgl.vulkan.VK10.vkGetPhysicalDeviceMemoryProperties(ctx.vk.getPhysicalDevice(), props);
+			var budgets = org.lwjgl.util.vma.VmaBudget.calloc(org.lwjgl.vulkan.VK10.VK_MAX_MEMORY_HEAPS, stack);
+			org.lwjgl.util.vma.Vma.vmaGetHeapBudgets(ctx.vma, budgets);
+			StringBuilder sb = new StringBuilder();
+			for (int i = 0; i < props.memoryHeapCount(); i++) {
+				var b = budgets.get(i);
+				sb.append(String.format("heap%d%s allocated %.1f MiB, usage %.1f MiB; ", i,
+						(props.memoryHeaps(i).flags() & org.lwjgl.vulkan.VK10.VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0 ? " (device)" : "",
+						b.statistics().allocationBytes() / 1048576.0, b.usage() / 1048576.0));
+			}
+			return sb.toString();
 		}
 	}
 

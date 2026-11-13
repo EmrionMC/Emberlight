@@ -37,8 +37,22 @@ public class SectionCompilerMixin {
 	@WrapOperation(method = "compile", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/block/FluidRenderer;tesselate(Lnet/minecraft/client/renderer/block/BlockAndTintGetter;Lnet/minecraft/core/BlockPos;Lnet/minecraft/client/renderer/block/FluidRenderer$Output;Lnet/minecraft/world/level/block/state/BlockState;Lnet/minecraft/world/level/material/FluidState;)V"))
 	private void emrion$fluid(FluidRenderer renderer, BlockAndTintGetter level, BlockPos pos, FluidRenderer.Output output, BlockState state,
 			FluidState fluid, Operation<Void> original) {
-		if (EmrionVertexFormats.active()) BlockContext.get().fluid(state, fluid, pos.getX() & 15, pos.getY() & 15, pos.getZ() & 15);
-		original.call(renderer, level, pos, output, state, fluid);
+		if (!EmrionVertexFormats.active()) {
+			original.call(renderer, level, pos, output, state, fluid);
+			return;
+		}
+		BlockContext c = BlockContext.get();
+		c.fluid(state, fluid, pos.getX() & 15, pos.getY() & 15, pos.getZ() & 15);
+		c.fluidLevel = level;
+		c.fluidPos = pos;
+		c.fluidState = fluid;
+		try {
+			original.call(renderer, level, pos, output, state, fluid);
+		} finally {
+			c.fluidLevel = null;
+			c.fluidPos = null;
+			c.fluidState = null;
+		}
 	}
 
 	@WrapOperation(method = "compile", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/block/ModelBlockRenderer;tesselateBlock(Lnet/minecraft/client/renderer/block/BlockQuadOutput;FFFLnet/minecraft/client/renderer/block/BlockAndTintGetter;Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;Lnet/minecraft/client/renderer/block/dispatch/BlockStateModel;J)V"))

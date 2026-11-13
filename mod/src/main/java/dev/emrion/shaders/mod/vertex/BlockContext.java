@@ -14,6 +14,10 @@ public final class BlockContext {
 	int id = -1, renderType, emission, x, y, z;
 	/** True while a section compile tesselates a block model on this thread (separateAo applies to chunk meshes only). */
 	public boolean inSection;
+	/** The fluid block a section compile is tesselating on this thread (Sodium-style fluid lighting), or null. */
+	public net.minecraft.client.renderer.block.@org.jspecify.annotations.Nullable BlockAndTintGetter fluidLevel;
+	public net.minecraft.core.@org.jspecify.annotations.Nullable BlockPos fluidPos;
+	public @org.jspecify.annotations.Nullable FluidState fluidState;
 
 	public static BlockContext get() { return CURRENT.get(); }
 

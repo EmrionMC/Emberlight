@@ -2,6 +2,8 @@ package dev.emrion.shaders.mod.uniforms;
 
 /** frameCounter / frameTime / frameTimeCounter exactly like Iris SystemTimeUniforms (iris-spec §5.1). Pure, unit-tested. */
 public final class IrisTimer {
+	/** Scene comparisons pin frameTimeCounter (also in the Iris run, IrisTimerMixin) so animations match; -1 = off. */
+	public static final float FIXED = Float.parseFloat(System.getProperty("emrion.autotest.frameTimeCounter", "-1"));
 	private int frameCounter;
 	private float frameTime;
 	private float frameTimeCounter;
@@ -24,5 +26,5 @@ public final class IrisTimer {
 	/** Seconds the previous frame took. */
 	public float frameTime() { return frameTime; }
 
-	public float frameTimeCounter() { return frameTimeCounter; }
+	public float frameTimeCounter() { return FIXED >= 0 ? FIXED : frameTimeCounter; }
 }

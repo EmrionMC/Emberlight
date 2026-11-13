@@ -24,6 +24,8 @@ public final class VulkanContext {
 	public final VulkanCommandEncoder encoder;
 	/** Owned copy (MC frees its physical-device structs after device creation). Never freed: lives as long as the device. */
 	public final VkPhysicalDeviceProperties properties = VkPhysicalDeviceProperties.malloc();
+	/** VulkanFeatureSetsMixin requests this as optional, so MC enables it exactly when the device supports it. */
+	public final boolean storageWriteWithoutFormat;
 
 	private VulkanContext(VulkanDevice device) {
 		this.device = device;
@@ -32,6 +34,11 @@ public final class VulkanContext {
 		this.graphicsQueue = device.graphicsQueue();
 		this.encoder = device.createCommandEncoder();
 		VK10.vkGetPhysicalDeviceProperties(vk.getPhysicalDevice(), properties);
+		try (var stack = org.lwjgl.system.MemoryStack.stackPush()) {
+			var features = org.lwjgl.vulkan.VkPhysicalDeviceFeatures.calloc(stack);
+			VK10.vkGetPhysicalDeviceFeatures(vk.getPhysicalDevice(), features);
+			storageWriteWithoutFormat = features.shaderStorageImageWriteWithoutFormat();
+		}
 	}
 
 	public static VulkanContext get() {

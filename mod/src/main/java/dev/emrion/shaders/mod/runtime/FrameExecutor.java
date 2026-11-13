@@ -18,7 +18,7 @@ import dev.emrion.shaders.mod.EmrionShadersClient;
 import dev.emrion.shaders.mod.pipeline.GbufferPipelines;
 import dev.emrion.shaders.mod.pipeline.GeometryPipelines;
 import dev.emrion.shaders.mod.uniforms.UniformSystem;
-import dev.emrion.shaders.mod.vk.GpuTimer;
+import dev.emrion.shaders.mod.debug.Profiler;
 import dev.emrion.shaders.mod.vk.RawCommands;
 import dev.emrion.shaders.mod.vk.RawPass;
 import java.util.List;
@@ -51,8 +51,9 @@ import org.lwjgl.vulkan.VkViewport;
  * {@link dev.emrion.shaders.mod.vk.RawCommands#submit} fences everything, including the vertex-stage image/SSBO stores.
  */
 public final class FrameExecutor {
-	private static final boolean TIMINGS = Boolean.getBoolean("emrion.debug.timings");
-	private static final long TIMINGS_INTERVAL_NS = Long.getLong("emrion.debug.timings.seconds", 5) * 1_000_000_000L;
+	/** A/B switches for the benchmark (docs/BENCHMARK.md); both on by default. */
+	private static final boolean DEFER_CLEARS = !"false".equals(System.getProperty("emrion.perf.deferClears")),
+			COMPUTE_CLEARS = !"false".equals(System.getProperty("emrion.perf.computeClears"));
 	private static final long SHADER_STAGES = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | FRAGMENT;
 	/** Iris WorldRenderingPhase ordinals have 24 entries (iris-spec §1.4). */
 	private static final int STAGES = 24;
@@ -65,12 +66,14 @@ public final class FrameExecutor {
 	private final UniformSystem uniforms;
 	private final Hazards hazards = new Hazards();
 	private final int[] dynamicOffsets = new int[2];
-	private final GpuTimer timer;
-	private final String[] labels;
+	/** GPU profiler label per frame / once command (built once: no string building per frame). */
+	private final String[] frameLabels, onceLabels;
 	private final PackRuntime.Img mcColor = new PackRuntime.Img("minecraft main color", null);
 	private boolean oncePending = true;
 	private final boolean hasShadowPass;
-	private long lastLog = System.nanoTime();
+	/** Frame-start clears of raw images moved behind their last use in the frame (see {@link DeferredClears}). */
+	private final DeferredClears deferred;
+	private boolean firstFrame = true;
 
 	/** Next frame command to run; -1 outside a level render. */
 	private int cursor = -1;
@@ -85,10 +88,23 @@ public final class FrameExecutor {
 		this.pp = rt.pipelines;
 		this.dim = rt.dim;
 		this.uniforms = rt.uniforms;
-		int marks = 2 * dim.frame().size() + dim.once().size() + 4;
-		labels = new String[marks];
-		timer = TIMINGS ? new GpuTimer(marks) : null;
+		frameLabels = dim.frame().stream().map(FrameExecutor::label).toArray(String[]::new);
+		onceLabels = dim.once().stream().map(FrameExecutor::label).toArray(String[]::new);
 		hasShadowPass = dim.frame().stream().anyMatch(c -> "shadow_opaque".equals(c.phase()));
+		deferred = new DeferredClears(dim, name -> {
+			PackRuntime.Img[] sides = rt.images.get(name);
+			if (!DEFER_CLEARS) return false;
+			return sides != null && sides[0].raw != null && sides[1] == null;
+		});
+		deferred.start().forEach((c, kept) -> frameLabels[dim.frame().indexOf(c)] = label(new Manifest.Command("clear", null, null, null, null,
+				null, null, null, null, kept)));
+	}
+
+	private void deferredClears(VkCommandBuffer cb, int i) {
+		var ops = deferred.before()[i];
+		if (ops == null) return;
+		clear(cb, ops);
+		Profiler.mark(cb, "clear (deferred, end of last use)");
 	}
 
 	public PackPipelines pipelines() {
@@ -109,7 +125,10 @@ public final class FrameExecutor {
 
 	/** Before MC's main pass (Iris renderShadows): the shadow geometry phases, if the plan has them. */
 	public void renderShadows(net.minecraft.client.renderer.LevelRenderer level) {
-		if (cursor >= 0) ShadowPass.render(this, level);
+		if (cursor < 0) return;
+		long t = Profiler.cpuStart(), raw = Profiler.rawSoFar();
+		ShadowPass.render(this, level);
+		Profiler.shadowEnd(t, raw);
 	}
 
 	/** True if this dimension's plan draws a shadow pass (Iris then turns off vanilla entity shadows). */
@@ -121,6 +140,7 @@ public final class FrameExecutor {
 
 	/** LevelRenderer.render HEAD: the level projection of this frame is known, no MC render pass is open. */
 	public void levelStart(float partialTick) {
+		long t = Profiler.cpuStart();
 		uniforms.beginFrame(partialTick);
 		rt.ring.nextFrame();
 		for (int[] p : phaseOffsets) java.util.Arrays.fill(p, -1);
@@ -138,22 +158,27 @@ public final class FrameExecutor {
 		GeometryPipelines.EXTRA_SAMPLERS[0] = GeometryPipelines.EXTRA_SAMPLERS[1] = nearest;
 		GeometryPipelines.EXTRA_SAMPLERS[2] = linear;
 		GeometryPipelines.defaultsBuffer = pp.defaults.handle;
-		if (timer != null) {
-			timer.beginFrame();
-			logTimings();
-			marks = 0;
-		}
+		Profiler.cpuEnd(Profiler.UNIFORMS, t);
 
+		t = Profiler.cpuStart();
 		VkCommandBuffer cb = begin();
-		mark(cb, null);
+		Profiler.mark(cb, "MC: before the level");
 		if (oncePending) {
-			for (var c : dim.once()) run(cb, c);
+			for (int i = 0; i < dim.once().size(); i++) {
+				run(cb, dim.once().get(i));
+				Profiler.mark(cb, onceLabels[i]);
+			}
 			oncePending = false;
 		}
 		int i = 0;
-		while (i < dim.frame().size() && !dim.frame().get(i).cmd().equals("geometry")) run(cb, dim.frame().get(i++));
+		for (; i < dim.frame().size() && !dim.frame().get(i).cmd().equals("geometry"); i++) {
+			deferredClears(cb, i);
+			run(cb, dim.frame().get(i));
+			Profiler.mark(cb, frameLabels[i]);
+		}
 		cursor = i;
 		RawCommands.submit(rt.ctx, cb);
+		Profiler.cpuEnd(Profiler.RAW, t);
 	}
 
 	/** True between {@link #levelStart} and {@link #finish}. */
@@ -185,18 +210,31 @@ public final class FrameExecutor {
 		mcColor.height = main.height;
 		mcColor.vkFormat = VulkanConst.toVk(PackPipelines.SCREEN_FORMAT);
 		runRange(cursor, dim.frame().size());
+		if (deferred.before()[dim.frame().size()] != null) {
+			VkCommandBuffer cb = begin();
+			deferredClears(cb, dim.frame().size());
+			RawCommands.submit(rt.ctx, cb);
+		}
 		cursor = -1;
+		firstFrame = false;
 	}
 
 	private void runRange(int from, int to) {
+		long t = Profiler.cpuStart();
 		VkCommandBuffer cb = null;
 		for (int i = from; i < to; i++) {
 			var c = dim.frame().get(i);
 			if (c.cmd().equals("geometry")) continue;
-			if (cb == null) cb = begin();
+			if (cb == null) {
+				cb = begin();
+				Profiler.mark(cb, "MC (between our passes)");
+			}
+			deferredClears(cb, i);
 			run(cb, c);
+			Profiler.mark(cb, frameLabels[i]);
 		}
 		if (cb != null) RawCommands.submit(rt.ctx, cb);
+		Profiler.cpuEnd(Profiler.RAW, t);
 	}
 
 	// ---- geometry phases -----------------------------------------------------------------------------------------------
@@ -208,7 +246,7 @@ public final class FrameExecutor {
 	 * The caller binds MC's default uniforms if MC does not, closes the pass and calls {@link #endPhase}.
 	 */
 	public RenderPass beginPhase(Manifest.Command g, GbufferPipelines.Context ctx, UniformSystem.Phase phase, int stage) {
-		markMc(null);
+		Profiler.mark("MC (between our passes)");
 		var flip = rt.flipState(g.flipState());
 		var d = RenderPassDescriptor.builder(() -> "emrion " + g.phase());
 		boolean shadow = ctx == GbufferPipelines.Context.SHADOW;
@@ -220,7 +258,7 @@ public final class FrameExecutor {
 		this.phase = phase;
 		this.stage = -1;
 		setStage(stage);
-		phaseLabel = "geometry " + g.phase();
+		phaseLabel = frameLabels[dim.frame().indexOf(g)];
 		return pass;
 	}
 
@@ -246,7 +284,7 @@ public final class FrameExecutor {
 		if (context == null) return;
 		context = null;
 		GeometryPipelines.unbind();
-		markMc(phaseLabel);
+		Profiler.mark(phaseLabel);
 	}
 
 	private int phaseOffset(UniformSystem.Phase p, int s) {
@@ -269,7 +307,7 @@ public final class FrameExecutor {
 	private void run(VkCommandBuffer cb, Manifest.Command c) {
 		switch (c.cmd()) {
 			case "geometry" -> { return; } // drawn by MC through the hooks (advanceTo / beginPhase)
-			case "clear" -> clear(cb, c.targets());
+			case "clear" -> clear(cb, firstFrame ? c.targets() : deferred.start().getOrDefault(c, c.targets()));
 			case "compute" -> compute(cb, c);
 			case "fullscreen" -> fullscreen(cb, c);
 			case "final" -> finalPass(cb, c);
@@ -278,7 +316,12 @@ public final class FrameExecutor {
 			case "copy_depth" -> copy(cb, rt.image(c.from(), "main"), rt.image(c.to(), "main"));
 			default -> throw new IllegalStateException("unknown frame command " + c.cmd());
 		}
-		mark(cb, c.program() != null ? c.cmd() + " " + c.program() : c.cmd() + (c.target() != null ? " " + c.target() : c.to() != null ? " " + c.to() : ""));
+	}
+
+	private static String label(Manifest.Command c) {
+		if (c.cmd().equals("geometry")) return "gbuffers " + c.phase() + " (MC draws)";
+		if (c.cmd().equals("clear")) return "clear " + c.targets().stream().map(Manifest.ClearOp::name).collect(java.util.stream.Collectors.joining(","));
+		return c.program() != null ? c.cmd() + " " + c.program() : c.cmd() + (c.target() != null ? " " + c.target() : c.to() != null ? " " + c.to() : "");
 	}
 
 	private void clear(VkCommandBuffer cb, List<Manifest.ClearOp> ops) {
@@ -287,7 +330,7 @@ public final class FrameExecutor {
 			if (buf != null) hazards.write(buf, TRANSFER, TRANSFER_WRITE);
 			for (String side : sides(op.side())) {
 				var img = rt.image(op.name(), side);
-				if (img != null) hazards.write(img, TRANSFER, TRANSFER_WRITE);
+				if (img != null) hazards.write(img, computeClear(img) ? COMPUTE : TRANSFER, computeClear(img) ? STORAGE_WRITE : TRANSFER_WRITE);
 			}
 		}
 		hazards.flush(cb);
@@ -300,6 +343,15 @@ public final class FrameExecutor {
 					if (img == null) continue;
 					var range = VkImageSubresourceRange.calloc(stack).aspectMask(img.isDepth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT)
 							.levelCount(VK_REMAINING_MIP_LEVELS).layerCount(1);
+					if (computeClear(img)) {
+						float[] color = clearColor(op, img.target);
+						vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, img.depth > 1 ? pp.clear3d : pp.clear2d);
+						RawPass.pushImages(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pp.clearLayout, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_NULL_HANDLE, img.attach);
+						vkCmdPushConstants(cb, pp.clearLayout, VK_SHADER_STAGE_ALL, 0,
+								stack.ints((int) color[0], (int) color[1], (int) color[2], (int) color[3]));
+						vkCmdDispatch(cb, ceilDiv(img.width, 8), ceilDiv(img.height, 8), img.depth > 1 ? ceilDiv(img.depth, 4) : 1);
+						continue;
+					}
 					if (img.isDepth) {
 						vkCmdClearDepthStencilImage(cb, img.image, VK_IMAGE_LAYOUT_GENERAL, VkClearDepthStencilValue.calloc(stack).depth(1f), range);
 						continue;
@@ -314,6 +366,11 @@ public final class FrameExecutor {
 				}
 			}
 		}
+	}
+
+	/** Raw unsigned-integer images (the voxel volumes) are cleared by a compute pass, which raw-pass barriers do not wait on. */
+	private static boolean computeClear(PackRuntime.Img img) {
+		return COMPUTE_CLEARS && dev.emrion.shaders.mod.vk.VulkanContext.get().storageWriteWithoutFormat && img.raw != null && img.target.format().endsWith("UI");
 	}
 
 	private static List<String> sides(String side) {
@@ -468,40 +525,7 @@ public final class FrameExecutor {
 		}
 	}
 
-	// ---- GPU timings ---------------------------------------------------------------------------------------------------
-
-	private int marks;
 	private String phaseLabel;
 
-	private void mark(VkCommandBuffer cb, String label) {
-		if (timer == null) return;
-		labels[timer.mark(cb)] = label;
-		marks++;
-	}
-
-	/** Timestamp through MC's encoder (outside render passes), around the geometry phases MC records. */
-	private void markMc(String label) {
-		if (timer == null) return;
-		labels[timer.mark()] = label;
-		marks++;
-	}
-
-	private void logTimings() {
-		if (System.nanoTime() - lastLog < TIMINGS_INTERVAL_NS || marks < 2) return;
-		lastLog = System.nanoTime();
-		StringBuilder sb = new StringBuilder("GPU pass times (us):");
-		long prev = 0;
-		for (int i = 1; i < marks; i++) {
-			long t = timer.nanosSinceFirst(i);
-			if (t < 0) return; // not available yet
-			sb.append("\n  ").append(String.format("%8.1f  %s", (t - prev) / 1000.0, labels[i] == null ? "(MC, outside our passes)" : labels[i]));
-			prev = t;
-		}
-		sb.append(String.format("%n  %8.1f  total (level start to end of plan)", prev / 1000.0));
-		EmrionShadersClient.LOG.info(sb.toString());
-	}
-
-	public void close() {
-		if (timer != null) timer.close();
-	}
+	public void close() {}
 }

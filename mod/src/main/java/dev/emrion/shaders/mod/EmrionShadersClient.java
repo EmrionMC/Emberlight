@@ -2,12 +2,14 @@ package dev.emrion.shaders.mod;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import dev.emrion.shaders.mod.autotest.AutoTest;
+import dev.emrion.shaders.mod.debug.Profiler;
 import dev.emrion.shaders.mod.pack.PackManager;
 import dev.emrion.shaders.mod.vertex.DebugVertex;
 import dev.emrion.shaders.mod.pack.PackScreen;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
 import net.minecraft.client.KeyMapping;
+import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import com.mojang.blaze3d.platform.InputConstants;
 import dev.emrion.shaders.mod.vk.VulkanContext;
@@ -30,10 +32,21 @@ public final class EmrionShadersClient implements ClientModInitializer {
 	@Override
 	public void onInitializeClient() {
 		AutoTest.registerIfEnabled();
-		KeyMapping packKey = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.emrionshaders.packs", InputConstants.KEY_O,
-				KeyMapping.Category.register(Identifier.fromNamespaceAndPath(MOD_ID, "main"))));
+		var category = KeyMapping.Category.register(Identifier.fromNamespaceAndPath(MOD_ID, "main"));
+		KeyMapping packKey = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.emrionshaders.packs", InputConstants.KEY_O, category));
+		// R: free in vanilla 26.3 (Iris uses it for the same purpose)
+		KeyMapping reloadKey = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.emrionshaders.reload", InputConstants.KEY_R, category));
+		KeyMapping profilerKey = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.emrionshaders.profiler", InputConstants.KEY_F7, category));
 		ClientTickEvents.END_CLIENT_TICK.register(mc -> {
 			while (packKey.consumeClick()) if (active) mc.gui.setScreen(new PackScreen(mc.gui.screen()));
+			while (profilerKey.consumeClick()) if (active) Profiler.visible = !Profiler.visible;
+			while (reloadKey.consumeClick()) if (active && PackManager.selected() != null) {
+				PackManager.reload();
+				mc.gui.chatListener().handleSystemMessage(Component.literal("Emrion Shaders: reloading " + PackManager.selected() + "..."), false);
+			}
+			// in game the conversion progress goes to the action bar (the pack screen has its own bar)
+			if (active && PackManager.progress >= 0 && mc.gui.screen() == null)
+				mc.gui.hud.setOverlayMessage(Component.literal(PackManager.status + " " + (int) (PackManager.progress * 100) + "%"), false);
 		});
 		ClientLifecycleEvents.CLIENT_STARTED.register(client -> {
 			String backend = RenderSystem.getDevice().getDeviceInfo().backendName();

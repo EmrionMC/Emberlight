@@ -1,4 +1,6 @@
 {
   "key.emrionshaders.packs": "Shader Packs",
+  "key.emrionshaders.profiler": "Profiler Overlay (ms per pass)",
+  "key.emrionshaders.reload": "Reload Shader Pack",
   "key.category.emrionshaders.main": "Emrion Shaders"
 }

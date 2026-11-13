@@ -154,7 +154,8 @@ final class ShadowPass {
 						if (!TERRAIN.visible(minX - SECTION_MARGIN, minY - SECTION_MARGIN, minZ - SECTION_MARGIN, minX + 16 + SECTION_MARGIN,
 								minY + 16 + SECTION_MARGIN, minZ + 16 + SECTION_MARGIN)) continue;
 						var section = area.getRenderSectionAt(POS.set(sx << 4, sy << 4, sz << 4));
-						if (section != null) SECTIONS.add(section);
+						// empty sections draw nothing, but MC's draw preparation still costs ~0.1 us and an allocation each (most of the volume is air)
+						if (section != null && section.getSectionMesh().hasRenderableLayers()) SECTIONS.add(section);
 					}
 				}
 			}

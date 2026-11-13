@@ -1,0 +1,11 @@
+#version 450
+// Zeroes (or fills) an unsigned-integer 2D storage image. A compute clear instead of vkCmdClearColorImage: the raw passes'
+// barriers never wait on the compute stage, so a deferred clear overlaps the composites (DeferredClears).
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(set = 0, binding = 0) uniform writeonly uimage2D img;
+layout(push_constant) uniform Push { uvec4 value; };
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, imageSize(img)))) return;
+    imageStore(img, p, value);
+}

@@ -39,6 +39,8 @@ public final class PackPipelines {
 	public final long setLayout, emptySetLayout, layout;
 	/** Push-descriptor layout (one combined image sampler at set 0 binding 0) for the helper passes. */
 	public final long helperSetLayout, helperLayout;
+	/** Compute clears of unsigned-integer storage images (push descriptor: one storage image; push constant: the value). */
+	public final long clearSetLayout, clearLayout, clear2d, clear3d;
 	/** program name → VkPipeline (graphics for composite-like, compute for compute). */
 	public final Map<String, Long> pipelines = new HashMap<>();
 	/** VkFormat → texel copy pipeline into that format. */
@@ -63,6 +65,10 @@ public final class PackPipelines {
 		layout = Descriptors.pipelineLayout(ctx, push == null ? 0 : push.size(), emptySetLayout, setLayout);
 		helperSetLayout = new Descriptors.LayoutBuilder().add(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT).build(ctx, true);
 		helperLayout = Descriptors.pipelineLayout(ctx, 0, helperSetLayout);
+		clearSetLayout = new Descriptors.LayoutBuilder().add(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_SHADER_STAGE_COMPUTE_BIT).build(ctx, true);
+		clearLayout = Descriptors.pipelineLayout(ctx, 16, clearSetLayout);
+		clear2d = computeHelper("emrion_clear2d");
+		clear3d = computeHelper("emrion_clear3d");
 
 		Map<String, Manifest.Target> targets = new HashMap<>();
 		dim.targets().forEach(t -> targets.put(t.name(), t));
@@ -136,6 +142,15 @@ public final class PackPipelines {
 		}
 	}
 
+	private long computeHelper(String name) {
+		long cs = ShaderModules.create(ctx, ShaderModules.resource("/assets/emrionshaders/spv/" + name + ".comp.spv"));
+		try {
+			return ComputePipelines.create(ctx, cs, clearLayout, ctx.pipelineCache().handle);
+		} finally {
+			ShaderModules.destroy(ctx, cs);
+		}
+	}
+
 	/** Helper fullscreen pass from the mod jar. */
 	private long helper(String frag, int colorFormat) {
 		long vs = ShaderModules.create(ctx, ShaderModules.resource("/assets/emrionshaders/spv/fullscreen.vert.spv"));
@@ -188,6 +203,10 @@ public final class PackPipelines {
 		ctx.destroyLater(() -> {
 			pipelines.values().forEach(p -> vkDestroyPipeline(ctx.vk, p, null));
 			blit.values().forEach(p -> vkDestroyPipeline(ctx.vk, p, null));
+			vkDestroyPipeline(ctx.vk, clear2d, null);
+			vkDestroyPipeline(ctx.vk, clear3d, null);
+			vkDestroyPipelineLayout(ctx.vk, clearLayout, null);
+			vkDestroyDescriptorSetLayout(ctx.vk, clearSetLayout, null);
 			vkDestroyPipelineLayout(ctx.vk, layout, null);
 			vkDestroyPipelineLayout(ctx.vk, helperLayout, null);
 			vkDestroyDescriptorSetLayout(ctx.vk, setLayout, null);

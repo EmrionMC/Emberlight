@@ -8,6 +8,7 @@ import com.mojang.renderpearl.api.textures.GpuTextureView;
 import dev.emrion.shaders.mod.EmrionShadersClient;
 import dev.emrion.shaders.mod.autotest.FrameTimeLogger;
 import dev.emrion.shaders.mod.debug.DebugPost;
+import dev.emrion.shaders.mod.debug.Profiler;
 import dev.emrion.shaders.mod.runtime.GeometryHooks;
 import java.util.Optional;
 import java.util.OptionalDouble;
@@ -25,7 +26,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
- * Why: {@code render} HEAD is the one per-frame point (frame timing). While a pack renders: the classic transparency path
+ * Why: {@code render} HEAD/TAIL are the per-frame points (frame timing, profiler). While a pack renders: the classic transparency path
  * is forced (OIT changes the pass structure Iris's phases rely on); the hand is drawn inside the level by
  * {@link GeometryHooks} (Iris order), so MC's own hand pass after the level is skipped, and the hand's render pass becomes
  * our gbuffers pass while GeometryHooks draws it.
@@ -35,6 +36,12 @@ public class GameRendererMixin {
 	@Inject(method = "render", at = @At("HEAD"))
 	private void emrion$frameStart(CallbackInfo ci) {
 		FrameTimeLogger.INSTANCE.frame();
+		if (EmrionShadersClient.active()) Profiler.frameStart();
+	}
+
+	@Inject(method = "render", at = @At("TAIL"))
+	private void emrion$frameEnd(CallbackInfo ci) {
+		if (EmrionShadersClient.active()) Profiler.frameEnd();
 	}
 
 	@Inject(method = "renderLevel", at = @At("TAIL"))

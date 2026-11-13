@@ -188,7 +188,12 @@ public final class GeometryHooks {
 	 * so MC batches them apart from entities and {@link #blockEntityDraw} can switch the program when they draw.
 	 */
 	public static net.minecraft.client.renderer.rendertype.RenderType blockEntityType(net.minecraft.client.renderer.rendertype.RenderType t) {
-		if (!submittingBlockEntity || t.isOutline()) return t;
+		return submittingBlockEntity ? blockEntityCopy(t) : t;
+	}
+
+	/** The block-entity copy of an entity-program render type (the type itself for others and outlines). */
+	public static net.minecraft.client.renderer.rendertype.RenderType blockEntityCopy(net.minecraft.client.renderer.rendertype.RenderType t) {
+		if (t.isOutline()) return t;
 		var e = dev.emrion.shaders.mod.pipeline.GbufferMapping.get(t.pipeline());
 		if (e == null || !e.program().startsWith("gbuffers_entities")) return t;
 		return BLOCK_ENTITY_TYPES.computeIfAbsent(t, x -> net.minecraft.client.renderer.rendertype.RenderType.create(
