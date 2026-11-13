@@ -32,7 +32,7 @@ class TargetPackRtTest {
 	 * sha256 over the RT-off cache directory (paths + bytes) as master produced it before M7 RT-2. Changes only when converter
 	 * output changes on purpose (then Converter.VERSION is bumped too); RT work must never change it.
 	 */
-	static final String RT_OFF_GOLDEN = "60db95f957050ad9b59c9d3515fc9416acbe7fabf07c3df91b80ff4879071475";
+	static final String RT_OFF_GOLDEN = "3538a454aba755970b1d3dd639fff21343143779e59bd91bfa685161be8b6417";
 
 	static Converter.Result convert(Path out, Set<String> rt) {
 		try (var compiler = new ShadercSpirvCompiler()) {

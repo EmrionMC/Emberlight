@@ -134,11 +134,15 @@ class IrisDimensionPlannerTest {
 	}
 
 	@Test
-	void shadowPassOnlyWhenACompositeSamplesShadows() {
-		var none = plan(props(), p("shadow"), p("gbuffers_terrain").samplers("shadowtex0"), p("composite"));
+	void shadowPassOnlyWhenANonShadowProgramSamplesShadows() {
+		var none = plan(props(), p("shadow"), p("gbuffers_terrain"), p("composite"));
 		assertFalse(none.dim().shadow().enabled());
 		assertNull(none.dim().programs().get("shadow"));
 		assertNull(none.target("shadowtex0"));
+		// MakeUp UltraFast: only gbuffers sample the shadow map, Iris still renders it
+		var gbuffers = plan(props(), p("shadow"), p("gbuffers_terrain").samplers("shadowtex0"), p("composite"));
+		assertTrue(gbuffers.dim().shadow().enabled());
+		assertNotNull(gbuffers.target("shadowtex0"));
 		var forced = plan(props("shadow.enabled", "true"), p("shadow"), p("composite"));
 		assertTrue(forced.dim().shadow().enabled());
 		var off = plan(props("shadow.enabled", "false"), p("shadow"), p("composite").samplers("shadowtex0"));

@@ -19,14 +19,19 @@ def emrionProps = providers.systemPropertiesPrefixedBy('emrion.')
 // -PirisModsDir=<launcher instance>/mods; default: mod/run-iris/mods (untracked).
 def irisModsDir = file(findProperty('irisModsDir') ?: 'run-iris/mods')
 def packDir = file(findProperty('shaderPack') ?: rootProject.file('testpacks/unbound-euphoria'))
-def packSettings = file(findProperty('shaderSettings') ?: rootProject.file('testpacks/ComplementaryUnbound_r5.9.3 + EuphoriaPatches_1.10.5.txt'))
-def packName = packSettings.name - ~/\.txt$/ // same name as in the user's instance, so Iris finds <pack>.txt
+// -PshaderSettings= (empty): no settings file, the pack's defaults. A zip pack is linked under its own file name.
+def settingsProp = findProperty('shaderSettings')
+def packSettings = settingsProp == '' ? null : file(settingsProp ?: rootProject.file('testpacks/ComplementaryUnbound_r5.9.3 + EuphoriaPatches_1.10.5.txt'))
+def packName = packDir.isFile() || packSettings == null ? packDir.name : packSettings.name - ~/\.txt$/ // as in the user's instance, so Iris finds <pack>.txt
 def compare = providers.gradleProperty('compare').isPresent()
 // The canonical comparison world: the one the Iris reference run created (and keeps using). runClient -Pcompare copies it
 // (read-only from the source) over its own run/saves/<world> before every start, so both runs render the same blocks.
 def sceneWorld = file(findProperty('sceneWorld') ?: 'run-iris/saves/scenes')
 configurations { irisReference { canBeConsumed = false } }
 dependencies { irisReference fileTree(irisModsDir) { include 'iris-fabric-*.jar', 'sodium-fabric-*.jar' } }
+// runClient -Psodium: also load the user's Sodium jar (docs/SODIUM.md), from the same directory, never copied into the repo.
+def withSodium = providers.gradleProperty('sodium').isPresent()
+def sodiumJars = fileTree(irisModsDir) { include 'sodium-fabric-*.jar' }
 
 // Same options for both runs: the user's video settings, except sound off and FOV effects off (deterministic camera).
 // Merged into options.txt, other keys are kept.
@@ -45,12 +50,14 @@ def writeOptions = { File dir, String backend ->
 }
 // shaderpacks/<packName> -> the pack folder (symlink), shaderpacks/<packName>.txt = copy of the settings (Iris rewrites it).
 def linkPack = { File dir ->
-	if (!packDir.isDirectory() || !packSettings.isFile()) throw new GradleException("Shader pack ${packDir} or settings ${packSettings} missing (-PshaderPack, -PshaderSettings)")
+	if (!packDir.exists() || (packSettings != null && !packSettings.isFile())) throw new GradleException("Shader pack ${packDir} or settings ${packSettings} missing (-PshaderPack, -PshaderSettings)")
 	def link = new File(dir, "shaderpacks/${packName}").toPath()
 	java.nio.file.Files.createDirectories(link.parent)
 	java.nio.file.Files.deleteIfExists(link)
 	java.nio.file.Files.createSymbolicLink(link, packDir.toPath().toAbsolutePath())
-	java.nio.file.Files.copy(packSettings.toPath(), link.resolveSibling("${packName}.txt"), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+	def txt = link.resolveSibling("${packName}.txt")
+	if (packSettings != null) java.nio.file.Files.copy(packSettings.toPath(), txt, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+	else java.nio.file.Files.deleteIfExists(txt) // a settings file a previous run (or Iris) left behind
 }
 // -Demrion.autotest.resourcepacks=/abs/a.zip;/abs/b.zip: symlink them into <runDir>/resourcepacks (never committed) and
 // enable exactly them in options.txt; an empty value enables none. (Listing a compatible pack as incompatible would
@@ -116,6 +123,13 @@ tasks.named('runClient') {
 			optionsFile.text = 'preferredGraphicsBackend:"vulkan"\nonboardAccessibility:false\n'
 		}
 		linkResourcePacks(optionsFile.parentFile)
+		if (withSodium) {
+			if (sodiumJars.files.size() != 1) throw new GradleException("Expected one Sodium jar in ${irisModsDir}, found ${sodiumJars.files*.name}")
+			jvmArgs "-Dfabric.addMods=${sodiumJars.singleFile}"
+			def sodium = new File(irisModsDir.parentFile, 'config/sodium-options.json')
+			new File(optionsFile.parentFile, 'config').mkdirs()
+			if (sodium.isFile()) java.nio.file.Files.copy(sodium.toPath(), new File(optionsFile.parentFile, 'config/sodium-options.json').toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+		}
 	}
 }
 tasks.named('runIrisReference') {

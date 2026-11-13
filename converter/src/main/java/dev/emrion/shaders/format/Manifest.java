@@ -167,9 +167,12 @@ public record Manifest(
 	                     float[] relativeSize, int[] absoluteSize, int mipLevels, boolean hasAlt,
 	                     boolean clear, float[] clearColor, boolean clearFog, long bytes) {}
 
-	/** For textures copied from the pack (file) or resolved from MC (resource). */
+	/**
+	 * For textures copied from the pack (file) or resolved from MC (resource). rawPixel: the GL pixel format and type of a
+	 * raw texture ("RGB HALF_FLOAT"), null for PNGs; the copied file then holds tightly packed texels of {@code format}.
+	 */
 	public record TextureDef(String name, String file, String resource, String format, int dims, int[] size,
-	                         String filter, String wrap, boolean mipmap) {}
+	                         String filter, String wrap, boolean mipmap, String rawPixel) {}
 
 	/** alt: colortex indices read from the alt image; shadowAlt: the same for shadowcolor (null = none). */
 	public record FlipState(int id, List<Integer> alt, List<Integer> shadowAlt) {

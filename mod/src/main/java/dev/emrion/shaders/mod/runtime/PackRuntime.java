@@ -17,6 +17,7 @@ import dev.emrion.shaders.mod.uniforms.UniformSystem;
 import dev.emrion.shaders.mod.vk.DescriptorPool;
 import dev.emrion.shaders.mod.vk.Descriptors;
 import dev.emrion.shaders.mod.vk.RawBuffer;
+import dev.emrion.shaders.mod.vk.RawCommands;
 import dev.emrion.shaders.mod.vk.RawImage;
 import dev.emrion.shaders.mod.vk.UboRing;
 import dev.emrion.shaders.mod.vk.VulkanContext;
@@ -30,7 +31,11 @@ import java.util.Map;
 import java.util.Random;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import net.minecraft.client.Minecraft;
+import net.minecraft.resources.Identifier;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.MemoryUtil;
+import org.lwjgl.vulkan.VkBufferImageCopy;
 import org.lwjgl.vulkan.VkSamplerCreateInfo;
 
 /**
@@ -87,6 +92,7 @@ public final class PackRuntime {
 	private final Map<Manifest.SamplerDef, Long> samplers = new HashMap<>();
 	private final List<GpuTexture> ownedTextures = new ArrayList<>();
 	private final List<GpuTextureView> ownedViews = new ArrayList<>();
+	private final List<RawImage> rawTextures = new ArrayList<>();
 	private Img dummy;
 	/** FORMAT builtin resources. */
 	private final Map<String, Img> builtins = new HashMap<>();
@@ -234,6 +240,8 @@ public final class PackRuntime {
 
 	private Img loadTexture(Path cacheDir, Manifest.TextureDef t) {
 		try {
+			if (t.rawPixel() != null) return rawTexture(t, Files.readAllBytes(cacheDir.resolve(t.file())));
+			if (t.resource() != null && !t.resource().startsWith("emrion:")) return resourceTexture(t);
 			if (t.file() != null) return mcTexture("emrion " + t.name(), NativeImage.read(Files.readAllBytes(cacheDir.resolve(t.file()))));
 			if ("emrion:noise".equals(t.resource())) return mcTexture("emrion noisetex", noise(t.size()[0], t.size()[1]));
 		} catch (IOException e) {
@@ -242,11 +250,44 @@ public final class PackRuntime {
 		return dummy; // shortcut: other MC resources resolve in M3 with the geometry passes; composites do not use them
 	}
 
-	/** Iris's generated noise texture: random RGB, opaque. */
+	/** A raw texture (2D or 3D): the converter already packed the file as texels of {@code t.format()}. */
+	private Img rawTexture(Manifest.TextureDef t, byte[] data) {
+		int[] s = {1, 1, 1};
+		System.arraycopy(t.size(), 0, s, 0, t.size().length);
+		Img img = new Img("emrion " + t.name(), null);
+		img.raw = new RawImage(ctx, VulkanConst.toVk(Formats.gpu(t.format())), s[0], s[1], s[2], 1,
+				VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, img.label);
+		rawTextures.add(img.raw);
+		img.image = img.raw.image;
+		img.sampled = img.raw.view;
+		var staging = new RawBuffer(ctx, data.length, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true, img.label + " upload");
+		MemoryUtil.memByteBuffer(staging.mapped, data.length).put(data);
+		try (MemoryStack stack = MemoryStack.stackPush()) {
+			var region = VkBufferImageCopy.calloc(1, stack);
+			region.imageSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
+			region.imageExtent().set(s[0], s[1], s[2]);
+			var cb = RawCommands.begin(ctx);
+			vkCmdCopyBufferToImage(cb, staging.handle, img.image, VK_IMAGE_LAYOUT_GENERAL, region);
+			RawCommands.submit(ctx, cb);
+		}
+		staging.destroyLater();
+		return img;
+	}
+
+	/** A {@code namespace:path} texture from MC's resources (Iris binds the TextureManager's texture), read once. */
+	private Img resourceTexture(Manifest.TextureDef t) {
+		try (var in = Minecraft.getInstance().getResourceManager().open(Identifier.parse(t.resource()))) {
+			return mcTexture("emrion " + t.name(), NativeImage.read(in));
+		} catch (IOException | RuntimeException e) {
+			return dummy; // shortcut: atlases other than blocks, lightmap and _n/_s PBR resources are not resolved
+		}
+	}
+
+	/** Iris's generated noise texture: random RGB, opaque; same seed, column-major order and ARGB packing as Iris. */
 	private static NativeImage noise(int w, int h) {
 		NativeImage img = new NativeImage(w, h, false);
 		Random r = new Random(0);
-		for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) img.setPixelABGR(x, y, 0xFF000000 | (r.nextInt() & 0xFFFFFF));
+		for (int x = 0; x < w; x++) for (int y = 0; y < h; y++) img.setPixel(x, y, r.nextInt() | 0xFF000000);
 		return img;
 	}
 
@@ -386,6 +427,7 @@ public final class PackRuntime {
 		buffers.values().forEach(b -> b.buffer.destroyLater());
 		ownedViews.forEach(GpuTextureView::close);
 		ownedTextures.forEach(GpuTexture::close);
+		rawTextures.forEach(RawImage::destroyLater);
 		List<Long> s = List.copyOf(samplers.values());
 		ctx.destroyLater(() -> s.forEach(h -> vkDestroySampler(ctx.vk, h, null)));
 	}

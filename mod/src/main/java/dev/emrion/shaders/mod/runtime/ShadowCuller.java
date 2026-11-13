@@ -86,6 +86,10 @@ final class ShadowCuller {
 		add(normal.x, normal.y, normal.z, -normal.dot(point));
 	}
 
+	boolean inSafe(float minX, float minY, float minZ, float maxX, float maxY, float maxZ) {
+		return safe >= 0 && !(maxX < -safe || minX > safe || maxY < -safe || minY > safe || maxZ < -safe || minZ > safe);
+	}
+
 	/** Camera-relative box. */
 	boolean visible(float minX, float minY, float minZ, float maxX, float maxY, float maxZ) {
 		if (maxX < -max || minX > max || maxY < -max || minY > max || maxZ < -max || minZ > max) return false;

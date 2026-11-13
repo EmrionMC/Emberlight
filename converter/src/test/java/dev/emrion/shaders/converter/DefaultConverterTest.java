@@ -130,7 +130,7 @@ class DefaultConverterTest {
 					null, null, null, null, null, null));
 		}
 		var dim = new Manifest.Dimension(table, List.of(), List.of(), List.of(new Manifest.FlipState(0, List.of())), frame, List.of(), null);
-		var textures = List.of(new Manifest.TextureDef("noisetex", "shaders/lib/textures/noise.png", null, "RGBA8", 2, new int[]{1, 1}, "linear", "repeat", false));
+		var textures = List.of(new Manifest.TextureDef("noisetex", "shaders/lib/textures/noise.png", null, "RGBA8", 2, new int[]{1, 1}, "linear", "repeat", false, null));
 		return new DimensionPlanner.DimensionPlan(dim, emits, textures);
 	};
 

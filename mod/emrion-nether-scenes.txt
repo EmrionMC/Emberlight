@@ -1,0 +1,5 @@
+# Nether scene (docs/BENCHMARK.md): colored light (floodfill) and the Nether shadow/shadowcomp passes. The first entry only moves
+# the player into the Nether (its shot is not compared); the second builds a closed netherrack room with a lava pool,
+# glowstone, shroomlight, lanterns and magma, so both runs see the same blocks whatever the terrain is.
+nether_go | 0.5 100 0.5 0 0 | 18000 | clear | execute in minecraft:the_nether run tp @a 0.5 64 -10.5 0 20
+nether | 0.5 64 -10.5 0 20 | 18000 | clear | fill -12 58 -12 12 74 12 minecraft:netherrack hollow; fill -6 58 2 6 58 9 minecraft:lava; fill -10 59 10 -8 62 10 minecraft:glowstone; setblock 9 59 9 minecraft:shroomlight; setblock 8 59 4 minecraft:lantern; setblock -9 59 3 minecraft:soul_lantern; fill 2 59 11 6 59 11 minecraft:magma_block; setblock 0 61 11 minecraft:crying_obsidian

@@ -52,6 +52,11 @@ final class ShadowPass {
 	private static final int MAX_SHADOW_RENDER_DISTANCE = 24;
 	/** Iris AdvancedShadowCullingFrustum.SECTION_HALF_SIZE − 8: model extent + epsilon around a section. */
 	private static final float SECTION_MARGIN = 1.125f;
+	/** A/B switch: false casts from every section in the shadow frustum, enclosed (unreachable) ones included. */
+	private static final ReceiverGrid GRID = new ReceiverGrid();
+	private static final org.joml.FrustumIntersection CAMERA_FRUSTUM = new org.joml.FrustumIntersection();
+	private static final ObjectArrayList<SectionRenderDispatcher.RenderSection> CANDIDATES = new ObjectArrayList<>(10000);
+	private static final boolean REACHABLE_ONLY = !"false".equals(System.getProperty("emrion.perf.shadowReachable"));
 
 	private static final ShadowCuller TERRAIN = new ShadowCuller(), ENTITIES = new ShadowCuller();
 	private static final ObjectArrayList<SectionRenderDispatcher.RenderSection> SECTIONS = new ObjectArrayList<>(10000), SAVED = new ObjectArrayList<>(10000),
@@ -88,10 +93,14 @@ final class ShadowPass {
 		Vec3 cam = camera.pos;
 		setupCullers(e, s, u, mc.options.getEffectiveRenderDistance() * 16f);
 
-		collectSections(level, cam);
+		long t0 = System.nanoTime();
+		collectSections(level, cam, shadowView);
+		long t1 = System.nanoTime();
 		ChunkSectionsToRender chunks = prop(e.manifest(), "shadowTerrain") || prop(e.manifest(), "shadowTranslucent")
 				? prepareTerrain(level, shadowView) : null;
+		long t2 = System.nanoTime();
 		FeatureRenderDispatcher.PreparedFrame entities = prepareEntities(e, level, camera, shadowView);
+		long t3 = System.nanoTime();
 
 		var atlas = mc.getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS).getTextureView();
 		var sampler = RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST, true); // Iris: nearest, mipmapped
@@ -100,6 +109,7 @@ final class ShadowPass {
 			if (chunks != null && prop(e.manifest(), "shadowTerrain")) chunks.renderGroup(ChunkSectionLayerGroup.OPAQUE, pass, sampler, atlas, false);
 		}
 		e.endPhase();
+		if (ShadowStats.ENABLED) ShadowStats.cpu(t1 - t0, t2 - t1, t3 - t2, System.nanoTime() - t3, level, cam, TERRAIN, SECTIONS);
 		try {
 			Manifest.Command g = e.advanceTo("shadow_entities");
 			if (g != null && entities != null) {
@@ -199,10 +209,22 @@ final class ShadowPass {
 	// ---- terrain ---------------------------------------------------------------------------------------------------
 
 	/** The shadow-visible sections: with renderable layers (SECTIONS) and with renderable block entities (BLOCK_ENTITY_SECTIONS). */
-	private static void collectSections(LevelRenderer level, Vec3 cam) {
+	private static void collectSections(LevelRenderer level, Vec3 cam, Matrix4fc shadowView) {
 		var area = level.viewArea();
+		var graph = ((LevelRendererAccessor) level).emrion$sectionOcclusionGraph();
+		String mode = ReceiverGrid.mode;
+		boolean receivers = !mode.equals("off");
 		SECTIONS.clear();
 		BLOCK_ENTITY_SECTIONS.clear();
+		CANDIDATES.clear();
+		if (receivers) {
+			GRID.begin(shadowView);
+			CAMERA_FRUSTUM.set(VIEW_PROJECTION, false);
+			GRID.addReceiver(-2, -2, -2, 2, 2, 2); // the camera and the hand
+			// shortcut: the pack's voxel volume (Complementary: 512x256x512 around the camera) holds the WSR hit points, which take
+			// shadows off screen; a generic bound needs the converter to read the pack's voxel size
+			if (mode.equals("outside")) GRID.addReceiver(-256, -128, -256, 256, 128, 256);
+		}
 		if (area != null) {
 			var center = area.getCameraSectionPos();
 			int r = area.getViewDistance();
@@ -214,14 +236,32 @@ final class ShadowPass {
 						if (!TERRAIN.visible(minX - SECTION_MARGIN, minY - SECTION_MARGIN, minZ - SECTION_MARGIN, minX + 16 + SECTION_MARGIN,
 								minY + 16 + SECTION_MARGIN, minZ + 16 + SECTION_MARGIN)) continue;
 						var section = area.getRenderSectionAt(POS.set(sx << 4, sy << 4, sz << 4));
-						if (section == null) continue;
+						// Iris/Sodium mesh (and so cast from) only what the occlusion flood fill from the camera reaches, frustum or not; MC's
+						// graph is that flood fill (the frustum is applied afterwards), so enclosed caves stay out, as under Iris
+						if (section == null || REACHABLE_ONLY && graph.getNode(section) == null) continue;
 						ForcedSections.want(net.minecraft.core.SectionPos.asLong(sx, sy, sz)); // Iris: the shadow frustum schedules its own rebuilds
+						// receivers: everything the camera sees, air included (volumetric light and clouds sample the shadow map in it)
+						if (receivers && CAMERA_FRUSTUM.testAab(minX - 1, minY - 1, minZ - 1, minX + 17, minY + 17, minZ + 17))
+							GRID.addReceiver(minX, minY, minZ, minX + 16, minY + 16, minZ + 16);
 						// empty sections draw nothing, but MC's draw preparation still costs ~0.1 us and an allocation each (most of the volume is air)
-						if (section.getSectionMesh().hasRenderableLayers()) SECTIONS.add(section);
-						if (!section.getSectionMesh().getRenderableBlockEntities().isEmpty()) BLOCK_ENTITY_SECTIONS.add(section);
+						if (section.getSectionMesh().hasRenderableLayers() || !section.getSectionMesh().getRenderableBlockEntities().isEmpty())
+							CANDIDATES.add(section);
 					}
 				}
 			}
+		}
+		for (var section : CANDIDATES) {
+			if (receivers) {
+				var o = section.getRenderOrigin();
+				float x = (float) (o.getX() - cam.x), y = (float) (o.getY() - cam.y), z = (float) (o.getZ() - cam.z);
+				boolean keep = TERRAIN.inSafe(x, y, z, x + 16, y + 16, z + 16)
+						|| mode.equals("outside") && y + 16 >= -128 && y <= 128 && x + 16 >= -256 && x <= 256 && z + 16 >= -256 && z <= 256
+						|| GRID.casts(x - SECTION_MARGIN, y - SECTION_MARGIN, z - SECTION_MARGIN, x + 16 + SECTION_MARGIN, y + 16 + SECTION_MARGIN,
+								z + 16 + SECTION_MARGIN);
+				if (!keep) continue;
+			}
+			if (section.getSectionMesh().hasRenderableLayers()) SECTIONS.add(section);
+			if (!section.getSectionMesh().getRenderableBlockEntities().isEmpty()) BLOCK_ENTITY_SECTIONS.add(section);
 		}
 		sectionCount = SECTIONS.size();
 	}

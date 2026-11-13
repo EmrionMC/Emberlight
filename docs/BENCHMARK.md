@@ -10,7 +10,7 @@ It also lists the baseline numbers.
 | Input | Where it comes from |
 |---|---|
 | Pack | `-PshaderPack=<dir>`, default `testpacks/unbound-euphoria` (git-ignored). Symlinked as `shaderpacks/<name>` in the run dir. |
-| Settings | `-PshaderSettings=<file>`, default `testpacks/ComplementaryUnbound_r5.9.3 + EuphoriaPatches_1.10.5.txt`. Copied to `shaderpacks/<name>.txt`, where `<name>` is the file name without `.txt` (the same name Iris uses in a launcher instance). |
+| Settings | `-PshaderSettings=` (empty) runs the pack with its defaults and removes a stale `<pack>.txt`; a zip pack (`-PshaderPack=<file>.zip`) is linked under its own file name. `-PshaderSettings=<file>`, default `testpacks/ComplementaryUnbound_r5.9.3 + EuphoriaPatches_1.10.5.txt`. Copied to `shaderpacks/<name>.txt`, where `<name>` is the file name without `.txt` (the same name Iris uses in a launcher instance). |
 | Video options | Merged into `options.txt` at every start (`sharedOptions` in `mod/build.gradle`): the reference options (render distance 16, simulation 12, FPS cap 260 = unlimited, vsync off, GUI scale 3, FOV 70, mipmaps 4, biome blend 3, entity shadows, AO), plus sound off, FOV effects off and `pauseOnLostFocus:false`, so a stray click does not change the image. |
 | Window | `--width 1920 --height 1080` launch args (the screenshots are 1920×1080 on Wayland at scale 1). |
 | World | `-Demrion.autotest.world=scenes`: the reference run creates it on first use (seed **2026**, default world type, peaceful) in `mod/run-iris/saves/scenes` and keeps reusing it. `runClient -Pcompare` deletes its own `mod/run/saves/scenes` and copies that world over it before every start (the source is only read; `session.lock` is skipped), so both runs render the same blocks. `-PsceneWorld=<dir>` picks another source, for example another checkout's `mod/run-iris/saves/scenes`. |
@@ -454,6 +454,72 @@ Same hardware and route; 25 s per run with `-Demrion.autotest.profile=true`; "RT
 RT GPU cost per frame: TLAS build 0.15–0.16 ms, plus the ray queries inside `gbuffers opaque` (+0.2 to +0.7 ms). The
 forced shadow sections cost `shadow_opaque` 0.47 → 3.25 ms in the overview (sections behind the camera and in the voxel
 safe zone now have meshes, as under Iris/Sodium). RT comparison images and VRAM numbers: RAYTRACING.md §10.
+## Shadow coverage without the FPS loss (2026-11-13, `perf/sh1-shadow`)
+
+`ForcedSections` (92643fd) made the shadow map cover what Iris covers, at a cost of 135 → 97 FPS in `overview`. Hardware and
+settings as in M5b; 30 s, interleaved runs; `-Demrion.debug.shadowStats=true` logs what the shadow pass draws (sections and
+triangles by safe zone / band, sky-dark / lit, below / above the camera) and its CPU split every 5 s.
+
+### What the 3.3 ms were
+
+`overview` after the fix: 7.9k sections, 9.4 M opaque triangles. 0.4 M in the 64-block safe zone; in the band to 256 blocks
+4.3 M in sky-dark sections (sky light 0 in the section and its 6 neighbours), 3.1 M lit below the camera, 1.6 M lit above.
+A/B (shadow_opaque GPU ms / FPS): baseline 3.34 / 98; 1×1 scissor (vertex work only) 2.85, so the pass is vertex-bound, about
+0.28 ms per M triangles even outside the voxel volume, i.e. vertex fetch of the 56-byte vertices; no band sections at all
+0.28 / 151; no dark band sections 1.96 / 115; no sections outside the voxel volume (±256 / ±128 blocks) 2.93 / 102. The CPU
+part (3.2 ms) was 1.5 ms for the culling loop and 1.7 ms for MC's `prepareChunkRenders` over the shadow set; the frame is
+GPU-bound (5.3 ms per frame blocked on the GPU), so the CPU side does not limit FPS.
+
+### Changes
+
+| Change | Triangles (overview) | shadow_opaque | FPS (3 runs) |
+|---|---|---|---|
+| master `45f62fc` (ForcedSections) | 9.4 M | 3.36 ms | 97.3 / 97.1 / 97.3 |
+| **Reachable sections only:** a section casts only if MC's `SectionOcclusionGraph` holds a node for it. That node map is the frustum-free flood fill from the camera through the sections' visibility sets (the frustum is applied afterwards), the same set Sodium meshes with its wide search, so fully enclosed caves never cast, exactly as under Iris. Switch: `-Demrion.perf.shadowReachable=false` | 5.0 M | 1.94 ms | 115.1 / 115.6 / 116.2 |
+| **Receiver-driven culling** (`ReceiverGrid`, option *Shadow culling*): a light-space grid of 8-block cells holds the depth of the receiver farthest from the light; receivers are all sections in the camera frustum that the flood fill reaches, *air included*, because volumetric light and clouds sample the shadow map along every view ray, plus the camera itself. A caster section (box + 1.125 margin) is kept if it lies in the safe zone or is closer to the light than a receiver in any cell it covers (footprint padded by 8 blocks for filtering, normal offsets and waving, depth by 4 blocks) | 1.76 M | 0.78 ms | **131.3 / 131.6 / 131.5** (interleaved with *Off*: 114.0 / 114.2 / 112.2); 1% low 104–106 |
+
+*Outside voxel volume* mode (receiver culling only beyond ±256 / ±128 blocks, and the voxel volume itself counts as a receiver
+for the WSR hit points) is safe for the voxelizer by construction but gains nothing in `overview` (116.3 FPS): almost nothing
+the flood fill reaches lies that far below the camera.
+
+Option: shader options → *Performance...* → *Shadow culling: Off / Outside voxel volume / Full* (tooltip), stored as
+`perf.shadowReceivers=off|outside|all` in `config/emrionshaders.properties`, default `all`; `-Demrion.perf.shadowReceivers`
+overrides it. It takes effect on the next frame, no reconversion.
+
+### Image
+
+Pinned (`frameTimeCounter=100`), MAE mean against the pinned Iris references (`ref-pinned`, back scenes re-shot from the
+same world) and against master rendered in the same session:
+
+| Scene | master vs Iris | reachable vs Iris | Full vs Iris | Full vs master |
+|---|---|---|---|---|
+| overview | 0.48 | 0.46 | 0.43 | 0.43 |
+| forest | 0.74 | 0.73 | 0.72 | 0.49 |
+| water | 0.72 | 0.76 | 0.76 | 0.50 |
+| cave | 0.25 | 0.28 | 0.28 | 0.28 |
+| sunset | 0.57 | 0.59 | 0.60 | 0.34 |
+| night | 0.49 | 0.50 | 0.52 | 0.21 |
+| rain | 0.93 | 1.00 | 0.95 | 0.90 |
+| entities | 0.61 | 0.86 | 1.03 | 0.77 |
+| sunset_back | 0.52 | 0.48 | 0.52 | 0.29 |
+| forest_back | 0.39 | 0.39 | 0.42 | 0.31 |
+
+Everything is within master's run-to-run floor (M5b table: water 0.54, cave 0.27, rain 0.80, entities 0.84). The diff panels
+show only the chicken's wings and particles (entities), kelp shimmer (water) and torch flicker (cave).
+Limits: the reachable filter follows MC's graph, whose "smart cull" ray test beyond 60 blocks is a little stricter than
+Sodium's search. *Full* is not provably lossless: a hidden caster outside the 64-block safe zone is also missing from the
+voxelization (world-space reflections and coloured light can show blocks that are not on screen). No scene showed it; use
+*Outside voxel volume* or *Off* to rule it out.
+
+### Investigated, not changed
+
+- **"Sky-dark sections never matter"** (skip sections without sky light): false for this pack. `mainLighting.glsl` uses the
+  shadow map alone within the shadow distance and mixes in the sky-light factor only beyond it, so a receiver with sky light 0
+  still gets sun wherever the map says so. The voxel volume (512×256×512, not just the 64-block safe zone) also needs those
+  sections for colored light. The reachable filter removes most of them anyway (5270 → 178 sections).
+- **Vertex-shader variant without voxel writes outside the volume:** vertex fetch dominates (0.28 ms per M triangles with no
+  writes), and outside the volume only ≈ 0.1 ms is left after the receiver grid. The Sodium switch (36-byte vertices) is the lever.
+- **Caching the culled list across frames:** the shadow CPU is now ≈ 1.8 ms on a GPU-bound frame, so it would not show as FPS.
 
 ## Robustness tests (M6)
 

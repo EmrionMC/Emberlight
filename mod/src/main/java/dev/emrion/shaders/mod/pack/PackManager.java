@@ -131,6 +131,8 @@ public final class PackManager {
 			debug = true;
 			dev.emrion.shaders.mod.debug.Profiler.visible = true;
 		}
+		String culling = System.getProperty("emrion.perf.shadowReceivers", p.getProperty("perf.shadowReceivers", "all"));
+		if (dev.emrion.shaders.mod.runtime.ReceiverGrid.MODES.contains(culling)) dev.emrion.shaders.mod.runtime.ReceiverGrid.mode = culling;
 		String pack = System.getProperty("emrion.pack", p.getProperty("pack", ""));
 		if (!pack.isBlank()) select(pack, false);
 	}
@@ -180,7 +182,7 @@ public final class PackManager {
 	}
 
 	/** Sets one key, keeping the others. */
-	private static void saveConfig(String key, String value) {
+	public static void saveConfig(String key, String value) {
 		Properties p = readConfig();
 		p.setProperty(key, value);
 		writeConfig(p);

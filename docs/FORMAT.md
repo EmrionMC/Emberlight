@@ -297,7 +297,10 @@ multidraw-indirect path: `terrain_mdi`, set 0 = `[Globals, Projection, TerrainUn
 ]
 ```
 Custom textures (top-level `textures`): `{ "name", "file", "format", "dims", "size", "filter", "wrap", "mipmap" }`, or
-`"resource": "minecraft:textures/atlas/blocks.png"` for MC resources the mod resolves at runtime.
+`"resource": "minecraft:textures/atlas/blocks.png"` for MC resources the mod resolves at runtime. Raw textures (iris-spec §2.5,
+`<file> TEXTURE_2D|3D|RECTANGLE <format> <w> <h> [d] <pixel format> <pixel type>`) add `"rawPixel": "RGB HALF_FLOAT"`; the
+converter rewrites the file as tightly packed texels of the promoted `format` (RGB data gets alpha 1), `size` is `[w, h(, d)]`,
+and the default sampling is Iris's raw default linear/clamp (an `.mcmeta` overrides it). The mod uploads it into a 2D or 3D image.
 
 ### 7.4 Frame commands
 

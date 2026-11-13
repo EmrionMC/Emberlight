@@ -182,6 +182,9 @@ Shadow render targets, and therefore the whole shadow pass and shadowcomp, exist
 
 - `shadow.enabled=true` is set in shaders.properties, or
 - any begin, prepare, deferred, composite or final program has an **active** shadow sampler: `shadowtex0/1`, `shadow`, `watershadow`, `shadowcolor[0-7]` or `shadowcolorimg*` (`I/samplers/IrisSamplers.java:117-136`).
+  Gbuffers programs that MC geometry uses count too: `ShaderMap` builds all `ShaderKey`s in enum order, the gbuffers keys
+  before the `SHADOW_*` keys, and `addGbufferOrShadowSamplers` asks for the shadow targets (`IrisRenderingPipeline.java:767-773`).
+  MakeUp UltraFast samples `shadowtex0` only in `gbuffers_terrain` and friends.
 
 `shadow.enabled=false` creates the targets but skips rendering.
 

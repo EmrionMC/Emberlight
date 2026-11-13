@@ -9,4 +9,8 @@ import org.spongepowered.asm.mixin.gen.Accessor;
 public interface LevelRendererAccessor {
 	@Accessor("usingMultiDrawIndirectForTerrain")
 	boolean emrion$usingMultiDrawIndirect();
+
+	/** Why: the shadow pass keeps only sections the occlusion flood fill reaches (Sodium's wide search, Iris's shadow set). */
+	@Accessor("sectionOcclusionGraph")
+	net.minecraft.client.renderer.SectionOcclusionGraph emrion$sectionOcclusionGraph();
 }

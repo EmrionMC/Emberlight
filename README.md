@@ -35,6 +35,29 @@ chicken's wing flap. Method and scenes: [docs/BENCHMARK.md](docs/BENCHMARK.md).
 
 These numbers come from the dev environment: vanilla textures and no other performance mods. Your own instance will differ.
 
+## Compatibility
+
+Tested in game against Iris 1.11.7 + Sodium 0.9.3 on OpenGL: the same world, the 8 scenes of [docs/BENCHMARK.md](docs/BENCHMARK.md),
+animation time pinned, pack defaults (no settings file) except for the acceptance pack. MAE is on 0..255 (Iris against itself
+scores 0.2–0.9). ✅ matches Iris, 🟡 works with visible differences, ❌ broken.
+
+| Pack | Status | MAE / SSIM vs Iris (8 scenes) | FPS overview, Iris → Emrion | Notes |
+|---|---|---|---|---|
+| Complementary Unbound r5.9.3 + Euphoria Patches 1.10.5 (user settings) | ✅ | 0.29–1.00 / ≥ 0.983 | 75.3 → 132.9 | The acceptance pack, see Results. |
+| Complementary Reimagined r5.9.3 | ✅ | 0.12–1.77 / 0.951–0.999 | 272 → 428* | Worst scene is rain (random rain streaks). |
+| BSL v10.1.8 | ✅ | 0.13–1.79 / 0.965–0.999 | 162 → 372* | Distant short grass is slightly darker (see below). |
+| Solas V3.9 | ✅ | 0.31–1.90 / 0.954–0.997 | 157 → 275* | Distant short grass is slightly darker. |
+| Sildur's Vibrant 2.02 Extreme | ✅ | 0.03–2.24 / 0.948–0.999 | 163 → 393* | Distant short grass is slightly darker. |
+| Photon v1.4 | 🟡 | 0.63–9.99 / 0.785–0.989 | 246 → 332* | Raw 3D `.dat` textures work. The cloud amount differs because Photon's weather depends on `worldDay`/`worldTime` and biome values smoothed over minutes, which differ with the run's history. With `RANDOM_WEATHER_VARIATION` and `BIOME_WEATHER_VARIATION` off, night drops from MAE 17.1 to 0.54. |
+| MakeUp UltraFast 9.6 | 🟡 | 0.50–9.77 / 0.821–0.989 | 436 → 556* | Shadows match. Sunlit surfaces and leaves are about 10 % darker in some scenes. It is not the auto exposure's mip chain: a test copy that reads the exposure at LOD 0 still differs. Cause still open. |
+| Bliss v2.1.2 (Chocapic13 edit) | ❌ | – | – | Falls back to vanilla rendering: its gbuffers programs together write 9 colortex, and we draw all gbuffers into one render pass, while Vulkan allows only 8 colour attachments (`maxColorAttachments`). |
+
+\* Preliminary: one 30 s run each, measured on a branch before the shadow-coverage fix (the shadow pass now covers the whole
+shadow distance like Iris), so the Emrion numbers of packs with shadows are too high. They will be re-measured.
+
+Common remaining difference: distant cutout foliage (short grass) is a little darker than under Iris. It disappears with
+mipmaps off on both sides, so it comes from how the block atlas mips are generated or sampled.
+
 ## Installation
 
 1. Minecraft **26.3** with Fabric Loader ≥ 0.20.1 and Fabric API.
@@ -122,7 +145,7 @@ hardware ray-traced sun and moon shadows, while the pack's own lighting, noise a
 
 ## Known limitations
 
-- Developed and tested against one pack (Complementary Unbound + Euphoria Patches). Other packs may hit unimplemented paths.
+- Verified against Complementary Unbound + Euphoria Patches; seven more packs are listed under Compatibility. Other packs may hit unimplemented paths.
 - Tested on NVIDIA (RTX 4070 Ti, Linux) only. Other GPUs and drivers are untested.
 - 256× resource packs with PBR need a lot of GPU memory together with Complementary's voxel data (about 2.45 GB), as with Iris.
   `-Demrion.pbr=false` turns PBR off.

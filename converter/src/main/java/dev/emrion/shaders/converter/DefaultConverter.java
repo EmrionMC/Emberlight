@@ -10,6 +10,7 @@ import dev.emrion.shaders.converter.pack.PackLoader;
 import dev.emrion.shaders.converter.pack.PackSource;
 import dev.emrion.shaders.converter.pack.ResolvedPack;
 import dev.emrion.shaders.converter.plan.DimensionPlanner;
+import dev.emrion.shaders.converter.plan.IrisDimensionPlanner;
 import dev.emrion.shaders.converter.plan.PackProperties;
 import dev.emrion.shaders.converter.plan.UniformLayoutBuilder;
 import dev.emrion.shaders.converter.report.Diagnostic;
@@ -352,7 +353,18 @@ public final class DefaultConverter implements Converter {
 				}
 				String ext = t.file().substring(t.file().lastIndexOf('.') + 1);
 				String file = "textures/" + t.name() + "." + ext;
-				write(tmp.resolve(file), bytes.get());
+				String format = t.format();
+				byte[] data = bytes.get();
+				if (t.rawPixel() != null) {
+					format = IrisDimensionPlanner.promote(format);
+					try {
+						data = RawTexels.convert(data, t.format(), format, t.rawPixel(), t.size());
+					} catch (IllegalArgumentException e) {
+						diagnostics.add(Diagnostic.warning(t.file(), 0, "raw custom texture " + t.name() + " skipped: " + e.getMessage()));
+						continue;
+					}
+				}
+				write(tmp.resolve(file), data);
 				String filter = t.filter(), wrap = t.wrap();
 				// Iris applies the PNG's .mcmeta ("texture": {"blur", "clamp"}) to custom textures.
 				var mcmeta = source.readString(t.file() + ".mcmeta");
@@ -365,7 +377,7 @@ public final class DefaultConverter implements Converter {
 						diagnostics.add(Diagnostic.warning(t.file() + ".mcmeta", 0, "unreadable mcmeta: " + e.getMessage()));
 					}
 				}
-				out.add(new Manifest.TextureDef(t.name(), file, t.resource(), t.format(), t.dims(), t.size(), filter, wrap, t.mipmap()));
+				out.add(new Manifest.TextureDef(t.name(), file, t.resource(), format, t.dims(), t.size(), filter, wrap, t.mipmap(), t.rawPixel()));
 			}
 			return out;
 		}

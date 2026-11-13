@@ -66,6 +66,16 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 
 	private static final Res SET0 = new Res("set0", null, null, null, null);
 
+	/** RGB-only formats are not colour-attachment capable in Vulkan; promote them (FORMAT.md §2). */
+	public static String promote(String f) {
+		return switch (f) {
+			case "R3_G3_B2" -> "RGBA8";
+			case "RGB9_E5" -> "RGBA16F";
+			case "RGB10_A2", "RGB10_A2UI", "RGB5_A1", "RGB565" -> f;
+			default -> f.startsWith("RGB") && !f.startsWith("RGBA") ? "RGBA" + f.substring(3) : f;
+		};
+	}
+
 	private static final class Run {
 		final List<ResolvedPack.ProgramSource> sources;
 		final Map<String, Transpiler.ProgramAnalysis> analyses;
@@ -304,8 +314,11 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 		void activateShadows() {
 			Boolean prop = bool(props.get("shadow.enabled"));
 			boolean sampled = false;
-			for (var a : analyses.values()) {
-				if (a.group().isGeometry() || a.group() == ProgramGroup.SETUP || a.group() == ProgramGroup.SHADOWCOMP) continue;
+			for (var e : analyses.entrySet()) {
+				var a = e.getValue();
+				// gbuffers count too: Iris's ShaderMap builds them (asking for the shadow targets) before the shadow keys
+				if (a.group() == ProgramGroup.GBUFFERS ? !geometry.containsKey(e.getKey())
+						: a.group().isGeometry() || a.group() == ProgramGroup.SETUP || a.group() == ProgramGroup.SHADOWCOMP) continue;
 				for (var s : a.samplers()) sampled |= isShadowSampler(s.name());
 				for (var i : a.images()) sampled |= i.name().startsWith("shadowcolorimg");
 			}
@@ -617,9 +630,10 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 			if (SET0.kind().equals(canon)) return SET0;
 			if (canon != null) {
 				for (String alias : aliases(canon, water)) {
-					if (canon.startsWith("colortex") && c.flippedAtLeastOnce().contains(colortexIndex(canon))) break;
 					String v = stageTexture(c.texStage(), alias, type);
-					if (v != null) return textureRes(v, alias);
+					// Iris: PNG overrides skip colortex that flipped before; raw ones rename the sampler in the source, always
+					boolean flipped = canon.startsWith("colortex") && c.flippedAtLeastOnce().contains(colortexIndex(canon));
+					if (v != null && (!flipped || v.contains(" "))) return textureRes(v, alias);
 				}
 				return builtinRes(canon, c, type);
 			}
@@ -708,16 +722,44 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 		String texture(String value, String hint) {
 			var existing = textures.get(value);
 			if (existing != null) return existing.name();
-			if (value.contains(" ")) {
-				warn(null, "raw custom texture '" + value + "' is not supported");
-				return null;
-			}
+			if (value.contains(" ")) return rawTexture(value);
 			boolean resource = value.contains(":");
 			String base = resource ? hint : value.replaceAll("^.*/", "").replaceAll("\\.[^.]*$", "");
 			String name = base;
 			for (int i = 2; nameTaken(name); i++) name = base + "_" + i;
 			String file = resource ? null : "shaders/" + value.replaceFirst("^/", "");
-			textures.put(value, new Manifest.TextureDef(name, file, resource ? value : null, "RGBA8", 2, null, "nearest", "repeat", false));
+			textures.put(value, new Manifest.TextureDef(name, file, resource ? value : null, "RGBA8", 2, null, "nearest", "repeat", false, null));
+			return name;
+		}
+
+		/**
+		 * iris-spec §2.5 raw texture {@code <file> <TEXTURE_1D|2D|3D|RECTANGLE> <internal format> <w> [h] [d] <pixel format>
+		 * <pixel type>}: Iris samples it linear/clamped unless an .mcmeta says otherwise. The file is converted on copy.
+		 */
+		String rawTexture(String value) {
+			String[] p = value.trim().split("\\s+");
+			String target = p[1].toUpperCase(Locale.ROOT);
+			int dims = switch (target) {
+				case "TEXTURE_2D", "TEXTURE_RECTANGLE" -> 2;
+				case "TEXTURE_3D" -> 3;
+				default -> 0; // shortcut: TEXTURE_1D (no pack uses it) would need 1D image views
+			};
+			if (p.length != dims + 5 || !KNOWN_FORMATS.contains(p[2].toUpperCase(Locale.ROOT))) {
+				warn(null, "unsupported raw custom texture '" + value + "'");
+				return null;
+			}
+			int[] size = new int[dims];
+			try {
+				for (int i = 0; i < dims; i++) size[i] = Integer.parseInt(p[3 + i]);
+			} catch (NumberFormatException e) {
+				warn(null, "invalid raw custom texture size '" + value + "'");
+				return null;
+			}
+			String base = p[0].replaceAll("^.*/", "").replaceAll("\\.[^.]*$", "");
+			String name = base;
+			for (int i = 2; nameTaken(name); i++) name = base + "_" + i;
+			textures.put(value, new Manifest.TextureDef(name, "shaders/" + p[0].replaceFirst("^/", ""), null, p[2].toUpperCase(Locale.ROOT), dims,
+					size, "linear", "clamp", false, p[dims + 3].toUpperCase(Locale.ROOT) + " " + p[dims + 4].toUpperCase(Locale.ROOT)));
 			return name;
 		}
 
@@ -733,7 +775,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 			String key = "emrion:noise";
 			if (!textures.containsKey(key)) {
 				int res = (int) num("noiseTextureResolution", 256);
-				textures.put(key, new Manifest.TextureDef("noisetex", null, key, "RGBA8", 2, new int[]{res, res}, "linear", "repeat", false));
+				textures.put(key, new Manifest.TextureDef("noisetex", null, key, "RGBA8", 2, new int[]{res, res}, "linear", "repeat", false, null));
 			}
 			return "noisetex";
 		}
@@ -839,16 +881,6 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 				f = "RGBA8";
 			}
 			return new String[]{f, promote(f)};
-		}
-
-		/** RGB-only formats are not colour-attachment capable in Vulkan; promote them (FORMAT.md §2). */
-		static String promote(String f) {
-			return switch (f) {
-				case "R3_G3_B2" -> "RGBA8";
-				case "RGB9_E5" -> "RGBA16F";
-				case "RGB10_A2", "RGB10_A2UI", "RGB5_A1", "RGB565" -> f;
-				default -> f.startsWith("RGB") && !f.startsWith("RGBA") ? "RGBA" + f.substring(3) : f;
-			};
 		}
 
 		static boolean isInteger(String f) { return f.endsWith("I"); }

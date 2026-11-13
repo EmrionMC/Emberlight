@@ -90,6 +90,8 @@ public final class AutoTest {
 
 	private State state = State.WAIT_TITLE;
 	private int ticks;
+	private long chunksWaitStart; // spike/sodium: time from teleport until all sections are built (meshing cost)
+	private boolean remeshDone = !Boolean.getBoolean(P + "remesh"), sawUnbuilt;
 	private int shot;
 	private boolean vsync;
 	private int fpsLimit;
@@ -175,10 +177,18 @@ public final class AutoTest {
 				// teleport first: the scene commands (summon, setblock) fail silently in chunks that are not loaded yet
 				if (scene.pos() != null) command(mc, "tp @a " + scene.pos());
 				commandsRun = scene.commands().isEmpty();
+				chunksWaitStart = System.nanoTime();
+				sawUnbuilt = false;
 				go(State.WAIT_CHUNKS);
 			}
 			case WAIT_CHUNKS -> {
 				boolean built = mc.levelRenderer.hasRenderedAllSections();
+				sawUnbuilt |= !built;
+				if (built && sawUnbuilt && chunksWaitStart != 0) {
+					EmrionShadersClient.LOG.info("Autotest: all sections built {} ms after the {}{}", (System.nanoTime() - chunksWaitStart) / 1_000_000,
+							remeshDone ? "remesh" : "teleport", sodiumBackend());
+					chunksWaitStart = 0;
+				}
 				if ((ticks >= waitTicks && built) || ticks >= 4 * waitTicks) {
 					if (!commandsRun) { // chunks are loaded now; run the commands, then wait again for the rebuilt sections
 						scenes.get(shot).commands().forEach(c -> command(mc, c));
@@ -187,6 +197,14 @@ public final class AutoTest {
 						return;
 					}
 					if (!built) EmrionShadersClient.LOG.warn("Autotest: chunk builds still pending, taking the screenshot anyway");
+					if (!remeshDone) { // -Demrion.autotest.remesh=true: drop all meshes once and time the full rebuild (F3+A)
+						remeshDone = true;
+						sawUnbuilt = false;
+						if (mc.levelExtractor != null) mc.levelExtractor.allChanged();
+						chunksWaitStart = System.nanoTime();
+						go(State.WAIT_CHUNKS);
+						return;
+					}
 					// worldgen animals in the freshly loaded chunks would wander differently in every run; scenes tag their own mobs
 					command(mc, "kill @e[type=!minecraft:player,tag=!emrion]");
 					settleStartFrame = FrameTimeLogger.INSTANCE.frames();
@@ -504,6 +522,16 @@ public final class AutoTest {
 						b.statistics().allocationBytes() / 1048576.0, b.usage() / 1048576.0));
 			}
 			return sb.toString();
+		}
+	}
+
+	/** Sodium's chosen draw backend (DrawBackend.BACKEND), or "" without Sodium. */
+	private static String sodiumBackend() {
+		if (!net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("sodium")) return "";
+		try {
+			return ", Sodium draw backend " + Class.forName("net.caffeinemc.mods.sodium.client.gpu.device.backend.DrawBackend").getField("BACKEND").get(null);
+		} catch (ReflectiveOperationException e) {
+			return ", Sodium draw backend unknown: " + e;
 		}
 	}
 
