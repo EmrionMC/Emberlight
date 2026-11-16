@@ -50,9 +50,16 @@ public final class GraphicsPipelineBuilder {
 	private int polygonMode = VK_POLYGON_MODE_FILL;
 	private int patchControlPoints;
 	private long layout;
+	private String label;
 
 	public GraphicsPipelineBuilder stage(int vkShaderStage, long module) {
 		stages.add(new Stage(vkShaderStage, module));
+		return this;
+	}
+
+	/** Name for -Demrion.debug.pipelineStats. */
+	public GraphicsPipelineBuilder label(String label) {
+		this.label = label;
 		return this;
 	}
 
@@ -126,6 +133,12 @@ public final class GraphicsPipelineBuilder {
 		return this;
 	}
 
+	private static boolean canBlend(VulkanContext ctx, int format, MemoryStack stack) {
+		var props = org.lwjgl.vulkan.VkFormatProperties.malloc(stack);
+		vkGetPhysicalDeviceFormatProperties(ctx.vk.getPhysicalDevice(), format, props);
+		return (props.optimalTilingFeatures() & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT) != 0;
+	}
+
 	public long build(VulkanContext ctx, long pipelineCache) {
 		try (MemoryStack stack = MemoryStack.stackPush()) {
 			var stageInfos = VkPipelineShaderStageCreateInfo.calloc(stages.size(), stack);
@@ -153,7 +166,8 @@ public final class GraphicsPipelineBuilder {
 			for (int i = 0; i < colorFormats.length; i++) {
 				var att = blendStates.get(i).colorWriteMask(writeMasks == null ? 0xF : writeMasks[i]);
 				Blend b = blends[i];
-				if (b != null) {
+				// GL ignores blending on integer targets (Shrimple's uvec4 gbuffer); Vulkan forbids it where the format cannot blend
+				if (b != null && canBlend(ctx, colorFormats[i], stack)) {
 					att.blendEnable(true).srcColorBlendFactor(b.srcColor()).dstColorBlendFactor(b.dstColor()).colorBlendOp(b.colorOp())
 							.srcAlphaBlendFactor(b.srcAlpha()).dstAlphaBlendFactor(b.dstAlpha()).alphaBlendOp(b.alphaOp());
 				}
@@ -163,6 +177,7 @@ public final class GraphicsPipelineBuilder {
 					.pColorAttachmentFormats(stack.ints(colorFormats)).depthAttachmentFormat(depthFormat);
 			var info = VkGraphicsPipelineCreateInfo.calloc(1, stack).sType$Default()
 					.pNext(rendering)
+					.flags(label != null ? dev.emrion.shaders.mod.debug.PipelineStats.flags() : 0)
 					.pStages(stageInfos)
 					.pVertexInputState(vertexInput)
 					.pInputAssemblyState(VkPipelineInputAssemblyStateCreateInfo.calloc(stack).sType$Default().topology(topology))
@@ -179,9 +194,13 @@ public final class GraphicsPipelineBuilder {
 							.pDynamicStates(stack.ints(VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR)))
 					.layout(layout);
 			if (patchControlPoints > 0)
-				info.pTessellationState(VkPipelineTessellationStateCreateInfo.calloc(stack).sType$Default().patchControlPoints(patchControlPoints));
+				info.pTessellationState(VkPipelineTessellationStateCreateInfo.calloc(stack).sType$Default().patchControlPoints(patchControlPoints)
+						// GL's tessellator winds triangles from a lower-left domain origin; Vulkan's default (upper-left) flips them, culling the front faces
+						.pNext(org.lwjgl.vulkan.VkPipelineTessellationDomainOriginStateCreateInfo.calloc(stack).sType$Default()
+								.domainOrigin(org.lwjgl.vulkan.VK11.VK_TESSELLATION_DOMAIN_ORIGIN_LOWER_LEFT)));
 			LongBuffer p = stack.mallocLong(1);
 			VulkanContext.check(vkCreateGraphicsPipelines(ctx.vk, pipelineCache, info, null, p), "vkCreateGraphicsPipelines");
+			if (label != null) dev.emrion.shaders.mod.debug.PipelineStats.log(ctx.vk, p.get(0), label);
 			return p.get(0);
 		}
 	}

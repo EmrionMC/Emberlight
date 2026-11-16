@@ -2,11 +2,7 @@ package dev.emrion.shaders.converter.glsl;
 
 import java.util.List;
 
-/**
- * LineMap for preprocessor output: the first {@code hoisted} output lines are the hoisted #version/#extension
- * directives, every later output line k is input line {@code k - hoisted} (the preprocessor keeps lines aligned).
- * File names are pack paths ("shaders/lib/common.glsl").
- */
+/** LineMap for preprocessor output: the first {@code hoisted} lines are #version/#extension, line k maps to {@code k - hoisted}. */
 public final class SourceLineMap implements LineMap {
 	private final IncludeExpander.Expanded src;
 	private final List<Integer> hoistedLines;

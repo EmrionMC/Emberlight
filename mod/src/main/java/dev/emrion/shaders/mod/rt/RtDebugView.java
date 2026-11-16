@@ -31,10 +31,7 @@ import org.lwjgl.vulkan.VkDescriptorImageInfo;
 import org.lwjgl.vulkan.VkWriteDescriptorSet;
 import org.lwjgl.vulkan.VkWriteDescriptorSetAccelerationStructureKHR;
 
-/**
- * RT-1 test tool ({@code -Demrion.rt.debug=true}): after the level (pack final included), traces the TLAS from the camera
- * and replaces the image with face normals faded by distance, for a side-by-side check against the raster image.
- */
+/** Debug tool ({@code -Demrion.rt.debug=true}): replaces the image with traced face normals, to check the TLAS against the raster image. */
 public final class RtDebugView {
 	private static @Nullable RtDebugView instance;
 
@@ -60,10 +57,9 @@ public final class RtDebugView {
 	}
 
 	private long module(String name) {
-		return ShaderModules.create(ctx, ShaderModules.resource("/assets/emrionshaders/spv/" + name + ".spv"));
+		return ShaderModules.create(ctx, ShaderModules.resource("/assets/emberlight/spv/" + name + ".spv"));
 	}
 
-	/** Client shutdown. */
 	public static void shutdown() {
 		RtDebugView v = instance;
 		if (v == null) return;

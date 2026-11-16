@@ -1,0 +1,53 @@
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+// HDR output (docs/HDR.md): the final SDR image (sRGB-encoded RGBA8) expanded to HDR. Pixels where the image with GUI
+// differs from its HUD-less copy are GUI and stay at paper white; scene pixels keep paper white up to a knee and stretch
+// their highlights towards the peak. Writes PQ (HDR10, BT.2020) or scRGB (linear BT.709, 1.0 = 80 nits) for the swapchain blit.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform texture2D src;     // image to encode (MC's main target or an interpolated frame)
+layout(set = 0, binding = 1) uniform texture2D gui;     // current frame with GUI (GUI mask)
+layout(set = 0, binding = 2) uniform texture2D hudless; // current frame without GUI (GUI mask)
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D dst;
+layout(push_constant) uniform Params {
+	float paperWhite; // nits
+	float peak;       // nits
+	int pq;           // 1 = HDR10 PQ, 0 = scRGB
+	int mask;         // 0 = no HUD-less copy this frame: everything is GUI (menus, title screen)
+} p;
+
+const float KNEE = 0.5; // linear luminance below which the scene is shown as plain SDR at paper white
+
+vec3 srgbToLinear(vec3 c) {
+	return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), greaterThan(c, vec3(0.04045)));
+}
+
+vec3 pqEncode(vec3 nits) {
+	const float m1 = 0.1593017578125, m2 = 78.84375, c1 = 0.8359375, c2 = 18.8515625, c3 = 18.6875;
+	vec3 y = pow(clamp(nits / 10000.0, 0.0, 1.0), vec3(m1));
+	return pow((c1 + c2 * y) / (1.0 + c3 * y), vec3(m2));
+}
+
+void main() {
+	ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+	if (any(greaterThanEqual(q, imageSize(dst)))) return;
+	vec3 lin = srgbToLinear(clamp(texelFetch(src, q, 0).rgb, 0.0, 1.0));
+	bool isGui = p.mask == 0 || any(notEqual(texelFetch(gui, q, 0).rgb, texelFetch(hudless, q, 0).rgb));
+	vec3 nits = lin * p.paperWhite;
+	if (!isGui) {
+		float l = dot(lin, vec3(0.2126, 0.7152, 0.0722));
+		if (l > KNEE) {
+			// slope-continuous at the knee, reaches the peak at SDR white
+			float x = (l - KNEE) / (1.0 - KNEE);
+			nits *= (l * p.paperWhite + max(p.peak - p.paperWhite, 0.0) * x * x) / (l * p.paperWhite);
+		}
+		nits = min(nits, vec3(max(p.peak, p.paperWhite)));
+	}
+	vec3 outc;
+	if (p.pq != 0) {
+		const mat3 toBt2020 = mat3(0.6274, 0.0691, 0.0164, 0.3293, 0.9195, 0.0880, 0.0433, 0.0114, 0.8956); // BT.709 -> BT.2020, column-major
+		outc = pqEncode(toBt2020 * nits);
+	} else {
+		outc = nits / 80.0;
+	}
+	imageStore(dst, q, vec4(outc, 1.0));
+}

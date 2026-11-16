@@ -9,8 +9,8 @@ import java.util.List;
 
 /**
  * Union of all referenced non-opaque uniforms over every program of every dimension → std140 EmrionUniforms layout,
- * EmrionPhase and EmrionDraw (push constant) blocks (FORMAT.md §6). Built-in types come from UniformCatalog, custom
- * ones from the parsed custom uniforms. Owner: agent (c2).
+ * EmrionPhase and EmrionDraw (push constant) blocks. Built-in types come from UniformCatalog, custom
+ * ones from the parsed custom uniforms.
  */
 public interface UniformLayoutBuilder {
 	Manifest.UniformLayout build(Collection<Transpiler.ProgramAnalysis> analyses, List<Manifest.CustomUniform> custom, Diagnostics diagnostics);

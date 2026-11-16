@@ -30,4 +30,22 @@ class HazardsTest {
 		h.read(a, COMPUTE, SAMPLED_READ);
 		assertNull(h.flushMasks(), "a new command buffer starts clean");
 	}
+
+	@Test
+	void visibilityNeedsStageAndAccessTogether() {
+		var h = new Hazards();
+		var a = new Hazards.Tracked("a");
+		h.write(a, COMPUTE, STORAGE_WRITE);
+		h.flushMasks();
+		h.read(a, FRAGMENT, STORAGE_READ);
+		assertNotNull(h.flushMasks());
+		h.read(a, COMPUTE, SAMPLED_READ);
+		assertNotNull(h.flushMasks());
+		h.read(a, FRAGMENT, SAMPLED_READ);
+		long[] m = h.flushMasks();
+		assertNotNull(m, "neither barrier made the write visible to fragment sampling");
+		assertArrayEquals(new long[] {COMPUTE, STORAGE_WRITE, FRAGMENT, SAMPLED_READ}, m);
+		h.read(a, FRAGMENT, SAMPLED_READ);
+		assertNull(h.flushMasks(), "now it is");
+	}
 }

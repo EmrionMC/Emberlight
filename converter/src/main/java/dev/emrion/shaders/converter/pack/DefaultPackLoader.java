@@ -43,19 +43,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
 /**
- * Iris pack loading (iris-spec §1.1, §1.5, §3, §4, §7): dimension folders, include graph, options, shaders.properties,
- * profiles, program.X.enabled, per-stage preprocessing and directives, id maps.
- *
- * <p>Environment macros: the IRIS_FEATURE_* entries of {@code environmentMacros} are read as the set of usable
- * feature flags and re-added the way Iris does: all of them for shaders.properties, only the flags the pack lists in
- * {@code iris.features.optional} for programs and id maps (plus COLOR_SPACE_* if supportsColorCorrection=true).
- * Iris adds no per-stage or per-program macros; MC_RENDER_STAGE_* are part of the standard macros.
- *
- * <p>Program list per dimension: setup, begin, shadow, shadowcomp, prepare, gbuffers, deferred, composite, final.
- * A .csh is its own COMPUTE-only program named like its file (shadowcomp, shadowcomp_a, setup1); when a pass also has
- * a .vsh/.fsh program of the same name, the compute one is named {@code <pass>_csh} (manifest keys are unique; the
- * planner maps it back to slot 0 of the pass). Computes come before the fullscreen program of their pass (Iris runs
- * {@code <pass>.csh}, {@code <pass>_a.csh} … first, CompositeRenderer). Disabled programs are listed with enabled=false and no stages.
+ * Iris pack loading: dimensions, includes, options, shaders.properties, profiles, preprocessing, directives, id maps.
+ * IRIS_FEATURE_* go to shaders.properties in full, to programs only as listed in {@code iris.features.optional} (as Iris).
+ * A .csh sharing its name with a .vsh/.fsh program is named {@code <pass>_csh}; computes run before their pass's fullscreen program.
  */
 public final class DefaultPackLoader implements PackLoader {
 	private static final String ROOT = "shaders";
@@ -335,7 +325,7 @@ public final class DefaultPackLoader implements PackLoader {
 			for (StageType t : List.of(StageType.TESS_CONTROL, StageType.TESS_EVAL, StageType.GEOMETRY)) {
 				if (t != StageType.GEOMETRY && !readTessellation) continue;
 				if (!exists(d, n, t.extension)) continue;
-				// shortcut: our fullscreen pass is one triangle (Iris: a quad), so per-primitive stages would differ; add when a pack needs it
+				// shortcut: our fullscreen pass is one triangle (Iris: a quad), so per-primitive stages differ; add if a pack needs it
 				if (!slot.group().isGeometry()) warn(ROOT + d + "/" + n + "." + t.extension, "tessellation/geometry stages are only supported in gbuffers and shadow programs; ignored");
 				else jobs.add(new Job(n, slot.group(), t, d + "/" + n + "." + t.extension, false));
 			}

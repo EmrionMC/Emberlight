@@ -44,7 +44,10 @@ public abstract class VramLabelMixin {
 
 	@Inject(method = "<init>", at = @At("RETURN"))
 	private void emrion$name(CallbackInfo ci) {
-		if (vmaAllocation != 0) VramReport.name(device.vma(), vmaAllocation, "tex " + ((VulkanGpuTexture) (Object) this).getLabel());
+		if (vmaAllocation == 0) return;
+		String label = ((VulkanGpuTexture) (Object) this).getLabel();
+		VramReport.name(device.vma(), vmaAllocation, "tex " + label);
+		dev.emrion.shaders.mod.vk.VramResidency.check(device.vma(), vmaAllocation, label);
 	}
 
 	@Inject(method = "destroy", at = @At("TAIL"))

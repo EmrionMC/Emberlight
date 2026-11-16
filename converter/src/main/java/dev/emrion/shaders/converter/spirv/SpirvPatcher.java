@@ -10,7 +10,8 @@ import java.util.Map;
 import java.util.function.IntUnaryOperator;
 
 /**
- * Dependency-free SPIR-V word scanner for the set-0 placeholder bindings (FORMAT.md §7.1). The mod reuses it at
+ * Dependency-free SPIR-V word scanner for the set-0 placeholder bindings. The mod reuses it at
+
  * pipeline creation to rewrite each set-0 {@code Binding} word, so it must not depend on lwjgl or the converter.
  */
 public final class SpirvPatcher {

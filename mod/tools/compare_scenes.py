@@ -4,6 +4,8 @@
 usage: python3 -I compare_scenes.py <iris-dir> <emrion-dir> <out-dir>
 Writes <out-dir>/<scene>.png (Iris | Emrion | |diff| x4) and <out-dir>/report.csv; prints the table.
 MAE is per channel on 0..255; SSIM is the mean SSIM of the luma over 8x8 windows (1 = identical).
+Shots taken with -Demrion.autotest.shots=3 (<scene>-s2.png, <scene>-s3.png next to <scene>.png) are compared as their
+per-pixel median, which takes out frame-to-frame noise of temporal effects.
 """
 import sys
 from pathlib import Path
@@ -30,6 +32,13 @@ def luma(a):
     return a @ np.array([0.299, 0.587, 0.114])
 
 
+def load(path):
+    """The shot, or the per-pixel median of it and its -s2/-s3 repeats when they exist."""
+    shots = [path] + sorted(path.parent.glob(path.stem + '-s[0-9].png'))
+    arrays = [np.asarray(Image.open(p).convert('RGB'), np.float64) for p in shots]
+    return arrays[0] if len(arrays) == 1 else np.median(np.stack(arrays), axis=0)
+
+
 def compare(a, b):
     """a, b: float64 HxWx3 arrays on 0..255."""
     d = np.abs(a - b)
@@ -39,17 +48,17 @@ def compare(a, b):
 def main(iris_dir, emrion_dir, out_dir):
     out_dir.mkdir(parents=True, exist_ok=True)
     rows = []
-    for ip in sorted(iris_dir.glob('iris-*.png')):
+    for ip in sorted(p for p in iris_dir.glob('iris-*.png') if not p.stem[-3:-1] == '-s'):
         scene = ip.stem[len('iris-'):]
         ep = emrion_dir / f'emrion-{scene}.png'
         if not ep.exists():
             print(f'{scene}: no {ep.name}, skipped')
             continue
-        ia, ea = Image.open(ip).convert('RGB'), Image.open(ep).convert('RGB')
-        if ea.size != ia.size:
-            print(f'{scene}: size {ea.size} != {ia.size}, Emrion image resized for the metric')
-            ea = ea.resize(ia.size, Image.BILINEAR)
-        a, b = np.asarray(ia, np.float64), np.asarray(ea, np.float64)
+        a, b = load(ip), load(ep)
+        if b.shape != a.shape:
+            print(f'{scene}: size {b.shape[1::-1]} != {a.shape[1::-1]}, Emrion image resized for the metric')
+            b = np.asarray(Image.fromarray(b.astype(np.uint8)).resize(a.shape[1::-1], Image.BILINEAR), np.float64)
+        ia, ea = Image.fromarray(a.astype(np.uint8)), Image.fromarray(b.astype(np.uint8))
         m = compare(a, b)
         rows.append((scene, m))
         diff = Image.fromarray(np.clip(np.abs(a - b) * 4, 0, 255).astype(np.uint8))

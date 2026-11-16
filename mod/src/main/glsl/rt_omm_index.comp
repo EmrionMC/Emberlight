@@ -1,0 +1,75 @@
+#version 460
+// Opacity micromaps (RtOmm): the micromap index of every triangle of one cutout section layer, before its BLAS build. Reads
+// the vertices like emrion_rt.glsl (EMRION_BLOCK: 14 words, UV0 floats at 4-5, mc_Entity 8; Sodium's EmrionChunkVertex:
+// 10 words, UV0 2x15 bit at 3, mc_Entity 5), quads as RtQuadIndices (triangles 0,1,2 and 2,3,0).
+// A quad that maps its whole sprite gets the sprite's micromap triangle for its corner order (rt_omm_data.comp); any other
+// quad inside one sprite gets a uniform one when every texel of its UV box is opaque or every one transparent; the rest,
+// animated sprites and block ids a shader decides per id (anyHit) get the all-unknown one (alpha-tested as without micromaps).
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+layout(local_size_x = 64) in;
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Words { uint d[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) writeonly buffer Out { uint i[]; };
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Sprites { uvec4 s[]; };
+layout(set = 0, binding = 0) uniform sampler2D atlas;
+layout(push_constant) uniform Push {
+    uvec2 verts; uvec2 dst; uvec2 sprites; uvec2 grid; uvec2 anyHit;
+    uint tris; uint sodium; uint gridW; uint gridH; uint cellShift; uint anyHitCount; float eps;
+};
+
+const uint UNKNOWN = 0u, OPAQUE = 1u, TRANSPARENT = 2u, ANIMATED = 0xFFFFFFFFu, NO_SLOTS = 0xFFFFFFFEu;
+
+vec2 uv(uint i) {
+    Words v = Words(verts);
+    if (sodium != 0u) { uint t = v.d[i * 10u + 3u]; return vec2(uvec2(t, t >> 16u) & 0x7FFFu) / 32768.0; }
+    return uintBitsToFloat(uvec2(v.d[i * 14u + 4u], v.d[i * 14u + 5u]));
+}
+
+int blockId(uint i) {
+    uint w = sodium != 0u ? Words(verts).d[i * 10u + 5u] : Words(verts).d[i * 14u + 8u];
+    return int(w << 16u) >> 16;
+}
+
+// Sprite corner (bit 0 = right, bit 1 = bottom) at texel point p, 4 if p is no corner.
+uint corner(vec2 p, vec2 s0, vec2 s1) {
+    bvec2 a = lessThan(abs(p - s0), vec2(eps)), b = lessThan(abs(p - s1), vec2(eps));
+    if (!(a.x || b.x) || !(a.y || b.y)) return 4u;
+    return (b.x ? 1u : 0u) | (b.y ? 2u : 0u);
+}
+
+uint pick(uint tri) {
+    uint q = tri >> 1u;
+    uvec3 t = q * 4u + ((tri & 1u) == 0u ? uvec3(0u, 1u, 2u) : uvec3(2u, 3u, 0u));
+    int id = blockId(t.x);
+    for (uint k = 0u; k < anyHitCount; k++) if (int(Words(anyHit).d[k]) == id) return UNKNOWN;
+    vec2 size = vec2(textureSize(atlas, 0));
+    vec2 u0 = uv(q * 4u) * size, u1 = uv(q * 4u + 1u) * size, u2 = uv(q * 4u + 2u) * size, u3 = uv(q * 4u + 3u) * size;
+    vec2 mn = min(min(u0, u1), min(u2, u3)), mx = max(max(u0, u1), max(u2, u3));
+    uvec2 cell = uvec2(max((mn + mx) * 0.5, vec2(0.0))) >> cellShift;
+    if (cell.x >= gridW || cell.y >= gridH) return UNKNOWN;
+    uint si = Words(grid).d[cell.y * gridW + cell.x];
+    if (si == 0xFFFFFFFFu) return UNKNOWN;
+    uvec4 s = Sprites(sprites).s[si];
+    vec2 s0 = vec2(s.xy), s1 = s0 + vec2(s.z & 0xFFFFu, s.z >> 16u);
+    if (any(lessThan(mn, s0 - eps)) || any(greaterThan(mx, s1 + eps)) || s.w == ANIMATED) return UNKNOWN;
+    if (s.w != NO_SLOTS) {
+        uint c0 = corner(uv(t.x) * size, s0, s1), c1 = corner(uv(t.y) * size, s0, s1), c2 = corner(uv(t.z) * size, s0, s1);
+        if (c0 < 4u && c1 < 4u && c2 < 4u && c0 != c1 && c1 != c2 && c0 != c2) // the whole sprite: inverse of cornerOrder
+            return s.w + c0 * 6u + (c1 - (c1 > c0 ? 1u : 0u)) * 2u + (c2 - (c2 > c0 ? 1u : 0u) - (c2 > c1 ? 1u : 0u));
+    }
+    // part of the sprite (a pane edge, a torch): uniform if every texel its UV box may touch agrees
+    ivec2 lo = ivec2(floor(max(mn - eps, s0))), hi = ivec2(floor(min(mx + eps, s1 - 0.5)));
+    if ((hi.x - lo.x + 1) * (hi.y - lo.y + 1) > 1024) return UNKNOWN;
+    uint op = 0u, tr = 0u;
+    for (int y = lo.y; y <= hi.y; y++)
+        for (int x = lo.x; x <= hi.x; x++) {
+            if (texelFetch(atlas, ivec2(x, y), 0).a >= 0.1) op++;
+            else tr++;
+        }
+    return tr == 0u ? OPAQUE : op == 0u ? TRANSPARENT : UNKNOWN;
+}
+
+void main() {
+    uint tri = gl_GlobalInvocationID.x;
+    if (tri < tris) Out(dst).i[tri] = pick(tri);
+}

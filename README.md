@@ -1,193 +1,219 @@
-# Emrion Shaders
+# Emberlight
 
-A Fabric client mod for Minecraft Java **26.3** that runs OptiFine/Iris shaderpacks on Minecraft's new **Vulkan** renderer.
+*Formerly "Emrion Shaders". Version 0.1.0-alpha.1, see [CHANGELOG.md](CHANGELOG.md).*
 
-Packs are converted once, when you select them, into a Vulkan-native format: optimised SPIR-V plus a precomputed frame
-plan. The result is cached, and the mod then renders the pack through Minecraft's own Vulkan backend. Iris does the same
-job on OpenGL, but Iris does not support Vulkan.
+Emberlight is a Fabric mod for Minecraft Java **26.3** that runs OptiFine/Iris shaderpacks on Minecraft's new **Vulkan**
+renderer. Iris only works on OpenGL; Emberlight fills that gap.
 
-**Status:** M1–M6 done: Iris-equivalent image and 1.76× the FPS for the acceptance pack. Optional hardware ray tracing (M7) is planned. Development is tracked in [docs/PROGRESS.md](docs/PROGRESS.md).
+On top of the pack it can add:
 
-## Results
+- **hardware ray tracing** (Complementary packs): RT shadows, reflections, refraction, caustics, AO, block-light shadows and
+  global illumination, in a *Faithful* or an *RTX* style,
+- **upscaling** with AMD FSR 3.1, NVIDIA DLSS or Intel XeSS (Windows),
+- **frame generation** with AMD FSR 3 or NVIDIA DLSS.
 
-The acceptance pack is *Complementary Unbound r5.9.3 + Euphoria Patches 1.10.5*, with a real user's settings.
+When you select a pack, Emberlight converts it once into SPIR-V shaders and a fixed frame plan and caches the result. After
+that it renders through Minecraft's own Vulkan backend, with every pipeline built at load time, so there is no shader stutter.
 
-**Performance** (1920×1080, render distance 16, same world, pack and settings, 3 × 30 s runs each, RTX 4070 Ti):
+**This is an alpha.** Expect bugs and keep backups of your worlds. It has been tested on one machine (NVIDIA RTX 4070 Ti, Linux).
 
-| | Iris 1.11.7 + Sodium 0.9.3 (OpenGL) | Emrion Shaders (Vulkan) |
-|---|---|---|
-| Average FPS | 75.3 | **132.9** (1.76×) |
-| Median frame time | 13.30 ms | 7.45 ms |
-| 1% low | 68.9 FPS | 107.1 FPS |
+## Requirements
 
-**Image** (difference to Iris, 8 fixed scenes, same world, animation time pinned in both renderers; Iris against
-itself scores MAE 0.2–0.9):
-
-| Scene | MAE | SSIM | Scene | MAE | SSIM |
-|---|---|---|---|---|---|
-| overview | 0.50 | 0.995 | night | 0.52 | 0.989 |
-| forest | 0.51 | 0.996 | rain | 0.85 | 0.983 |
-| water | 0.74 | 0.986 | entities | 1.00 | 0.989 |
-| cave | 0.29 | 0.997 | sunset | 0.60 | 0.994 |
-
-Night is slightly above Iris's floor (0.18) because the star field depends on time smoothing; entities because of the
-chicken's wing flap. Method and scenes: [docs/BENCHMARK.md](docs/BENCHMARK.md).
-
-These numbers come from the dev environment: vanilla textures and no other performance mods. Your own instance will differ.
-
-## Compatibility
-
-Tested in game against Iris 1.11.7 + Sodium 0.9.3 on OpenGL: the same world, the 8 scenes of [docs/BENCHMARK.md](docs/BENCHMARK.md),
-animation time pinned, pack defaults (no settings file) except for the acceptance pack. MAE is on 0..255 (Iris against itself
-scores 0.2–0.9). ✅ matches Iris, 🟡 works with visible differences, ❌ broken.
-
-| Pack | Status | MAE / SSIM vs Iris (8 scenes) | FPS overview, Iris → Emrion | Notes |
-|---|---|---|---|---|
-| Complementary Unbound r5.9.3 + Euphoria Patches 1.10.5 (user settings) | ✅ | 0.29–1.00 / ≥ 0.983 | 75.3 → 132.9 | The acceptance pack, see Results. |
-| Complementary Reimagined r5.9.3 | ✅ | 0.12–1.77 / 0.951–0.999 | 272 → 428* | Worst scene is rain (random rain streaks). |
-| BSL v10.1.8 | ✅ | 0.13–1.79 / 0.965–0.999 | 162 → 372* | Distant short grass is slightly darker (see below). |
-| Solas V3.9 | ✅ | 0.31–1.90 / 0.954–0.997 | 157 → 275* | Distant short grass is slightly darker. |
-| Sildur's Vibrant 2.02 Extreme | ✅ | 0.03–2.24 / 0.948–0.999 | 163 → 393* | Distant short grass is slightly darker. |
-| Photon v1.4 | 🟡 | 0.63–9.99 / 0.785–0.989 | 246 → 332* | Raw 3D `.dat` textures work. The cloud amount differs because Photon's weather depends on `worldDay`/`worldTime` and biome values smoothed over minutes, which differ with the run's history. With `RANDOM_WEATHER_VARIATION` and `BIOME_WEATHER_VARIATION` off, night drops from MAE 17.1 to 0.54. |
-| MakeUp UltraFast 9.6 | 🟡 | 0.50–9.77 / 0.821–0.989 | 436 → 556* | Shadows match. Sunlit surfaces and leaves are about 10 % darker in some scenes. It is not the auto exposure's mip chain: a test copy that reads the exposure at LOD 0 still differs. Cause still open. |
-| Bliss v2.1.2 (Chocapic13 edit) | ❌ | – | – | Falls back to vanilla rendering: its gbuffers programs together write 9 colortex, and we draw all gbuffers into one render pass, while Vulkan allows only 8 colour attachments (`maxColorAttachments`). |
-
-\* Preliminary: one 30 s run each, measured on a branch before the shadow-coverage fix (the shadow pass now covers the whole
-shadow distance like Iris), so the Emrion numbers of packs with shadows are too high. They will be re-measured.
-
-Common remaining difference: distant cutout foliage (short grass) is a little darker than under Iris. It disappears with
-mipmaps off on both sides, so it comes from how the block atlas mips are generated or sampled.
+| | |
+|---|---|
+| Minecraft | Java Edition 26.3 |
+| Loader | Fabric Loader 0.20.1 or newer, Fabric API |
+| Graphics API | Vulkan: *Options → Video Settings → Graphics API → Prefer Vulkan*, then restart. On OpenGL the mod stays inactive and tells you so |
+| Sodium | optional; if installed it must be **exactly 0.9.3-beta.5** |
+| Ray tracing | a GPU with `VK_KHR_ray_query` (NVIDIA RTX, AMD RX 6000 or newer); only tested on an RTX 4070 Ti |
+| FSR upscaling / frame generation | any Vulkan GPU |
+| DLSS upscaling | an NVIDIA RTX GPU; NVIDIA's model files are downloaded once on request (see below) |
+| DLSS frame generation | an NVIDIA RTX 40 series GPU or newer, plus the same files |
+| DLSS Ray Reconstruction | an NVIDIA RTX GPU, ray tracing on, DLSS as the upscaler, plus the same files |
+| XeSS upscaling | Windows x86_64 (Intel ships no Linux runtime), any GPU with DP4a; Intel's runtime is downloaded once on request (see below). Not tested yet |
 
 ## Installation
 
-1. Minecraft **26.3** with Fabric Loader ≥ 0.20.1 and Fabric API.
-2. Put `emrionshaders-<version>.jar` (from `mod/build/libs/`) into `mods/`.
-3. Set **Options → Video Settings → Graphics API → Prefer Vulkan**, then restart. On OpenGL the mod stays inactive and tells you so.
-4. Put shaderpacks (zip or folder) into `.minecraft/shaderpacks/` as you would for Iris. Iris settings files `<pack>.txt`
-   next to them are used as they are and can be shared with Iris.
-5. In game, press **O**, or use **Video Settings → Shader Packs (Emrion)…**, and select a pack. The first load converts the
-   pack (a few seconds, with a progress bar); later loads come from the cache in `.minecraft/emrionshaders/cache`.
+1. Install Fabric Loader and Fabric API for Minecraft 26.3.
+2. Put `emberlight-0.1.0-alpha.1.jar` into `mods/`.
+3. Optional: Sodium `sodium-fabric-0.9.3-beta.5+mc26.3.jar` ([Modrinth](https://modrinth.com/mod/sodium)). With Sodium,
+   terrain is meshed and drawn by Sodium, as under Iris; without it, Minecraft's own chunk renderer is used. Both give the
+   same image. If Fabric says *"Incompatible mods found … Emberlight … Sodium"*, your Sodium is the wrong version: switch to
+   0.9.3-beta.5. Don't remove Emberlight; Fabric's suggestion is misleading here.
+4. Set the graphics API to Vulkan (see above) and restart.
+5. Put shaderpacks (zip or folder) into `shaderpacks/`, as for Iris. Iris settings files (`<pack>.txt`) next to them are
+   used as they are and stay compatible with Iris.
+6. In game press **O** (or *Video Settings → Shader Packs (Emberlight)…*) and pick a pack. The first load converts the pack
+   (a few seconds, with a progress bar); later loads come from the cache in `emberlight/cache/`.
 
-All keys are in the **Emrion Shaders** category of Options → Controls and can be rebound. Defaults follow Iris.
+### DLSS (optional)
+
+Pick *NVIDIA DLSS* on the Upscaling or Frame Generation page. The first time, Emberlight asks to download NVIDIA's DLSS
+model files (Super Resolution, Frame Generation, Ray Reconstruction; ~110 MB) from NVIDIA's GitHub (github.com/NVIDIA/DLSS, pinned version, checked against fixed SHA-256 hashes);
+by downloading you accept NVIDIA's RTX SDK licence, which is saved next to them in `<.minecraft>/emberlight/dlss/`.
+Restart the game once; after that DLSS can be switched on and off live. If something is missing, the Upscaling and Frame
+Generation pages say *"DLSS unavailable: <reason>"*. Linux only for now (the Windows bridge is not built yet).
+
+The small bridge library Emberlight uses to call DLSS ships inside the jar and contains NVIDIA's NGX SDK library, so it is
+under its own terms ([LICENSE-DLSS.txt](LICENSE-DLSS.txt)), not the LGPL. To build it yourself instead,
+`mod/native/build-dlss.sh <.minecraft>` (or `build-dlss.ps1` on Windows) builds it from NVIDIA's SDK and installs it
+with the model files.
+
+NVIDIA, NVIDIA RTX and DLSS are trademarks of NVIDIA Corporation.
+
+### XeSS (optional, Windows only)
+
+Pick *Intel XeSS* on the Upscaling page (the option is not shown on Linux: Intel publishes the XeSS runtime for Windows
+only). The first time, Emberlight asks to download Intel's XeSS SDK v3.0.2 (~77 MB) from Intel's GitHub
+(github.com/intel/xess, pinned release, checked against a fixed SHA-256 hash) and keeps only `libxess.dll` and Intel's
+licence (Intel Simplified Software License) in `<.minecraft>/emberlight/xess/`. Restart the game once. Until then, or if
+XeSS cannot start, FSR is used and the page says why. Intel(R) Xe Super Sampling (XeSS) SDK: Copyright (C) 2025 Intel
+Corporation.
+
+## Keys
+
+All keys are in the **Emberlight** category of *Options → Controls* and can be rebound. Defaults follow Iris.
 
 | Key | Action |
 |---|---|
-| O | Shader pack screen (Shader Options… inside it). Also bound by vanilla 26.3 to **Friends** (`key.friends`): both fire, rebind one of them if that bothers you |
+| O | Shader pack screen. Vanilla 26.3 also binds O to *Friends*; both fire, rebind one if it bothers you |
 | R | Reload the active pack from disk |
-| K | Toggle shaders on/off (vanilla rendering while off; switching back reuses the built pipelines). Action bar shows "Shaders: on/off" |
-| F7 | Profiler overlay (GPU and CPU ms per pass) |
-| unbound | Wireframe (toggle; only in debug mode and in singleplayer, as Iris) |
+| K | Shaders on/off (vanilla rendering while off; switching back is instant) |
+| F7 | Profiler overlay (GPU and CPU time per pass) |
+| unbound | Ray tracing on/off |
+| unbound | Wireframe (debug mode and singleplayer only, as in Iris) |
 
-Inside the shader pack screen, as in Iris:
+In the shader pack screen, as in Iris: **Tab** opens the pack's options (Tab again applies and goes back), **F1** hides the
+screen, **Ctrl+D** toggles debug mode (every shader error in chat, profiler on), and pack zips or folders can be dropped onto
+the window to install them.
 
-| Key | Action |
-|---|---|
-| Tab | Open the shader options; Tab in the options applies the changes and goes back to the pack list (Shift+Tab still moves the focus) |
-| F1 | Hide the screen to look at the world (F1 again shows it) |
-| Ctrl+D | Debug mode on/off (asks first): every shader error in chat, profiler overlay on, wireframe key allowed. Saved in `config/emrionshaders.properties` |
-| Drag & drop | Dropped pack zips and pack folders are copied into `shaderpacks/` |
+The FPS counter in the top left is always shown; start with `-Demberlight.hideFps=true` to hide it. With frame generation
+it shows both rates, e.g. `120 FPS (60 rendered)`.
 
-Not taken over: Iris's Ctrl+G (load packs Iris does not recognise) has no equivalent, every pack is tried. K, R and F7
-are free in vanilla 26.3.
+## Settings
 
-The FPS counter in the top left corner is always shown. Start with `-Demrion.hideFps=true` to hide it.
+The pack's own options are in *Shader Options…*, exactly as in Iris. Emberlight's own pages sit in the top left of that
+screen and are saved in `config/emberlight.properties` (your pack's `.txt` is never touched):
 
-## Building
+- **Emberlight RT…**: ray tracing on/off, style, and every effect (see below). Changes reconvert the pack once (a few
+  seconds); switching back hits the cache.
+- **Performance…**: shadow culling (*Full* by default: skips shadow casters whose shadow can't land on anything visible).
+- **Upscaling…**: Off / AMD FSR / NVIDIA DLSS / Intel XeSS (Windows), the quality preset (Native AA or DLAA, Quality, Balanced, Performance,
+  Ultra Performance) and FSR sharpness. The upscalers replace the pack's TAA.
+- **Frame Generation…**: Off / AMD FSR 3 / NVIDIA DLSS. Works with or without upscaling. Pauses itself when the rendered
+  frame rate already reaches the monitor's refresh rate, since the extra frames could not be shown anyway.
+
+### Ray tracing
+
+Off by default. With RT off, the pack is converted and rendered exactly as without RT support. RT works on both the
+vanilla and the Sodium path, and currently only with **Complementary Reimagined / Unbound r5** (including Euphoria
+Patches); other packs show *"unavailable: no RT patch table"*.
+
+- **RT style**: *RTX* (default) lets ray tracing light the scene: coloured light through stained glass, light blocks with
+  ray-traced soft shadows, bounced light from sun and blocks, reflections on polished and metal blocks, stronger light
+  shafts. *Faithful* only makes the pack's own effects more accurate.
+- **Shadows**: *Hybrid* (RT shadows combined with the pack's shadow map, default) or *Full*. Entities, block entities and
+  the player can cast RT shadows.
+- **Reflections**: the pack's reflections hit the real geometry (slabs, plants, fences, off-screen blocks). Needs the pack's
+  World-Space Reflections option.
+- **Refraction and caustics**: water and glass bend the view ray; caustics follow the real water depth.
+- **Ambient occlusion**: traced AO replaces the pack's screen-space AO.
+- **Block light**: torches, lanterns and lava cast ray-traced shadows (2, 4 or 8 rays).
+- **Global illumination**: one traced bounce of sun and sky light (Low / Medium / High). Overworld only.
+
+Ray tracing costs a lot: expect roughly 0.85 GB of extra VRAM, and in the RTX style with everything on about half the frame
+rate at 1440p. Upscaling and frame generation make up for much of it.
+
+## FAQ
+
+**Is this ray tracing or path tracing?**
+Hybrid ray tracing. The pack still rasterises the scene and does its own lighting; rays replace the parts where the pack
+has to guess (shadows, reflections, occlusion, indirect light). It is not a path tracer that renders the whole image with rays.
+
+**Does it use the RT cores?**
+Yes. It traces with Vulkan ray queries (`VK_KHR_ray_query`) against hardware acceleration structures, so RT cores do the
+traversal on NVIDIA RTX and the ray accelerators on AMD.
+
+**Can I use it together with Iris?**
+Install one or the other. Emberlight only runs on Vulkan, Iris only on OpenGL. When Iris is installed, Emberlight does not
+provide its own copy of the Iris API.
+
+**Other mods that ask Iris whether shaders are on?**
+When Iris is not installed, Emberlight provides Iris's public API (`net.irisshaders.iris.api.v0`), so mods that look for
+those classes (Entity Model Features, Entity Texture Features, …) see that a pack is active and when the shadow pass runs.
+Emberlight does not claim the `iris` mod id on purpose: mods that see it also call Iris internals and would crash. So mods
+that check for Iris by mod id (Particle Rain, Litematica) don't see shaders.
+
+**Does it work with Distant Horizons or Voxy?**
+Not yet for Distant Horizons. Voxy is OpenGL-only, so it can't work.
+
+**Where is the cache? Can I delete it?**
+`emberlight/cache/` in your game folder. Yes; packs are reconverted on the next load.
+
+## Pack compatibility
+
+Tested in game against Iris 1.11.7 + Sodium 0.9.3 on OpenGL: same world, 8 fixed scenes, animation time and the frame time
+step pinned, each shot taken exactly 300 frames after the scene is ready (6000 after a weather change, so packs' smoothed wetness settles) and compared as the median of 3 shots (both
+renderers), pack defaults except for Complementary Unbound. MAE on 0–255. Mobs and rain move on game ticks, so the
+entities and rain scenes keep some run-to-run noise. ✅ matches Iris, 🟡 works with visible differences, ❌ broken.
+
+| Pack | Status | MAE / SSIM vs Iris | FPS, Iris → Emberlight | Notes |
+|---|---|---|---|---|
+| Complementary Unbound r5.9.3 + Euphoria Patches 1.10.5 | ✅ | 0.22–2.28 / 0.969–0.998 | 75.3 → 132.9 | Reference pack. RT supported |
+| Complementary Reimagined r5.9.3 | ✅ | 0.11–2.63 / 0.890–0.999 | 272 → 428* | RT supported |
+| BSL v10.1.8 | ✅ | 0.11–1.16 / 0.980–0.999 | 162 → 321† (Sodium 336†) | |
+| Solas V3.9 | ✅ | 0.32–2.08 / 0.954–0.996 | 157 → 275* | |
+| Sildur's Vibrant 2.02 Extreme | ✅ | 0.03–1.09 / 0.964–0.999 | 163 → 393* | |
+| Photon v1.4 | ✅ | 0.38–2.93 / 0.878–0.995 | 246 → 332* | Overview 1.4 vs 0.1 Iris run-to-run; other scenes within ~0.6 of Iris's own run-to-run difference |
+| MakeUp UltraFast 9.6 | ✅ | 0.15–2.60 / 0.920–0.993 | 450 → 550† | |
+| Bliss v2.1.2 (Chocapic13 edit) | ✅ | 0.45–2.58 / 0.977–0.996 | 252 → 287† | |
+| Kappa v5.3 | ✅ | 0.17–2.29 / 0.960–0.999 | – | |
+| Lux v1.3 | ✅ | 0.21–2.83 / 0.896–1.000 | – | |
+| RethinkingVoxels r0.1-beta9 | ✅ | 0.17–3.33 / 0.867–0.999 | – | Water texture animation differs between runs |
+| Nostalgia v5.1 | ✅ | 0.07–2.31 / 0.971–1.000 | – | |
+| SuperDuperVanilla 1.3.8 | ✅ | 0.16–3.31 / 0.957–0.999 | – | Rain streaks differ between runs |
+| VanillaPlus v3.3 | ✅ | 0.10–5.45 / 0.780–1.000 | – | Rain streaks change every frame (Iris against itself 5.4); other scenes ≤ 1.75 |
+| AstraLex V93.0 | ✅ | 0.23–2.24 / 0.937–0.999 | – | |
+| Insanity v1.650 | ✅ | 0.03–1.96 / 0.922–1.000 | – | |
+| Shrimple v0.12 | 🟡 | 1.01–11.52 / 0.880–0.984 | – | Overview and water: Iris itself differs by ~8.5 between two runs here, ours by < 1 |
+
+1920×1080, render distance 16, RTX 4070 Ti, vanilla textures. \* Single preliminary runs, to be re-measured. † One 10 s run, 2026-11-14 build.
+Other packs may work but hit unimplemented paths. Details: [docs/BENCHMARK.md](docs/BENCHMARK.md).
+
+## Known issues
+
+- Distant Horizons is not supported yet; Voxy can't be (OpenGL only).
+- The Sodium path is a few percent slower than the vanilla path on GPU-bound systems (its opaque pass costs about 0.5 ms more).
+- Reflections on water have no motion vectors, so they can smear with FSR/DLSS or frame generation while the camera moves.
+  The same goes for moving mobs and the hand.
+- 256× resource packs with PBR need a lot of VRAM together with Complementary's voxel data, as with Iris
+  (`-Demberlight.pbr=false` turns PBR off).
+- Only tested on NVIDIA on Linux. DLSS is Linux only for now.
+
+## Building from source
+
+Needs Java 25 or newer and `glslc` (from the Vulkan SDK or shaderc) on the `PATH`.
 
 ```sh
-export JAVA_HOME=/path/to/jdk25+   # Java 25 or newer
-./gradlew build                    # mod jar in mod/build/libs, converter in converter/build/libs
-./gradlew :converter:fatJar        # standalone converter: java -jar converter/build/libs/converter-*-all.jar <pack> <settings.txt|-> <out-dir>
+./gradlew build             # mod jar in mod/build/libs/, all tests
+./gradlew :converter:fatJar # standalone converter: java -jar converter/build/libs/converter-*-all.jar <pack> <settings.txt|-> <out-dir>
 ```
 
-## Supported features
+Developer documentation is in [docs/](docs): [ARCHITECTURE.md](docs/ARCHITECTURE.md), the cache format
+[FORMAT.md](docs/FORMAT.md), [RAYTRACING.md](docs/RAYTRACING.md), [UPSCALING.md](docs/UPSCALING.md),
+[FRAMEGEN.md](docs/FRAMEGEN.md), [HDR.md](docs/HDR.md), [SODIUM.md](docs/SODIUM.md) and [BENCHMARK.md](docs/BENCHMARK.md).
 
-| Feature | Status |
-|---|---|
-| OptiFine/Iris pack format (shaders.properties, block/item/entity.properties, dimension folders, includes, options, profiles) | ✅ |
-| Iris settings file (`<pack>.txt`), read and written 1:1 | ✅ |
-| GLSL 120–460 compatibility → Vulkan GLSL 450 → SPIR-V (own transpiler) | ✅ |
-| gbuffers_* (terrain, water, entities, block entities, hand, sky, particles, weather, lines, …) | ✅ |
-| deferred*, composite*, final, compute shaders (`.csh`, work groups) | ✅ |
-| Shadow pass (terrain, entities, translucent, Iris culling modes) | ✅ |
-| colortex/depthtex/shadowtex/shadowcolor, flips, clears, mipmaps, size.buffer | ✅ |
-| Custom images (2D/3D, image load/store), SSBOs, writes from vertex shaders | ✅ |
-| Custom textures, noisetex, custom uniforms (Iris expression language incl. `smooth`) | ✅ |
-| Iris built-in uniforms (149) | ✅ |
-| Block, item and entity IDs (mc_Entity, iris_Entity, at_midBlock, at_tangent, mc_midTexCoord) | ✅ |
-| labPBR normals/specular for blocks | ✅ |
-| labPBR for entities, items, block entities, particles (per draw, as Iris) | ✅ |
-| Options GUI (screens, sliders, profiles, lang files) and hot reload | ✅ |
-| Iris keys: toggle (K), reload, pack screen, wireframe, debug mode, pack-screen shortcuts | ✅ |
-| Iris API for other mods (`net.irisshaders.iris.api.v0`, revision 4) when Iris is not installed | ✅ (partly: see below) |
-| Geometry shaders, tessellation | ❌ (not needed by the target pack) |
-| Distant Horizons / Voxy / Colorwheel / Photonics hooks | ❌ |
-| OpenGL backend | ❌ (Vulkan only, by design) |
+## Development
 
-## Optional ray tracing (Emrion RT)
+Emberlight is developed with heavy use of AI coding assistants (Anthropic's Claude). Every change is reviewed and tested in game.
 
-Off by default. With RT off the pack is converted and rendered exactly as without RT support (same cache, same shaders, no
-RT objects). On GPUs with `VK_KHR_ray_query` (tested: RTX 4070 Ti) RT can replace the pack's shadow-map lookups with
-hardware ray-traced sun and moon shadows, while the pack's own lighting, noise and TAA stay in charge.
+## Licence
 
-- **Enable:** shader options → **Emrion RT...** (top left of the main options screen) → *Ray tracing: ON* → Apply. Or bind the
-  key *Toggle ray tracing (Emrion RT)* in Controls → Emrion Shaders. The first switch reconverts the pack (a few seconds),
-  later switches hit the cache.
-- **Modes:** *Hybrid* (default): RT terrain shadows times one jittered tap of the pack's shadow map, which keeps entity
-  shadows, coloured glass and water caustics. *Full*: RT shadows only; the map adds coloured glass and caustics, entities cast
-  no shadow yet. *Shadow rays per pixel* (default 1, the pack's TAA accumulates) and *RT distance* are on the same page.
-- **Cost** (1080p, RD 16): 0.5–0.8 ms GPU per frame, 9–11 % FPS (sunset 145 → 130, forest 189 → 172). About 0.85 GB of extra
-  VRAM for the acceleration structures, and MC keeps every section within the render distance meshed.
-- **Config:** `config/emrionshaders.properties` (`rt.enabled`, `rt.shadows=hybrid|full|off`, `rt.shadowRays`, `rt.distance`,
-  `rt.device=false` turns the RT device setup off entirely). The Iris settings file is never touched.
-- **Packs:** Complementary Reimagined/Unbound r5 (and Euphoria Patches). Other packs show "unavailable: no RT patch table".
-  Details: docs/RAYTRACING.md.
+LGPL-3.0-only (`LICENSE`, `COPYING`). Iris was used as a specification only; no Iris code is included apart from Iris's
+public API classes (LGPL-3.0, shipped with their own licence files and only loaded when Iris is absent). AMD FidelityFX
+FSR shaders and ported host code are MIT, see `NOTICE`. Shaderpacks are not part of this repository.
 
-## Known limitations
-
-- Verified against Complementary Unbound + Euphoria Patches; seven more packs are listed under Compatibility. Other packs may hit unimplemented paths.
-- Tested on NVIDIA (RTX 4070 Ti, Linux) only. Other GPUs and drivers are untested.
-- 256× resource packs with PBR need a lot of GPU memory together with Complementary's voxel data (about 2.45 GB), as with Iris.
-  `-Demrion.pbr=false` turns PBR off.
-- The first item or shulker box drawn with a 256× PBR pack causes a one-time hitch of about 0.3 s while its PBR atlas uploads.
-- Some hooks depend on Fabric API internals (Indigo block rendering) and may need an update when Fabric API changes.
-- A compute pass named like a fullscreen pass (`composite.csh` next to `composite.fsh`) is not supported yet.
-
-## Iris API for other mods
-
-Mods such as Entity Model/Texture Features ask Iris's public API (`IrisApi.getInstance().isShaderPackInUse()`,
-`isRenderingShadowPass()`, …) to adapt to shaders. When Iris is **not** installed, Emrion Shaders puts its own copy of
-that API (Iris's LGPL-3.0 API classes, identical signatures to Iris 1.11.7 for 26.3) on the class path at pre-launch and
-answers from its own state: `isShaderPackInUse` = a pack is rendering, `isRenderingShadowPass` = inside our shadow pass,
-`getConfig().areShadersEnabled/setShadersEnabledAndApply` = the K toggle, `getSunPathRotation`, `openMainIrisScreenObj` =
-our pack screen. With Iris installed nothing is added.
-
-- Only mods that detect the API by **class presence** see it (EMF, ETF; Sodium Extra also needs an Iris internal class and
-  keeps treating Iris as absent). Mods that check `FabricLoader.isModLoaded("iris")` (Particle Rain, Litematica, MaLiLib)
-  do not, on purpose: Emrion Shaders does **not** claim the `iris` mod id, because mods that see it also mix into and call
-  Iris internals (ImmediatelyFast, Euphoria Patcher, VoxelMap, …) and would crash or misbehave.
-- `assignPipeline`, `assignPipelineShadow` and `registerShadowRenderCallback` are accepted and ignored;
-  `createTextVertexSink` throws `UnsupportedOperationException`.
-
-## Robustness
-
-Errors never crash the game. A shader that fails to compile drops that program and reports pack file and line in chat; any
-exception during a frame disables the pack and Minecraft keeps rendering vanilla. Resize, fullscreen, dimension changes,
-pack toggling, hot reloads and a 10-minute soak run without GPU memory growth, and with no errors from the Khronos
-validation layer (see docs/BENCHMARK.md for the recipe).
-
-## How it works
-
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and the format spec [docs/FORMAT.md](docs/FORMAT.md). In short:
-
-- The **converter** is pure Java with no Minecraft dependency. It does everything Iris does at load time: options,
-  preprocessing, transpiling, SPIR-V (shaderc with `-O`), the uniform layout, and a static flip/clear plan. It writes this
-  into a versioned cache.
-- The **mod** executes that plan. Geometry passes use raw Vulkan pipelines wrapped as Minecraft pipelines, so Minecraft's own
-  draw code renders the world through the pack's shaders. Fullscreen and compute passes are recorded in raw Vulkan with
-  precise barriers. Everything is compiled when the pack loads, so there is no shader stutter.
-
-## License
-
-LGPL-3.0-only (see `LICENSE` and `COPYING`). The Iris source code was used only as a specification; no Iris code is included.
-Shaderpacks are not part of this repository.
+**The LGPL does not cover the bundled DLSS binaries.** The DLSS bridge sources in `mod/native/` are MIT
+(`mod/native/LICENSE`); the compiled bridge in the jar (`natives/*/`) contains NVIDIA's NGX SDK library and is under
+[LICENSE-DLSS.txt](LICENSE-DLSS.txt) and NVIDIA's RTX SDK licence. NVIDIA's DLSS model files are not part of Emberlight;
+they are downloaded from NVIDIA only on request.

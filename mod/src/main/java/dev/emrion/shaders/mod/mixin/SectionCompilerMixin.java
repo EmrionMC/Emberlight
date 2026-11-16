@@ -20,9 +20,16 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.FluidState;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+import com.mojang.blaze3d.vertex.VertexSorting;
+import dev.emrion.shaders.mod.rt.RtLights;
+import net.minecraft.client.renderer.SectionBufferBuilderPack;
+import net.minecraft.client.renderer.chunk.RenderSectionRegion;
+import net.minecraft.core.SectionPos;
 
 /**
- * Why: while a pack is active, section meshes are built in EMRION_BLOCK (ARCHITECTURE §5.6), and each vertex needs the block
+ * Why: while a pack is active, section meshes are built in EMRION_BLOCK, and each vertex needs the block
  * being meshed (id, fluid flag, emission, position) — known only here, on the worker thread that compiles the section.
  */
 @Mixin(SectionCompiler.class)
@@ -70,5 +77,25 @@ public class SectionCompilerMixin {
 		} finally {
 			c.inSection = false;
 		}
+	}
+
+	// RT block light (RtLights): the emissive blocks of the section, collected only while an RtScene exists
+	@Inject(method = "compile", at = @At("HEAD"))
+	private void emrion$lightsBegin(SectionPos sectionPos, RenderSectionRegion region, VertexSorting sorting, SectionBufferBuilderPack builders,
+			CallbackInfoReturnable<SectionCompiler.Results> cir) {
+		RtLights.begin();
+	}
+
+	@WrapOperation(method = "compile", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/chunk/RenderSectionRegion;getBlockState(Lnet/minecraft/core/BlockPos;)Lnet/minecraft/world/level/block/state/BlockState;"))
+	private BlockState emrion$lightsBlock(RenderSectionRegion region, BlockPos pos, Operation<BlockState> original) {
+		BlockState state = original.call(region, pos);
+		RtLights.block(state, pos, region);
+		return state;
+	}
+
+	@Inject(method = "compile", at = @At("RETURN"))
+	private void emrion$lightsEnd(SectionPos sectionPos, RenderSectionRegion region, VertexSorting sorting, SectionBufferBuilderPack builders,
+			CallbackInfoReturnable<SectionCompiler.Results> cir) {
+		RtLights.end(sectionPos);
 	}
 }

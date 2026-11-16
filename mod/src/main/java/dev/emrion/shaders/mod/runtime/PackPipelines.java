@@ -27,10 +27,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Everything of a pack dimension that does not depend on the window size, built on background threads (ARCHITECTURE §5.7):
- * the set-1 layout, the shared pipeline layout, one VkPipeline per composite-like or compute program (created in parallel
- * with the persisted VkPipelineCache) and the runtime's own helper pipelines. Nothing is ever created lazily in a frame.
- * Gbuffers programs are built per vanilla pipeline they replace ({@link GbufferPipelines}); shadow programs are M4.
+ * Everything of a pack dimension that does not depend on the window size, built on background threads: layouts, one
+ * VkPipeline per composite-like or compute program, and helper pipelines. Nothing is created lazily in a frame.
+ * Gbuffers programs are built per vanilla pipeline they replace ({@link GbufferPipelines}).
  */
 public final class PackPipelines {
 	/** MC's main render target format (MainTarget): what final writes. */
@@ -46,6 +45,8 @@ public final class PackPipelines {
 	public final Map<String, Long> pipelines = new java.util.concurrent.ConcurrentHashMap<>();
 	/** VkFormat → texel copy pipeline into that format. */
 	public final Map<Integer, Long> blit = new java.util.concurrent.ConcurrentHashMap<>();
+	/** Area-filter mip generation per colour format of the mipmapped targets (FrameExecutor.mipmaps). */
+	public final Map<Integer, Long> mip = new java.util.concurrent.ConcurrentHashMap<>();
 	public GbufferPipelines gbuffers;
 	/** Constant default vertex attributes for gbuffers inputs the vanilla formats lack (GeometryPipelines.DEFAULTS). */
 	public dev.emrion.shaders.mod.vk.RawBuffer defaults;
@@ -78,8 +79,10 @@ public final class PackPipelines {
 		helperLayout = Descriptors.pipelineLayout(ctx, 0, helperSetLayout);
 		clearSetLayout = new Descriptors.LayoutBuilder().add(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_SHADER_STAGE_COMPUTE_BIT).build(ctx, true);
 		clearLayout = Descriptors.pipelineLayout(ctx, 16, clearSetLayout);
-		clear2d = computeHelper("emrion_clear2d");
-		clear3d = computeHelper("emrion_clear3d");
+		if (ctx.storageWriteWithoutFormat) { // the clear shaders need it; without it FrameExecutor clears by transfer
+			clear2d = computeHelper("emrion_clear2d");
+			clear3d = computeHelper("emrion_clear3d");
+		}
 
 		Map<String, Manifest.Target> targets = new HashMap<>();
 		dim.targets().forEach(t -> targets.put(t.name(), t));
@@ -89,13 +92,16 @@ public final class PackPipelines {
 			List<CompletableFuture<Void>> jobs = new ArrayList<>();
 			for (var e : dim.programs().entrySet()) {
 				var p = e.getValue();
-				if (!p.kind().equals("composite") && !p.kind().equals("compute")) continue; // geometry: M3
+				if (!p.kind().equals("composite") && !p.kind().equals("compute")) continue; // geometry programs: GbufferPipelines
 				jobs.add(CompletableFuture.runAsync(() -> pipelines.put(e.getKey(), build(cacheDir, p, targets, cache)), pool));
 			}
 			List<Integer> blitFormats = new ArrayList<>(List.of(VulkanConst.toVk(SCREEN_FORMAT)));
 			var ct0 = targets.get("colortex0");
 			if (ct0 != null) blitFormats.add(VulkanConst.toVk(Formats.gpu(ct0.format())));
 			for (int f : blitFormats.stream().distinct().toList()) jobs.add(CompletableFuture.runAsync(() -> blit.put(f, helper("emrion_blit", f)), pool));
+			for (int f : targets.values().stream().filter(t -> t.mipLevels() != 1 && (t.kind().equals("color") || t.kind().equals("shadow_color")) && !Formats.isInteger(Formats.gpu(t.format())))
+					.map(t -> VulkanConst.toVk(Formats.gpu(t.format()))).distinct().toList())
+				jobs.add(CompletableFuture.runAsync(() -> mip.put(f, helper("emrion_mip", f)), pool));
 			gbuffers = new GbufferPipelines(ctx, cacheDir, manifest, dim, setLayout, vanilla, pool);
 			CompletableFuture.allOf(jobs.toArray(CompletableFuture[]::new)).join();
 		}
@@ -150,7 +156,7 @@ public final class PackPipelines {
 	}
 
 	private long computeHelper(String name) {
-		long cs = ShaderModules.create(ctx, ShaderModules.resource("/assets/emrionshaders/spv/" + name + ".comp.spv"));
+		long cs = ShaderModules.create(ctx, ShaderModules.resource("/assets/emberlight/spv/" + name + ".comp.spv"));
 		try {
 			return ComputePipelines.create(ctx, cs, clearLayout, ctx.pipelineCache().handle);
 		} finally {
@@ -160,8 +166,8 @@ public final class PackPipelines {
 
 	/** Helper fullscreen pass from the mod jar. */
 	private long helper(String frag, int colorFormat) {
-		long vs = ShaderModules.create(ctx, ShaderModules.resource("/assets/emrionshaders/spv/fullscreen.vert.spv"));
-		long fs = ShaderModules.create(ctx, ShaderModules.resource("/assets/emrionshaders/spv/" + frag + ".frag.spv"));
+		long vs = ShaderModules.create(ctx, ShaderModules.resource("/assets/emberlight/spv/fullscreen.vert.spv"));
+		long fs = ShaderModules.create(ctx, ShaderModules.resource("/assets/emberlight/spv/" + frag + ".frag.spv"));
 		try {
 			return new GraphicsPipelineBuilder().stage(VK_SHADER_STAGE_VERTEX_BIT, vs).stage(VK_SHADER_STAGE_FRAGMENT_BIT, fs).layout(helperLayout)
 					.colors(new int[] {colorFormat}).build(ctx, ctx.pipelineCache().handle);
@@ -210,6 +216,7 @@ public final class PackPipelines {
 		ctx.destroyLater(() -> {
 			pipelines.values().forEach(p -> vkDestroyPipeline(ctx.vk, p, null));
 			blit.values().forEach(p -> vkDestroyPipeline(ctx.vk, p, null));
+			mip.values().forEach(p -> vkDestroyPipeline(ctx.vk, p, null));
 			vkDestroyPipeline(ctx.vk, clear2d, null);
 			vkDestroyPipeline(ctx.vk, clear3d, null);
 			vkDestroyPipelineLayout(ctx.vk, clearLayout, null);

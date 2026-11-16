@@ -29,9 +29,11 @@ public class BlockEntityRenderDispatcherMixin {
 		boolean wasSubmitting = GeometryHooks.submittingBlockEntity;
 		EntityIds.blockEntity = EmrionVertexFormats.ids().block(((BlockEntityRenderStateAccessor) state).emrion$blockState());
 		GeometryHooks.submittingBlockEntity = true;
+		long owner = dev.emrion.shaders.mod.upscale.ObjectMotion.setOwner(dev.emrion.shaders.mod.upscale.ObjectMotion.BLOCK_ENTITY, state.blockPos.asLong());
 		try {
 			original.call(state, poseStack, collector, camera);
 		} finally {
+			dev.emrion.shaders.mod.upscale.ObjectMotion.restoreOwner(owner);
 			EntityIds.blockEntity = previous;
 			GeometryHooks.submittingBlockEntity = wasSubmitting;
 		}

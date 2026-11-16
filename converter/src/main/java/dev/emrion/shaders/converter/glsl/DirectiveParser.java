@@ -10,7 +10,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Source directives (iris-spec §3.2–3.4), read from the comment-preserving preprocessor output like Iris does, so
+ * Source directives, read from the comment-preserving preprocessor output like Iris does, so
  * directives inside {@code /* *}{@code /} count and inactive {@code #if} branches do not.
  */
 public final class DirectiveParser {

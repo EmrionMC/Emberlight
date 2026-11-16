@@ -21,11 +21,11 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
- * Loads the real target pack (Complementary Unbound r5.9.3 + Euphoria Patches 1.10.5) with the user's settings and checks
+ * Loads the real target pack (Complementary Unbound r5.9.3 + Euphoria Patches 1.10.5) with its settings file and checks
  * it against docs/research/complementary-features.md. Skipped when testpacks/ is absent.
  */
 class TargetPackIntegrationTest {
-	private static final Path FALLBACK = Path.of("../testpacks");
+	private static final Path FALLBACK = Path.of(System.getProperty("emrion.testpacks", "../testpacks"));
 	private static ResolvedPack pack;
 	private static Diagnostics diags;
 	private static Path testpacks;

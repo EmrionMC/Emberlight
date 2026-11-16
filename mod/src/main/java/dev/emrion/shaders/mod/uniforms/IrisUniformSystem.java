@@ -18,29 +18,14 @@ import org.joml.Vector4f;
 import org.joml.Vector4fc;
 
 /**
- * {@link UniformSystem} with Iris semantics (iris-spec §5). Built once per pack/dimension from the manifest layout:
- * every block member is resolved to a provider and a store slot here; per frame {@link #beginFrame} evaluates the
- * providers into an int[] store (std140 words) and {@link #writeFrameBlock} copies words. No maps or allocation per
- * frame on our side (a few MC getters return fresh Vec3s).
- *
- * <p>Iris update frequencies are kept: per_tick members are only re-evaluated when the game time changes (Iris uploads
- * them per tick), per_frame members every frame. Custom uniforms see per-frame values, as in Iris.
- *
- * <p>Call {@link #beginFrame} after GameRenderer.renderLevel computed the level projection, i.e. at or after
- * LevelRenderer.render HEAD (Iris: beginLevelRendering); before that, gbufferProjection would be last frame's.
+ * {@link UniformSystem} with Iris semantics; per_tick members update only when game time changes, as in Iris.
+ * Call {@link #beginFrame} at or after LevelRenderer.render HEAD, else gbufferProjection is last frame's.
  */
 public final class IrisUniformSystem implements UniformSystem, HostValues {
-	/**
-	 * Iris PackDirectives values the uniforms use. Build with {@link #fromConsts} to get Iris's real behaviour.
-	 * Halflives are in deciseconds.
-	 */
+	/** Iris PackDirectives values the uniforms use; half lives in deciseconds. Build with {@link #fromConsts}. */
 	public record Directives(float wetnessHalfLife, float drynessHalfLife, float eyeBrightnessHalfLife,
 	                         boolean oldHandLight, boolean endFlashShadows) {
-		/**
-		 * Iris quirk (PackDirectives:280-284, iris-spec §3.4): the {@code drynessHalflife} directive writes
-		 * wetnessHalfLife, so the "up" half life is drynessHalflife if declared, else wetnessHalflife, else 600, and the
-		 * "down" half life is always the default 200. Complementary declares both = 300 → up 300, down 200.
-		 */
+		/** Iris quirk: drynessHalflife writes wetnessHalfLife, so "up" is dryness, else wetness, else 600; "down" is always 200. */
 		public static Directives fromConsts(Float wetnessHalflife, Float drynessHalflife, Float eyeBrightnessHalflife,
 		                                    boolean oldHandLight, boolean endFlashShadows) {
 			float up = drynessHalflife != null ? drynessHalflife : wetnessHalflife != null ? wetnessHalflife : 600.0f;
@@ -48,10 +33,7 @@ public final class IrisUniformSystem implements UniformSystem, HostValues {
 		}
 	}
 
-	/**
-	 * The composite matrix is singular (z row 0), so FULLSCREEN writes its pseudo-inverse (NDC → [0,1] quad). Composite
-	 * programs never read EmrionPhase (the transpiler inlines the CompositeTransformer constants); this is only defined data.
-	 */
+	/** Pseudo-inverse of the singular composite matrix; composites inline their constants, so this is only defined data. */
 	private static final Matrix4fc COMPOSITE_INV = new Matrix4f(0.5f, 0, 0, 0, 0, 0.5f, 0, 0, 0, 0, 0, 0, 0.5f, 0.5f, 0, 1);
 
 	private final Builtins b;
@@ -128,7 +110,7 @@ public final class IrisUniformSystem implements UniformSystem, HostValues {
 	/** Uses the manifest's layout, the dimension's shadow settings, id maps and pack properties. */
 	public static IrisUniformSystem forManifest(Manifest manifest, String dimensionFolder) {
 		Map<String, Object> p = manifest.properties() == null ? Map.of() : manifest.properties();
-		// shortcut: the converter does not export the *Halflife const directives yet; read them from properties once it does.
+		// shortcut: *Halflife const directives are not exported by the converter yet, read them once it does
 		Directives d = Directives.fromConsts(num(p.get("wetnessHalflife")), num(p.get("drynessHalflife")), num(p.get("eyeBrightnessHalflife")),
 				!Boolean.FALSE.equals(p.get("oldHandLight")), Boolean.TRUE.equals(p.get("endFlashShadows")));
 		Manifest.Dimension dim = manifest.dimensions().get(dimensionFolder);
@@ -233,7 +215,7 @@ public final class IrisUniformSystem implements UniformSystem, HostValues {
 		return clearColor;
 	}
 
-	// ---- HostValues (CustomUniformRuntime inputs: per-frame values, as Iris evaluates them) ------------------------
+	// ---- HostValues (custom uniform inputs, per frame as in Iris) ---------------------------------------------------
 
 	private int[] eval(String name) {
 		Builtins.Def d = b.defs.get(name);

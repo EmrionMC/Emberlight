@@ -23,12 +23,15 @@ public final class RawBuffer {
 	}
 
 	public RawBuffer(VulkanContext ctx, long size, int vkUsage, boolean hostMapped, String label) {
+		long start = System.nanoTime();
 		this.ctx = ctx;
 		this.size = size;
 		try (MemoryStack stack = MemoryStack.stackPush()) {
 			var info = VkBufferCreateInfo.calloc(stack).sType$Default().size(size).usage(vkUsage).sharingMode(VK_SHARING_MODE_EXCLUSIVE);
 			var alloc = VmaAllocationCreateInfo.calloc(stack).usage(VMA_MEMORY_USAGE_AUTO);
-			if (hostMapped) alloc.flags(VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+			// coherent: callers write (and read back) the mapping directly, never flush or invalidate
+			if (hostMapped) alloc.flags(VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT)
+					.requiredFlags(VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 			LongBuffer pBuffer = stack.mallocLong(1);
 			PointerBuffer pAlloc = stack.mallocPointer(1);
 			VmaAllocationInfo allocInfo = VmaAllocationInfo.calloc(stack);
@@ -38,6 +41,7 @@ public final class RawBuffer {
 			dev.emrion.shaders.mod.debug.VramReport.name(ctx.vma, allocation, "raw " + label);
 			mapped = hostMapped ? allocInfo.pMappedData() : 0L;
 		}
+		dev.emrion.shaders.mod.debug.HitchLog.add(dev.emrion.shaders.mod.debug.HitchLog.BUFFER, start);
 	}
 
 	public void destroyLater() {

@@ -7,13 +7,16 @@ import com.mojang.blaze3d.vertex.ByteBufferBuilder;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
 import com.mojang.renderpearl.api.vertex.VertexFormat;
+import dev.emrion.shaders.mod.rt.RtEntities;
 import dev.emrion.shaders.mod.vertex.EmrionVertexFormats;
 import dev.emrion.shaders.mod.vertex.EntityIds;
 import dev.emrion.shaders.mod.vertex.ExtendedBufferBuilder;
 import net.minecraft.client.renderer.StagedVertexBuffer;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyVariable;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
  * Why: every feature draw (entities, block entities, items) gets its vertex format and BufferBuilder here. While the world or
@@ -33,5 +36,14 @@ public class StagedVertexBufferMixin {
 	private BufferBuilder emrion$extendedBuilder(ByteBufferBuilder buffer, PrimitiveTopology topology, VertexFormat format,
 			Operation<BufferBuilder> original) {
 		return format == EmrionVertexFormats.ENTITY || format == EmrionVertexFormats.GLYPH ? new ExtendedBufferBuilder(buffer, topology, format, null) : original.call(buffer, topology, format);
+	}
+
+	/** RT entities: the draws' CPU vertex slices, just before they are copied to the GPU and freed. */
+	@Inject(method = "uploadDrawsToBuffers", at = @At("HEAD"))
+	private void emrion$rtEntities(com.mojang.renderpearl.api.device.GpuDevice device, java.util.List<StagedVertexBuffer.Draw> draws,
+			com.mojang.renderpearl.api.buffers.GpuBuffer vertices, com.mojang.renderpearl.api.buffers.GpuBuffer indices, int vertexSize, int indexSize,
+			CallbackInfo ci) {
+		RtEntities.onUpload(draws);
+		dev.emrion.shaders.mod.upscale.ObjectMotion.onUpload(draws);
 	}
 }

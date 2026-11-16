@@ -8,14 +8,7 @@ import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.block.state.BlockState;
 import org.jspecify.annotations.Nullable;
 
-/**
- * Smooth lighting (AO + light blending) of chunk quads as Sodium computes it, because Iris always runs on Sodium. It differs
- * from MC's {@code BlockModelLighter}: a face corner is skipped when both <em>edge</em> neighbours are opaque (MC tests the
- * blocks one further out), zero light values are replaced per channel by the smallest non-zero one of the corner (MC: by the
- * centre, only if it is brighter than 2), opaque full blocks count as unlit, and partial or inset faces blend bilinearly
- * between the face data in front of and inside the block. Written from Sodium's observable behaviour (SmoothLightPipeline,
- * AoFaceData, LightDataAccess); the vanilla-model (non-"enhanced") path only.
- */
+/** Smooth lighting of chunk quads as Sodium computes it (Iris always runs on Sodium), which differs from MC's BlockModelLighter. */
 public final class SmoothLight {
 	private static final ThreadLocal<SmoothLight> CURRENT = ThreadLocal.withInitial(SmoothLight::new);
 	/** Per face: two pairs of opposite edge directions (MC's AdjacencyInfo order). */
@@ -53,10 +46,7 @@ public final class SmoothLight {
 
 	public static SmoothLight get() { return CURRENT.get(); }
 
-	/**
-	 * Computes per-vertex brightness (AO × directional shade) and packed light coords of a quad of block-local vertex positions
-	 * {@code xyz} (x0, y0, z0, x1, …) facing {@code dir}, into {@code br} and {@code lm}.
-	 */
+	/** Per-vertex brightness (AO x shade) and packed light of a quad facing {@code dir}, into {@code br} and {@code lm}. */
 	public void light(BlockAndTintGetter level, BlockState state, BlockPos pos, Direction dir, @Nullable Direction shadeDir, float[] xyz,
 			float[] br, int[] lm) {
 		light(level, state, pos, dir, shadeDir, xyz, br, lm, AUTO);

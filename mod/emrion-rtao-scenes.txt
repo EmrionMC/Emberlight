@@ -1,0 +1,8 @@
+# RT AO comparison scenes (M7): run with -Demrion.rt.ao=true -Demrion.rt.shadows=off (AO alone) and the autotest step
+# "rt on"/"rt off", or as separate runs with -Demrion.rt.enabled=true|false; same format as emrion-scenes.txt.
+# aoyard: a platform in the air with corners, an overhang, a fence, a leaf block, grass and a wall that leaves the screen.
+aoyard   | 0.5 153.5 -7.5 0 32 | 6000 | clear | fill -9 149 -9 9 149 9 minecraft:stone; fill -9 150 -9 9 156 9 minecraft:air; fill -2 149 -5 2 149 -2 minecraft:grass_block; fill -2 150 -5 2 150 -2 minecraft:short_grass; fill -7 150 6 7 153 6 minecraft:stone_bricks; fill -3 150 0 -3 152 0 minecraft:oak_log; fill -1 152 2 3 152 4 minecraft:smooth_stone_slab; fill 5 150 -3 5 150 2 minecraft:oak_fence; fill -7 150 -3 -5 152 -1 minecraft:oak_leaves[persistent=true]; setblock 2 150 0 minecraft:crafting_table; setblock 3 150 0 minecraft:stone_stairs; fill 9 150 -9 9 155 9 minecraft:stone
+forest   | 4.5 119 10.5 45 5 | 6000 | clear |
+forest_floor | 4.5 119 10.5 45 40 | 6000 | clear |
+cave     | 0.5 -37 -5.5 0 15 | 6000 | clear | fill -8 -40 -8 8 -32 8 minecraft:cobbled_deepslate hollow; setblock -6 -39 -6 minecraft:torch; setblock 6 -39 6 minecraft:torch; setblock -6 -39 6 minecraft:torch; setblock 6 -39 -6 minecraft:torch; setblock 0 -39 3 minecraft:lantern; setblock 2 -37 8 minecraft:deepslate_diamond_ore; setblock -3 -36 8 minecraft:deepslate_copper_ore; setblock 8 -38 2 minecraft:deepslate_gold_ore
+overview | 90.5 105 -190.5 180 25 | 6000 | clear |

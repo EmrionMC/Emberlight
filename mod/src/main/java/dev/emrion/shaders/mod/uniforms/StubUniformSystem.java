@@ -9,7 +9,7 @@ import org.joml.Vector4f;
 import org.joml.Vector4fc;
 
 /**
- * Test stand-in for agent (u)'s real {@link UniformSystem}: matrices are identity, a few screen/time built-ins are real,
+ * Test stand-in for {@link IrisUniformSystem}: matrices are identity, a few screen/time built-ins are real,
  * everything else is 0. Enough for composite/final passes to produce finite output.
  */
 public final class StubUniformSystem implements UniformSystem {

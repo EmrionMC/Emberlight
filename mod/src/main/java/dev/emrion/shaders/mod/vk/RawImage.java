@@ -44,11 +44,14 @@ public final class RawImage {
 			image = p.get(0);
 			allocation = pAlloc.get(0);
 			dev.emrion.shaders.mod.debug.VramReport.name(ctx.vma, allocation, "raw " + label);
+			VramResidency.check(ctx.vma, allocation, label);
 
 			var viewInfo = VkImageViewCreateInfo.calloc(stack).sType$Default().image(image)
 					.viewType(is3d ? VK_IMAGE_VIEW_TYPE_3D : VK_IMAGE_VIEW_TYPE_2D).format(format);
 			viewInfo.subresourceRange().aspectMask(aspect).baseMipLevel(0).levelCount(mipLevels).baseArrayLayer(0).layerCount(1);
-			VulkanContext.check(vkCreateImageView(ctx.vk, viewInfo, null, p), "vkCreateImageView " + label);
+			int r = vkCreateImageView(ctx.vk, viewInfo, null, p);
+			if (r != VK_SUCCESS) vmaDestroyImage(ctx.vma, image, allocation); // nothing used it yet: the caller never gets this object
+			VulkanContext.check(r, "vkCreateImageView " + label);
 			view = p.get(0);
 		}
 		var cb = RawCommands.begin(ctx);

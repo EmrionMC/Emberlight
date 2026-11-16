@@ -7,9 +7,8 @@ import java.util.HashSet;
 import java.util.Set;
 
 /**
- * Rewrites the {@code Location} of fragment outputs in SPIR-V. All gbuffers programs drawn in one render pass share the
- * pass's attachment list (the union of every gbuffers output target), but a program's output {@code location=k} means
- * "its k-th draw buffer"; Vulkan writes location k to attachment k, so each output is moved to its target's attachment index.
+ * Rewrites fragment output locations in SPIR-V: gbuffers programs share one attachment list (the union of their targets),
+ * but a program's {@code location=k} means its k-th draw buffer, so each output moves to its target's attachment index.
  */
 public final class OutputPatcher {
 	private static final int MAGIC = 0x07230203;

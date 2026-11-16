@@ -1,0 +1,55 @@
+#version 460
+// RT AO, pass 2: edge-aware spatial filter of the accumulated AO into emrion_rtao. Neighbours count only if they lie on
+// the centre pixel's surface plane (no halos at depth edges); young history (disocclusion) gets a wider kernel.
+#extension GL_GOOGLE_include_directive : require
+#include "rt_ao_common.glsl"
+layout(set = 0, binding = 6, r32f) uniform writeonly image2D aoOut;
+
+// The 8x8 group's taps (step 1 or 2, up to 4 texels out) lie in one 16x16 block: depth, history and position are read once
+// per block texel into shared memory instead of once per tap.
+shared vec4 tileHist[256];
+shared vec4 tilePos[256]; // xyz position, w = 1 where there is a surface
+
+void main() {
+    ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = ivec2(pc.params.xy);
+    if (pc.params.w < 0.0) { // DLSS Ray Reconstruction denoises the raw AO: no tile, no filter (uniform branch, before the barrier)
+        if (any(greaterThanEqual(px, size))) return;
+        imageStore(aoOut, px, vec4(noSurface(texelFetch(depthTex, px, 0).r) ? 1.0 : texelFetch(historyIn, px, 0).x));
+        return;
+    }
+    ivec2 origin = ivec2(gl_WorkGroupID.xy) * 8 - 4;
+    for (int i = int(gl_LocalInvocationIndex); i < 256; i += 64) {
+        ivec2 q = clamp(origin + ivec2(i % 16, i / 16), ivec2(0), size - 1);
+        float d = texelFetch(depthTex, q, 0).r;
+        tileHist[i] = texelFetch(historyIn, q, 0);
+        tilePos[i] = noSurface(d) ? vec4(0.0) : vec4(playerPos(q, d), 1.0);
+    }
+    barrier();
+    if (any(greaterThanEqual(px, size))) return;
+    float depth = texelFetch(depthTex, px, 0).r;
+    vec4 c = texelFetch(historyIn, px, 0);
+    if (noSurface(depth)) {
+        imageStore(aoOut, px, vec4(1.0));
+        return;
+    }
+    vec3 p = playerPos(px, depth);
+    vec3 n = depthNormal(px, p);
+    float planeTol = 0.02 * c.z + 0.02;
+    int step = c.y < 8.0 ? 2 : 1;
+    float sum = 0.0, wsum = 0.0;
+    ivec2 center = ivec2(gl_LocalInvocationID.xy) + 4;
+    for (int y = -2; y <= 2; y++) {
+        for (int x = -2; x <= 2; x++) {
+            ivec2 t = center + ivec2(x, y) * step; // clamped like the image lookup: the block texel was loaded clamped
+            vec4 pq = tilePos[t.y * 16 + t.x];
+            if (pq.w == 0.0) continue;
+            vec4 h = tileHist[t.y * 16 + t.x];
+            float plane = abs(dot(n, pq.xyz - p)) / planeTol;
+            float w = exp(-0.5 * plane * plane) * exp(-0.25 * float(x * x + y * y)) * (h.y + 1.0);
+            sum += w * h.x;
+            wsum += w;
+        }
+    }
+    imageStore(aoOut, px, vec4(wsum > 0.0 ? sum / wsum : c.x));
+}

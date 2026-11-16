@@ -66,6 +66,8 @@ class DefaultConverterTest {
 	@TempDir Path out;
 	Path settings;
 	boolean includeBroken;
+	/** The dimension folder name; a pack chooses it (dimension.properties). */
+	String dimName = "world0";
 
 	static PreprocessedStage stage(String program, ProgramGroup group, StageType type, String text) {
 		return new PreprocessedStage(program, group, type, "shaders/world0/" + program + "." + type.extension, text, LineMap.IDENTITY_UNKNOWN, null);
@@ -98,7 +100,7 @@ class DefaultConverterTest {
 		if (includeBroken) programs.add(broken());
 		return new ResolvedPack(source, new Manifest.Options(null, Map.of(), List.of(), List.of(), Map.of(), Map.of(), List.of(), Map.of()),
 				new LinkedHashMap<>(), new Manifest.IdMaps(List.of(), List.of(), List.of(), Map.of()),
-				List.of(new Manifest.DimensionMapping("*", "world0")), Map.of("world0", programs));
+				List.of(new Manifest.DimensionMapping("*", dimName)), Map.of(dimName, programs));
 	};
 
 	/** Identity transpiler: the "preprocessed" text already is Vulkan GLSL. */
@@ -186,7 +188,7 @@ class DefaultConverterTest {
 			for (Path p : spv.filter(p -> p.toString().endsWith(".spv")).toList()) TestShaders.validateIfAvailable(p);
 		}
 		try (Stream<Path> tmp = Files.list(out.resolve("cache"))) {
-			assertTrue(tmp.noneMatch(p -> p.toString().endsWith(".tmp")));
+			assertTrue(tmp.noneMatch(p -> p.getFileName().toString().contains(".tmp")));
 		}
 	}
 
@@ -205,7 +207,7 @@ class DefaultConverterTest {
 
 		var again = run(false, null);
 		assertFalse(again.cacheHit());
-		assertEquals(before + 5, COMPILES.get());
+		assertEquals(before + 4, COMPILES.get()); // the identical gbuffers_basic vertex variants compile once
 		assertArrayEquals(manifest, Files.readAllBytes(again.outputDir().resolve("manifest.json")));
 		assertArrayEquals(spv, Files.readAllBytes(again.outputDir().resolve("spv/world0/gbuffers_basic.fsh.spv")));
 
@@ -261,5 +263,29 @@ class DefaultConverterTest {
 		var r = c.convert(new Converter.Request(Path.of("missing.zip"), null, out, null, null));
 		assertNull(r.manifest());
 		assertEquals(Diagnostic.Severity.ERROR, r.diagnostics().getFirst().severity());
+	}
+
+	@Test
+	void packChosenNamesCannotWriteOutsideTheCache() throws Exception {
+		dimName = "../../escape";
+		var r = run(true, null);
+		assertNull(r.manifest());
+		assertTrue(r.diagnostics().toString().contains("leaves the cache dir"), r.diagnostics().toString());
+		assertFalse(Files.exists(out.resolve("escape")));
+		try (Stream<Path> s = Files.list(out.resolve("cache"))) {
+			assertEquals(List.of(), s.toList(), "the failed conversion's tmp dir is removed");
+		}
+	}
+
+	@Test
+	void interruptedConversionLeavesNothingBehind() throws Exception {
+		if (settings == null) settings = Files.writeString(out.resolve("settings.txt"), "SHADOW_QUALITY=3\n");
+		var r = converter().convert(new Converter.Request(Path.of("fake.zip"), settings, out.resolve("cache"), null,
+				(stage, done, total) -> { if (stage.equals("compile")) Thread.currentThread().interrupt(); }, true));
+		assertTrue(Thread.interrupted());
+		assertNull(r.manifest());
+		try (Stream<Path> s = Files.list(out.resolve("cache"))) {
+			assertEquals(List.of(), s.toList());
+		}
 	}
 }

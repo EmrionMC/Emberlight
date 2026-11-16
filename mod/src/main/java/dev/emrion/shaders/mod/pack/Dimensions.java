@@ -8,9 +8,7 @@ final class Dimensions {
 	private Dimensions() {}
 
 	/**
-	 * Pack folder for a dimension id: an exact {@code dimensionMap} match first, then the first glob ({@code *} = any run) in
-	 * order. Exact first because Complementary's map starts with {@code *:*} → world0, which would otherwise catch the Nether.
-	 * Null = the pack has no plan there (vanilla rendering).
+	 * Pack folder for a dimension id, or null. Exact matches first: Complementary's map starts with {@code *:*} → world0.
 	 */
 	static @Nullable String folder(Manifest m, String dimension) {
 		for (int pass = 0; pass < 2; pass++) {

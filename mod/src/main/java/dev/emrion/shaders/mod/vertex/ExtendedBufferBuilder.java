@@ -11,12 +11,7 @@ import net.minecraft.client.renderer.texture.OverlayTexture;
 import org.jspecify.annotations.Nullable;
 import org.lwjgl.system.MemoryUtil;
 
-/**
- * BufferBuilder for {@link EmrionVertexFormats#TERRAIN} / {@link EmrionVertexFormats#ENTITY} (Iris MixinBufferBuilder +
- * XHFPTerrainVertex). MC fills the vanilla elements as usual; per vertex we add mc_Entity + at_midBlock (terrain, from the
- * worker's {@link BlockContext}) or iris_Entity (entities, from {@link EntityIds}). When a polygon is complete (on the next
- * vertex or {@link #build}) its face normal, tangent and mid UV are computed and written into all its vertices.
- */
+/** BufferBuilder for the extended formats (Iris MixinBufferBuilder): adds ids per vertex, and normal, tangent and mid UV per finished polygon. */
 public final class ExtendedBufferBuilder extends BufferBuilder {
 	private final int stride, uv, normal, mid, tangent, extra, midBlock;
 	private final @Nullable BlockContext block;
@@ -58,7 +53,9 @@ public final class ExtendedBufferBuilder extends BufferBuilder {
 			MemoryUtil.memPutShort(m + 4, Float.floatToFloat16(QuadMath.midBlock(b.z, z)));
 			MemoryUtil.memPutShort(m + 6, Float.floatToFloat16(b.emission));
 		} else {
-			MemoryUtil.memPutLong(v + extra, EntityIds.packed());
+			// w = object motion slot (0 while untracked) | local player flag
+			MemoryUtil.memPutLong(v + extra, EntityIds.packed()
+					| (long) (dev.emrion.shaders.mod.upscale.ObjectMotion.w | (EntityIds.localPlayer ? EntityIds.LOCAL_PLAYER_W : 0)) << 48);
 		}
 		if (polygon == 0) {
 			MemoryUtil.memPutLong(v + mid, 0L);

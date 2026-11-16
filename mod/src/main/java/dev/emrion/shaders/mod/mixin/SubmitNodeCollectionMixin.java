@@ -19,9 +19,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.ModifyVariable;
 
 /**
- * Why: MC batches block-entity and entity models together, but Iris draws block entities with gbuffers_block (BLOCK_ENTITIES
- * phase); block-entity submits get their own render type copies so they batch apart (see PreparedRenderTypeMixin). Name tags
- * are submitted here too, so their entity id is set here.
+ * Why: Iris draws block entities with gbuffers_block, so block-entity submits get their own render types and batch apart.
  */
 @Mixin(SubmitNodeCollection.class)
 public class SubmitNodeCollectionMixin {

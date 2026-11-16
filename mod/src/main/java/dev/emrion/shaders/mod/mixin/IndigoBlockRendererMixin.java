@@ -18,10 +18,8 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Why: Fabric API's Indigo (FRAPI) meshes every chunk block (it redirects SectionCompiler's tesselateBlock), but under Iris
- * Sodium does: Sodium's smooth lighting ({@link SmoothLight}) and, with {@code separateAo=true}, AO × shade in the vertex
- * alpha instead of baked into rgb (Sodium's XHFPTerrainVertex under Iris). Smooth-lit chunk quads only; flat quads keep
- * Indigo's lighting (their shade is 1 with {@code oldLighting=false}).
+ * Why: under Iris, Sodium meshes chunk blocks with its smooth lighting and, with {@code separateAo}, AO in the vertex alpha.
+ * We do the same for Indigo's smooth-lit quads; flat quads keep Indigo's lighting.
  */
 @Mixin(value = AltModelBlockRendererImpl.class, remap = false)
 public class IndigoBlockRendererMixin {

@@ -19,9 +19,8 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Why: under Iris, Sodium meshes fluids: water gets smooth lighting (AO and blended light per vertex), every fluid face a fixed
- * brightness (sides 0.8 / 0.6, top and bottom 1) instead of MC's cardinal shading, and with {@code separateAo=true} that
- * brightness goes into the vertex alpha with the plain tint in rgb (DefaultFluidRenderer + XHFPTerrainVertex). Chunk meshes only.
+ * Why: under Iris, Sodium meshes fluids with smooth lighting and fixed face brightness (in the vertex alpha with
+ * {@code separateAo}); we match that for chunk meshes.
  */
 @Mixin(FluidRenderer.class)
 public class FluidRendererMixin {

@@ -26,20 +26,11 @@ import org.lwjgl.vulkan.VkSparseImageOpaqueMemoryBindInfo;
 import org.lwjgl.vulkan.VkSparseMemoryBind;
 
 /**
- * Large texture atlases (MC's and the PBR copies) as sparse, aliased images: a 64 KiB tile gets its own memory only if a
- * sprite rectangle (with padding, plus one texel) touches it at that mip level; every other tile is bound to one shared
- * page. Lossless by construction: MC writes atlases only inside sprite rectangles (sprite blits) or uniformly (the PBR
- * default-value clear, which also fills the shared page), so every texel holds the same value as in a plain image; the
- * texels outside all sprites were never written in a plain base atlas either.
- *
- * <p>TextureAtlas.upload HEAD calls {@link #expect}; the next VulkanGpuTexture of that size on the render thread is created here
- * instead of by VMA ({@link #create}); its destroy frees the memory ({@link #destroyed}). Any failure falls back to a plain image.
+ * Large atlases as sparse images: only tiles touched by a sprite get memory, the rest share one page. Lossless, since MC writes only inside sprites.
+ * Any failure falls back to a plain image.
  */
 public final class SparseAtlas {
-	/**
-	 * Opt-in (-Demrion.perf.sparseAtlases=true): enabling sparseBinding on the device alone costs about 10 % GPU time on
-	 * NVIDIA (615.78, RTX 4070 Ti), even with no sparse image; at 256x the VRAM saved does not win that back (BENCHMARK.md M5b).
-	 */
+	/** Opt-in: just enabling sparseBinding costs about 10 % GPU time on NVIDIA, more than the VRAM saving wins back. */
 	public static final boolean ENABLED = Boolean.getBoolean("emrion.perf.sparseAtlases");
 	/** Smaller atlases stay plain (vanilla atlases are at most 4096² at 16x): nothing worth saving. */
 	private static final long MIN_TEXELS = 4096L * 4096;
@@ -70,10 +61,7 @@ public final class SparseAtlas {
 		pending = null;
 	}
 
-	/**
-	 * Creates the image of an expected atlas as a sparse image and binds its memory; returns 0 (and leaves
-	 * {@code info} unchanged) if this image is not the expected atlas or sparse residency is unavailable.
-	 */
+	/** Creates the expected atlas as a sparse image; 0 if this is not it or sparse residency is unavailable. */
 	public static long create(VulkanDevice device, VkImageCreateInfo info) {
 		Pending p = pending;
 		if (p == null || info.imageType() != VK_IMAGE_TYPE_2D || info.extent().width() != p.width || info.extent().height() != p.height

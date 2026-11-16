@@ -9,7 +9,7 @@ import java.util.Map;
 import java.util.SequencedMap;
 
 /**
- * dimension.properties (iris-spec §1.5). Iris matches dimension ids exactly: "*" becomes the wildcard "*:*" (and also
+ * dimension.properties. Iris matches dimension ids exactly: "*" becomes the wildcard "*:*" (and also
  * "minecraft:*", as Iris adds both), every other token is a namespaced id ("the_nether" → "minecraft:the_nether");
  * patterns like "*nether*" or quoted names are kept verbatim as ids and never match in Iris. A repeated id keeps
  * the last folder.

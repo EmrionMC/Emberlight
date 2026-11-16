@@ -4,11 +4,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Per-stage source directives (iris-spec §3.2-3.4). Producer: agent (a) DirectiveParser.
- * drawBuffers: from the last DRAWBUFFERS/RENDERTARGETS comment, null if none (Iris default then applies).
- * consts: every "const <type> <name> = <literal>;" Iris understands (shadowMapResolution, colortex5Format, colortex0MipmapEnabled, ...),
- * value as written (e.g. "RGBA16F", "2048", "true"). Last occurrence wins.
- * localSize / workGroups / workGroupsRender: compute only, else null.
+ * Per-stage source directives. drawBuffers: last DRAWBUFFERS/RENDERTARGETS, null = Iris default. consts: every const Iris
+ * understands, value as written, last wins. Compute sizes are null for other stages.
  */
 public record Directives(
 		List<Integer> drawBuffers,

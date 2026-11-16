@@ -16,11 +16,8 @@ import org.lwjgl.vulkan.VK13;
 import org.lwjgl.vulkan.VkCommandBuffer;
 
 /**
- * Frame profiler (M5): GPU timestamps around every pass of the frame (ours and MC's work between them) plus a render-thread
- * CPU breakdown (our uniform update and raw-pass recording, the shadow pass's draw recording, the time blocked on the GPU,
- * the rest = MC). Shown by the F7 overlay ({@link #lines}), logged every few seconds with {@code -Demrion.debug.timings=true}
- * and over the benchmark window by the autotest. Off (no timestamps, no clock reads) unless one of those wants it.
- * Timestamps are read back {@link #LAG} frames later without waiting; nothing allocates per frame.
+ * GPU timestamps around every pass plus a render-thread CPU breakdown, for the F7 overlay, timing logs and the autotest.
+ * Off unless one of those wants it; timestamps are read {@link #LAG} frames later without waiting.
  */
 public final class Profiler {
 	private static final boolean LOG = Boolean.getBoolean("emrion.debug.timings");
@@ -83,6 +80,7 @@ public final class Profiler {
 	// ---- frame boundaries (GameRenderer.render HEAD / TAIL) --------------------------------------------------------------
 
 	public static void frameStart() {
+		TerrainStats.frame();
 		long now = System.nanoTime();
 		if (frameActive) { // close the previous frame's CPU accounting
 			accFrameNs += now - lastFrameStart;
@@ -153,15 +151,17 @@ public final class Profiler {
 				VK10.VK_QUERY_RESULT_64_BIT | VK10.VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
 		if (r != VK10.VK_SUCCESS && r != VK10.VK_NOT_READY) return;
 		for (int i = 0; i < n; i++) if (results.get(2 * i + 1) == 0) return; // not available: skip this frame
-		boolean same = accMarks == n;
-		for (int i = 1; same && i < n; i++) same = labels[s][i].equals(accLabels[i]);
-		if (!same) { // the pass sequence changed: start over
-			resetAcc();
-			accMarks = n;
-			System.arraycopy(labels[s], 0, accLabels, 0, n);
-		}
 		long t0 = results.get(0);
-		for (int i = 1; i < n; i++) accGpu[i] += (results.get(2 * i) - results.get(2 * i - 2)) * nsPerTick;
+		for (int i = 1; i < n; i++) { // by label: a pass that runs only on some frames (e.g. BLAS builds) keeps the window going
+			int k = 1;
+			while (k < accMarks && !labels[s][i].equals(accLabels[k])) k++;
+			if (k == accMarks) {
+				if (accMarks == MAX_MARKS) continue;
+				accLabels[accMarks] = labels[s][i];
+				accGpu[accMarks++] = 0;
+			}
+			accGpu[k] += (results.get(2 * i) - results.get(2 * i - 2)) * nsPerTick;
+		}
 		accGpuTotal += (results.get(2 * (n - 1)) - t0) * nsPerTick;
 		accGpuFrames++;
 	}
@@ -171,6 +171,7 @@ public final class Profiler {
 		java.util.Arrays.fill(accCpu, 0);
 		accGpuTotal = accFrameNs = 0;
 		accGpuFrames = accFrames = 0;
+		accMarks = 1;
 	}
 
 	// ---- output ----------------------------------------------------------------------------------------------------------
@@ -199,6 +200,10 @@ public final class Profiler {
 		double frame = accFrameNs / accFrames / 1e6, gpu = accGpuTotal / accGpuFrames / 1e6;
 		double ours = 0;
 		for (int i = 0; i < CPU_SECTIONS; i++) ours += accCpu[i];
+		int shown = dev.emrion.shaders.mod.framegen.Presenter.running() ? dev.emrion.shaders.mod.framegen.Presenter.presentedFps : 0;
+		if (shown > 0) out.add(String.format("frame generation: %d FPS shown, %.0f rendered", shown, 1000 / frame));
+		String reflex = dev.emrion.shaders.mod.framegen.Reflex.overlayLine();
+		if (reflex != null) out.add(reflex);
 		out.add(String.format("frame %.2f ms (%.0f FPS)  GPU %.2f ms  -> %s", frame, 1000 / frame, gpu,
 				accCpu[WAIT] / accFrames / 1e6 > 0.5 ? "GPU-bound" : "CPU-bound"));
 		out.add("CPU (render thread, ms/frame):");

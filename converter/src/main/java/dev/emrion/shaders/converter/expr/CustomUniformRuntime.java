@@ -12,11 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.OptionalInt;
 
-/**
- * Evaluates the custom uniforms/variables of a manifest once per frame, like Iris' CustomUniforms.update() in
- * beginLevelRendering. The ASTs are compiled once into a node tree, so {@link #update} does not allocate.
- * Not thread-safe; call update from the render thread, then read values by index or name.
- */
+/** Evaluates custom uniforms once per frame like Iris's CustomUniforms.update(); allocation-free. Render thread only. */
 public final class CustomUniformRuntime {
 	/** Holds the current value of a built-in or custom; doubles as the node that reads it. */
 	private static final class Slot extends Node {

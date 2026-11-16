@@ -13,7 +13,7 @@ import org.spongepowered.asm.mixin.injection.ModifyArg;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
- * Why: records whether MC enabled the optional "Emrion RT" set, and only then lets VMA add VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT
+ * Why: records whether MC enabled the optional "Emberlight RT" set, and only then lets VMA add VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT
  * (vkGetBufferDeviceAddress on a buffer is invalid without it). MC creates VMA with no flags.
  */
 @Mixin(VulkanBackend.class)
@@ -21,6 +21,12 @@ public class VulkanBackendRtMixin {
 	@Inject(method = "createDevice(Lcom/mojang/renderpearl/backend/vulkan/init/FeatureSet;Lcom/mojang/renderpearl/backend/vulkan/VulkanPhysicalDevice;)Lorg/lwjgl/vulkan/VkDevice;", at = @At("HEAD"))
 	private static void emrion$rtEnabled(FeatureSet featureSet, VulkanPhysicalDevice physicalDevice, CallbackInfoReturnable<?> cir) {
 		RtCapability.enabled = RtCapability.REQUESTED && featureSet.contains(RtCapability.FEATURE_SET);
+		dev.emrion.shaders.mod.rt.RtOmm.supported = RtCapability.enabled && featureSet.contains(dev.emrion.shaders.mod.rt.RtOmm.FEATURE_SET);
+		dev.emrion.shaders.mod.debug.PipelineStats.active = featureSet.contains(dev.emrion.shaders.mod.debug.PipelineStats.FEATURE_SET);
+		dev.emrion.shaders.mod.framegen.Reflex.supported = featureSet.contains(dev.emrion.shaders.mod.framegen.Reflex.FEATURE_SET);
+		dev.emrion.shaders.mod.hdr.Hdr.metadataSupported = featureSet.contains(dev.emrion.shaders.mod.hdr.Hdr.FEATURE_SET);
+		dev.emrion.shaders.mod.upscale.Dlss.enabledOnDevice = featureSet.extensions().contains("VK_NVX_image_view_handle");
+		dev.emrion.shaders.mod.upscale.Xess.enabledOnDevice = featureSet.contains(dev.emrion.shaders.mod.upscale.Xess.FEATURE_SET);
 	}
 
 	@ModifyArg(method = "createVma", at = @At(value = "INVOKE", target = "Lorg/lwjgl/util/vma/Vma;vmaCreateAllocator(Lorg/lwjgl/util/vma/VmaAllocatorCreateInfo;Lorg/lwjgl/PointerBuffer;)I"), index = 0)

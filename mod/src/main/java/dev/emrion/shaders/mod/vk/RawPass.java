@@ -51,6 +51,23 @@ public final class RawPass {
 		}
 	}
 
+	/** Resumes rendering into {@code colorViews} and {@code depthView} (load and store), keeping the current viewport and scissor. */
+	public static void resume(VkCommandBuffer cb, int width, int height, long depthView, long... colorViews) {
+		try (MemoryStack stack = MemoryStack.stackPush()) {
+			var atts = VkRenderingAttachmentInfo.calloc(colorViews.length, stack);
+			for (long v : colorViews) {
+				atts.get().sType$Default().imageView(v).imageLayout(VK_IMAGE_LAYOUT_GENERAL)
+						.loadOp(VK_ATTACHMENT_LOAD_OP_LOAD).storeOp(VK_ATTACHMENT_STORE_OP_STORE);
+			}
+			atts.flip();
+			var depth = VkRenderingAttachmentInfo.calloc(stack).sType$Default().imageView(depthView).imageLayout(VK_IMAGE_LAYOUT_GENERAL)
+					.loadOp(VK_ATTACHMENT_LOAD_OP_LOAD).storeOp(VK_ATTACHMENT_STORE_OP_STORE);
+			var info = VkRenderingInfo.calloc(stack).sType$Default().layerCount(1).pColorAttachments(atts).pDepthAttachment(depth);
+			info.renderArea().extent().set(width, height);
+			KHRDynamicRendering.vkCmdBeginRenderingKHR(cb, info);
+		}
+	}
+
 	public static void end(VkCommandBuffer cb) {
 		KHRDynamicRendering.vkCmdEndRenderingKHR(cb);
 	}

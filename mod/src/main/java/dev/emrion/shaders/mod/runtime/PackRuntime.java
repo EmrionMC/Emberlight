@@ -29,6 +29,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import net.minecraft.client.Minecraft;
@@ -39,9 +40,8 @@ import org.lwjgl.vulkan.VkBufferImageCopy;
 import org.lwjgl.vulkan.VkSamplerCreateInfo;
 
 /**
- * GPU state of one pack dimension at one window size (ARCHITECTURE §5.3/§5.4): targets, custom textures, samplers and one
- * pre-built set-1 descriptor set per flip state. Created on the render thread from the background-built {@link PackPipelines};
- * {@link FrameExecutor} runs the plan on it. A window resize builds a new PackRuntime from the same pipelines.
+ * GPU state of one pack dimension at one window size: targets, custom textures, samplers and one pre-built set-1 descriptor
+ * set per flip state. A window resize builds a new PackRuntime from the same {@link PackPipelines}.
  */
 public final class PackRuntime {
 	private static final Pattern COLORTEX = Pattern.compile("colortex(\\d+)");
@@ -62,6 +62,16 @@ public final class PackRuntime {
 		GpuFormat format;
 		int vkFormat, width, height, depth, mips;
 		boolean isDepth;
+		/** Single-level views for mip generation, made on first use. */
+		GpuTextureView[] levelViews;
+
+		/** A view of mip {@code level} only (null for raw images). */
+		long levelView(int level) {
+			if (tex == null) return 0;
+			if (levelViews == null) levelViews = new GpuTextureView[mips];
+			if (levelViews[level] == null) levelViews[level] = RenderSystem.getDevice().createTextureView(tex, level, 1);
+			return ((VulkanGpuTextureView) levelViews[level]).vkImageView();
+		}
 
 		Img(String label, Manifest.Target target) {
 			super(label);
@@ -83,8 +93,24 @@ public final class PackRuntime {
 	final Manifest manifest;
 	final Manifest.Dimension dim;
 	final UniformSystem uniforms;
-	public final int width, height;
+	/** Render size (= display size unless an upscaler runs) and the window size final draws at. */
+	public final int width, height, displayWidth, displayHeight;
 	UboRing ring;
+	/** The upscaler before final, its colour input and output, and final's descriptor set reading the output; null when off. */
+	dev.emrion.shaders.mod.upscale.Upscaler upscaler;
+	Img upscaleInput, upscaled;
+	long finalSet;
+	/** Reactive and transparency/composition masks for the upscaler (views, 0 = none), see {@link #initMasks}. */
+	Img masks;
+	long compositionMask;
+	/** {@link #masks} and its view after the next {@link #swapFlippedTargets} (the same if colortex2 is not swapped). */
+	private Img otherMasks;
+	private long otherCompositionMask;
+	/** DLSS Ray Reconstruction: final's flip state, to look up Complementary's normal and smoothness targets (null: from depth only). */
+	Manifest.FlipState rrFlip;
+	private final Map<String, Img> setOverride = new HashMap<>();
+	/** {@link dev.emrion.shaders.mod.upscale.Upscaling#generation()} this runtime was built for; a settings change rebuilds it. */
+	public final int upscaleGeneration = dev.emrion.shaders.mod.upscale.Upscaling.generation();
 
 	final Map<String, Img[]> images = new HashMap<>();
 	final Map<String, Buf> buffers = new HashMap<>();
@@ -94,9 +120,11 @@ public final class PackRuntime {
 	private final List<GpuTextureView> ownedViews = new ArrayList<>();
 	private final List<RawImage> rawTextures = new ArrayList<>();
 	private Img dummy;
-	/** FORMAT builtin resources. */
+	/** Builtin resources. */
 	private final Map<String, Img> builtins = new HashMap<>();
 	private DescriptorPool pool;
+	/** RT AO pass (RT variants with the "ao" effect only), run before the pass that samples its output. */
+	@org.jspecify.annotations.Nullable RtAoPass rtAo;
 	/** {@link PbrAtlases#generation()} of the bound atlas views; the runtime must be rebuilt when it changes. */
 	public final int atlasGeneration = PbrAtlases.generation();
 	/** flip state id → descriptor set. */
@@ -106,7 +134,7 @@ public final class PackRuntime {
 	String[] bindingKind;
 
 	public PackRuntime(VulkanContext ctx, PackPipelines pipelines, Path cacheDir, Manifest manifest, Manifest.Dimension dim,
-			UniformSystem uniforms, int width, int height) {
+			UniformSystem uniforms, int width, int height, int displayWidth, int displayHeight) {
 		this.ctx = ctx;
 		this.pipelines = pipelines;
 		this.manifest = manifest;
@@ -114,6 +142,8 @@ public final class PackRuntime {
 		this.uniforms = uniforms;
 		this.width = width;
 		this.height = height;
+		this.displayWidth = displayWidth;
+		this.displayHeight = displayHeight;
 		try {
 			init(cacheDir);
 		} catch (RuntimeException | Error failed) { // e.g. out of GPU memory half-way: release what was allocated
@@ -124,7 +154,10 @@ public final class PackRuntime {
 
 	private void init(Path cacheDir) {
 		long align = ctx.limits().minUniformBufferOffsetAlignment();
-		ring = new UboRing(ctx, manifest.uniforms().size() + FrameExecutor.PHASE_BLOCKS * (manifest.uniforms().phase().size() + align) + align);
+		boolean upscale = dev.emrion.shaders.mod.upscale.Upscaling.active();
+		// + final's own frame block (window-size viewWidth/viewHeight) while upscaling
+		ring = new UboRing(ctx, manifest.uniforms().size() + FrameExecutor.PHASE_BLOCKS * (manifest.uniforms().phase().size() + align) + align
+				+ (upscale ? manifest.uniforms().size() + align : 0));
 
 		java.util.Set<String> storage = new java.util.HashSet<>();
 		for (var r : dim.resources()) if (r.kind().equals("storage_image")) storage.add(r.target());
@@ -135,6 +168,16 @@ public final class PackRuntime {
 		var atlas = PbrAtlases.blockAtlas();
 		builtins.put("block_atlas", atlas != null ? view("block atlas", atlas) : dummy);
 		builtins.put("white_depth", whiteDepth());
+		if (dim.resources().stream().anyMatch(r -> RtAoPass.BUILTIN.equals(r.builtin()))) {
+			rtAo = new RtAoPass(ctx, width, height);
+			builtins.put(RtAoPass.BUILTIN, rtAo.output);
+		}
+		long entityAtlas = RtScene.get() == null ? 0 : RtScene.get().entityAtlasView(); // RT entities (RtEntities), else unbound -> white
+		if (entityAtlas != 0) {
+			Img img = new Img("emrion rt entity atlas", null);
+			img.sampled = entityAtlas;
+			builtins.put("emrion_rt_entity_atlas", img);
+		}
 		for (var tex : manifest.textures()) textures.put(tex.name(), loadTexture(cacheDir, tex));
 
 		int maxBinding = dim.resources().stream().mapToInt(Manifest.Resource::binding).max().orElse(0);
@@ -153,8 +196,183 @@ public final class PackRuntime {
 			sizes[8] = org.lwjgl.vulkan.KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
 			sizes[9] = as * n;
 		}
-		pool = new DescriptorPool(ctx, n, sizes);
+		if (upscale) for (int i = 1; i < sizes.length; i += 2) sizes[i] += sizes[i] / n; // final's extra set
+		java.util.function.Function<String, byte[]> fragment = prog -> spv(cacheDir, dim.programs().get(prog).stages().fragment());
+		// not proven to write every pixel: the fragment stage may discard, or the vertex stage moves the quad (bloom tiles)
+		Map<String, Boolean> partial = new HashMap<>();
+		java.util.function.Predicate<String> discards = prog -> partial.computeIfAbsent(prog, q -> FlipSwap.discards(fragment.apply(q))
+				|| !FullscreenCoverage.covers(spv(cacheDir, fullscreenVertex(dim.programs().get(q)))));
+		skipped = IDENTITY_SKIP ? IdentityCopies.skippable(dim, fragment, discards) : Set.of();
+		if (!skipped.isEmpty()) dev.emrion.shaders.mod.EmrionShadersClient.LOG.info("Skipping identity copy passes {}",
+				skipped.stream().map(i -> dim.frame().get(i).program()).toList());
+		skip = new boolean[dim.frame().size()];
+		for (int i : skipped) skip[i] = true;
+		var kept = new ArrayList<Manifest.Command>();
+		for (int i = 0; i < dim.frame().size(); i++) if (!skipped.contains(i)) kept.add(dim.frame().get(i));
+		var withoutSkipped = new Manifest.Dimension(dim.programs(), dim.resources(), dim.targets(), dim.flipStates(), kept, dim.once(), dim.shadow());
+		swapped = FLIP_SWAP ? FlipSwap.swappable(withoutSkipped, discards, upscale ? cutTarget(dim) : null) : Set.of();
+		int parities = swapped.isEmpty() ? 1 : 2; // one set of descriptor sets per image assignment
+		for (int i = 1; i < sizes.length; i += 2) sizes[i] *= parities;
+		pool = new DescriptorPool(ctx, (upscale ? n + 1 : n) * parities, sizes);
 		for (var fs : dim.flipStates()) sets[fs.id()] = buildSet(fs);
+		if (upscale) initUpscaler();
+		if (!swapped.isEmpty()) {
+			long[] sets0 = sets;
+			Hazards.Tracked[][] res0 = bindingResource;
+			long final0 = finalSet;
+			swapSides();
+			sets = new long[sets0.length];
+			bindingResource = new Hazards.Tracked[res0.length][res0[0].length];
+			for (var fs : dim.flipStates()) sets[fs.id()] = buildSet(fs);
+			if (upscaler != null) finalSet = buildFinalSet();
+			otherSets = sets;
+			otherResources = bindingResource;
+			otherFinalSet = finalSet;
+			swapSides();
+			sets = sets0;
+			bindingResource = res0;
+			finalSet = final0;
+			dev.emrion.shaders.mod.EmrionShadersClient.LOG.info("End-of-frame copies replaced by image swaps: {}", swapped);
+		}
+	}
+
+	/** -Demrion.perf.flipSwap=false: keep Iris's end-of-frame alt → main copies instead of swapping (A/B switch). */
+	private static final boolean FLIP_SWAP = !"false".equals(System.getProperty("emrion.perf.flipSwap"));
+	/** -Demrion.perf.identitySkip=false: run fullscreen passes that copy a colortex to alt and straight back (A/B switch). */
+	private static final boolean IDENTITY_SKIP = !"false".equals(System.getProperty("emrion.perf.identitySkip"));
+	/** Frame command indices not run ({@link IdentityCopies}). */
+	private Set<Integer> skipped = Set.of();
+	/** Per frame command: not run. */
+	boolean[] skip = new boolean[0];
+	/** Targets whose end-of-frame copy is a swap of their two images ({@link FlipSwap}). */
+	Set<String> swapped = Set.of();
+	private long[] otherSets;
+	private Hazards.Tracked[][] otherResources;
+	private long otherFinalSet;
+
+	private static byte[] spv(Path cacheDir, Manifest.SpvRef ref) {
+		if (ref == null || ref.spv() == null) return new byte[0];
+		try {
+			return Files.readAllBytes(cacheDir.resolve(ref.spv()));
+		} catch (java.io.IOException e) {
+			throw new java.io.UncheckedIOException(e);
+		}
+	}
+
+	private static Manifest.SpvRef fullscreenVertex(Manifest.Program p) {
+		var v = p.stages().vertex();
+		return new Manifest.SpvRef(v == null ? null : v.variants().get("fullscreen"));
+	}
+
+	private void swapSides() {
+		for (String t : swapped) {
+			Img[] s = images.get(t);
+			Img main = s[0];
+			s[0] = s[1];
+			s[1] = main;
+		}
+	}
+
+	/** End of frame, instead of the alt → main copies: the alt images become main (and the other way round). */
+	void swapFlippedTargets() {
+		if (swapped.isEmpty()) return;
+		swapSides();
+		long[] s = sets;
+		sets = otherSets;
+		otherSets = s;
+		Hazards.Tracked[][] r = bindingResource;
+		bindingResource = otherResources;
+		otherResources = r;
+		long f = finalSet;
+		finalSet = otherFinalSet;
+		otherFinalSet = f;
+		Img m = masks;
+		masks = otherMasks;
+		otherMasks = m;
+		long cm = compositionMask;
+		compositionMask = otherCompositionMask;
+		otherCompositionMask = cm;
+	}
+
+	/** The cut target, the upscaler and final's set that samples its output instead of the target. */
+	private void initUpscaler() {
+		Manifest.Command fin = dim.frame().stream().filter(c -> c.cmd().equals("final")).findFirst().orElse(null);
+		if (fin == null) return;
+		var flip = flipState(fin.flipState());
+		String target = cutTarget(dim, fin);
+		upscaleInput = read(target, flip);
+		if (upscaleInput == null) throw new IllegalStateException("upscaling: no " + target + " to upscale");
+		upscaler = dev.emrion.shaders.mod.upscale.Upscaler.create(ctx, width, height, displayWidth, displayHeight);
+		dev.emrion.shaders.mod.EmrionShadersClient.LOG.info("Upscaling {} {}x{} -> {}x{} (input {})", upscaler.getClass().getSimpleName() + (upscaler.rayReconstruction() ? " (Ray Reconstruction)" : ""), width, height, displayWidth, displayHeight, target);
+		upscaled = new Img("emrion upscaled", null);
+		upscaled.image = upscaler.output.image;
+		upscaled.sampled = upscaled.attach = upscaler.output.view;
+		upscaled.width = displayWidth;
+		upscaled.height = displayHeight;
+		upscaled.vkFormat = upscaler.output.format;
+		finalSet = buildFinalSet();
+		initMasks(flip);
+		// Complementary (its upscale patch ran): colortex4 world normal, colortex6.r smoothness
+		if (upscaler.rayReconstruction() && masks != null && read("colortex4", flip) != null && read("colortex6", flip) != null) rrFlip = flip;
+	}
+
+	/**
+	 * docs/UPSCALING.md §2: the Complementary upscale patch writes the masks into the pack's TAA history target (colortex2: r =
+	 * reactive, g = transparency/composition) in place of its TAA; the g channel gets its own swizzled view.
+	 */
+	private void initMasks(Manifest.FlipState flip) {
+		var rt = manifest.rt();
+		String folder = manifest.dimensions().entrySet().stream().filter(e -> e.getValue() == dim).map(java.util.Map.Entry::getKey).findFirst().orElse("");
+		if (rt == null || !rt.patched().getOrDefault("upscale", List.of()).contains(folder + "/composite6.fsh")) return;
+		Img masks = read("colortex2", flip);
+		if (masks == null) return;
+		this.masks = otherMasks = masks;
+		compositionMask = otherCompositionMask = compositionView(masks);
+		if (swapped.contains("colortex2")) { // composite6 writes the other physical image every other frame
+			swapSides();
+			otherMasks = read("colortex2", flip);
+			swapSides();
+			otherCompositionMask = compositionView(otherMasks);
+		}
+		dev.emrion.shaders.mod.EmrionShadersClient.LOG.info("Upscaling masks from colortex2 (reactive r, transparency/composition g)");
+	}
+
+	private long compositionView(Img masks) {
+		try (org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
+			var info = org.lwjgl.vulkan.VkImageViewCreateInfo.calloc(stack).sType$Default().image(masks.image).viewType(VK_IMAGE_VIEW_TYPE_2D).format(masks.vkFormat);
+			info.components().r(VK_COMPONENT_SWIZZLE_G).g(VK_COMPONENT_SWIZZLE_G).b(VK_COMPONENT_SWIZZLE_G).a(VK_COMPONENT_SWIZZLE_G);
+			info.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).levelCount(1).layerCount(1);
+			var p = stack.mallocLong(1);
+			if (vkCreateImageView(ctx.vk, info, null, p) != VK_SUCCESS) throw new IllegalStateException("vkCreateImageView composition mask");
+			return p.get(0);
+		}
+	}
+
+	private long buildFinalSet() {
+		Manifest.Command fin = dim.frame().stream().filter(c -> c.cmd().equals("final")).findFirst().orElseThrow();
+		setOverride.put(cutTarget(dim, fin), upscaled);
+		long set = buildSet(flipState(fin.flipState()));
+		setOverride.clear();
+		return set;
+	}
+
+	private static String cutTarget(Manifest.Dimension dim) {
+		Manifest.Command fin = dim.frame().stream().filter(c -> c.cmd().equals("final")).findFirst().orElse(null);
+		return fin == null ? null : cutTarget(dim, fin);
+	}
+
+	/** The target final samples that the last pass before it wrote (Complementary: colortex3); colortex0 without a final program. */
+	static String cutTarget(Manifest.Dimension dim, Manifest.Command fin) {
+		if (fin.program() == null) return "colortex0";
+		java.util.Set<String> reads = new java.util.HashSet<>();
+		java.util.Set<Integer> bindings = new java.util.HashSet<>(dim.programs().get(fin.program()).set1());
+		for (var r : dim.resources()) if (r.target() != null && "sampled_image".equals(r.kind()) && bindings.contains(r.binding())) reads.add(r.target());
+		for (int i = dim.frame().indexOf(fin) - 1; i >= 0; i--) {
+			var c = dim.frame().get(i);
+			if (c.writes() == null) continue;
+			for (var w : c.writes()) if (reads.contains(w.target())) return w.target();
+		}
+		return "colortex0";
 	}
 
 	private int count(String kind) {
@@ -185,6 +403,7 @@ public final class PackRuntime {
 		for (int side = 0; side < (t.hasAlt() ? 2 : 1); side++) {
 			String label = "emrion " + t.name() + (side == 1 ? " alt" : "");
 			Img img = new Img(label, t);
+			sides[side] = img; // before allocating, so a failure releases what was created
 			img.format = Formats.gpu(t.format());
 			img.vkFormat = VulkanConst.toVk(img.format);
 			img.width = s[0];
@@ -207,7 +426,6 @@ public final class PackRuntime {
 				img.sampled = ((VulkanGpuTextureView) img.sampleView).vkImageView();
 				img.attach = ((VulkanGpuTextureView) img.attachView).vkImageView();
 			}
-			sides[side] = img;
 		}
 	}
 
@@ -218,7 +436,7 @@ public final class PackRuntime {
 		return "alt".equals(side) && s[1] != null ? s[1] : s[0];
 	}
 
-	/** The side a pass in {@code flip} reads (FORMAT §7.2): alt for colortex (shadowcolor) in the flip state's alt (shadowAlt) list. */
+	/** The side a pass in {@code flip} reads: alt for colortex (shadowcolor) in the flip state's alt (shadowAlt) list. */
 	Img read(String target, Manifest.FlipState flip) {
 		Matcher m = COLORTEX.matcher(target), s = SHADOWCOLOR.matcher(target);
 		boolean alt = m.matches() && flip.alt().contains(Integer.parseInt(m.group(1)))
@@ -227,6 +445,10 @@ public final class PackRuntime {
 	}
 
 	/** 1×1 white RGBA8 view (unbound albedo). */
+	long atlasView() {
+		return builtins.get("block_atlas").sampled;
+	}
+
 	long whiteView() {
 		return dummy.sampled;
 	}
@@ -247,7 +469,7 @@ public final class PackRuntime {
 		} catch (IOException e) {
 			throw new IllegalStateException("custom texture " + t.name() + ": " + e.getMessage(), e);
 		}
-		return dummy; // shortcut: other MC resources resolve in M3 with the geometry passes; composites do not use them
+		return dummy; // shortcut: other emrion: resources are not resolved; add them if a pack samples one
 	}
 
 	/** A raw texture (2D or 3D): the converter already packed the file as texels of {@code t.format()}. */
@@ -348,6 +570,10 @@ public final class PackRuntime {
 						Descriptors.writeBuffer(ctx, set, r.binding(), VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, RtScene.get().sectionTable().handle, 0, VK_WHOLE_SIZE);
 						continue;
 					}
+					if ("emrion_rt_lights".equals(r.builtin())) { // RT block-light grid, copied in by RtScene at levelStart
+						Descriptors.writeBuffer(ctx, set, r.binding(), VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, RtScene.get().lightBuffer().handle, 0, VK_WHOLE_SIZE);
+						continue;
+					}
 					Buf b = buffers.get(r.target());
 					if (b == null) continue;
 					res[r.binding()] = b;
@@ -361,10 +587,10 @@ public final class PackRuntime {
 					Descriptors.writeImage(ctx, set, r.binding(), VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, img.attach, VK_NULL_HANDLE);
 				}
 				case "sampled_image" -> {
-					Img img = r.target() != null ? read(r.target(), flip) : r.texture() != null ? textures.getOrDefault(r.texture(), dummy)
+					Img img = r.target() != null ? setOverride.getOrDefault(r.target(), read(r.target(), flip)) : r.texture() != null ? textures.getOrDefault(r.texture(), dummy)
 							: builtins.getOrDefault(r.builtin(), dummy);
 					if (img == null) img = dummy;
-					if (img.target != null) res[r.binding()] = img;
+					if (img.target != null || rtAo != null && img == rtAo.output) res[r.binding()] = img;
 					Manifest.SamplerDef def = r.sampler();
 					if (def == null && "block_atlas".equals(r.builtin())) def = ATLAS_SAMPLER;
 					if (def == null) {
@@ -423,6 +649,11 @@ public final class PackRuntime {
 	public void destroyLater() {
 		if (pool != null) pool.destroyLater();
 		if (ring != null) ring.destroyLater();
+		if (rtAo != null) rtAo.destroyLater();
+		if (upscaler != null) upscaler.destroyLater();
+		long cm = compositionMask, ocm = otherCompositionMask;
+		if (cm != 0) ctx.destroyLater(() -> vkDestroyImageView(ctx.vk, cm, null));
+		if (ocm != 0 && ocm != cm) ctx.destroyLater(() -> vkDestroyImageView(ctx.vk, ocm, null));
 		for (Img[] sides : images.values()) for (Img img : sides) if (img != null) release(img);
 		buffers.values().forEach(b -> b.buffer.destroyLater());
 		ownedViews.forEach(GpuTextureView::close);
@@ -434,6 +665,7 @@ public final class PackRuntime {
 
 	private static void release(Img img) {
 		if (img.raw != null) img.raw.destroyLater();
+		if (img.levelViews != null) for (var v : img.levelViews) if (v != null) v.close();
 		if (img.attachView != null && img.attachView != img.sampleView) img.attachView.close();
 		if (img.sampleView != null) img.sampleView.close();
 		if (img.tex != null) img.tex.close();

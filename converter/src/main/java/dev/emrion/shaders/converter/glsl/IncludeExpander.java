@@ -9,14 +9,17 @@ import java.util.Map;
 import java.util.function.Function;
 
 /**
- * Textual {@code #include} expansion with Iris semantics (iris-spec §3.1, Iris IncludeGraph/IncludeProcessor):
- * any line whose trimmed text starts with {@code #include} is replaced by the target file, even inside comments or
- * inactive {@code #if} blocks, and there is no include-once: a file included twice is inlined twice (packs use
- * {@code #ifndef} guards). Paths are pack paths rooted at {@code shaders/}: {@code "/lib/x.glsl"} is absolute,
- * anything else is relative to the including file's folder.
+ * Textual {@code #include} expansion as Iris does it: any line starting with {@code #include} is replaced, even in comments or
+ * inactive {@code #if} blocks, and there is no include-once. Paths are rooted at {@code shaders/}.
  */
 public final class IncludeExpander {
 	private IncludeExpander() {}
+
+	/**
+	 * Untrusted packs: an include bomb (each file including the next twice) or a deep chain fails with an error instead of
+	 * running out of memory or stack. Real packs (2026-11): at most 11 levels and ~107k lines per stage (photon).
+	 */
+	static final int MAX_DEPTH = 100, MAX_LINES = 1_000_000;
 
 	/** Include-expanded text plus, for each 1-based line, the original file (absolute pack path) and line. */
 	public record Expanded(String text, List<String> files, int[] fileOfLine, int[] lineOfLine, List<Error> errors) {
@@ -75,6 +78,8 @@ public final class IncludeExpander {
 		final List<Integer> fileIdx = new ArrayList<>();
 		final List<Integer> lineNo = new ArrayList<>();
 		final List<Error> errors = new ArrayList<>();
+		/** Lines visited, include lines and repeated files included; past MAX_LINES the expansion stops. */
+		int work;
 
 		State(Function<String, List<String>> files) {
 			this.files = files;
@@ -93,6 +98,10 @@ public final class IncludeExpander {
 			stack.push(path);
 			String dir = path.substring(0, path.lastIndexOf('/'));
 			for (int i = 0; i < lines.size(); i++) {
+				if (++work > MAX_LINES) {
+					if (work == MAX_LINES + 1) errors.add(new Error(path, i + 1, "#include expansion exceeds " + MAX_LINES + " lines (include bomb?)"));
+					break;
+				}
 				String line = lines.get(i);
 				String target;
 				try {
@@ -110,6 +119,10 @@ public final class IncludeExpander {
 				String resolved = resolve(dir, target);
 				if (stack.contains(resolved)) {
 					errors.add(new Error(path, i + 1, "#include cycle via " + resolved));
+					continue;
+				}
+				if (stack.size() >= MAX_DEPTH) {
+					errors.add(new Error(path, i + 1, "#include nested deeper than " + MAX_DEPTH + " files via " + resolved));
 					continue;
 				}
 				if (files.apply(resolved) == null) {

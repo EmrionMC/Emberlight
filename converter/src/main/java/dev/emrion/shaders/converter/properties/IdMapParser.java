@@ -10,7 +10,8 @@ import java.util.SequencedMap;
 import java.util.function.Consumer;
 
 /**
- * block/item/entity.properties (iris-spec §6.2, FORMAT.md §8) from their already-preprocessed text.
+ * block/item/entity.properties from their already-preprocessed text.
+
  *
  * <p>Iris precedence is encoded in list order so that "first matching entry wins" reproduces it:
  * all plain block entries (in key order) come before all {@code %tag} entries, because Iris assigns block states from

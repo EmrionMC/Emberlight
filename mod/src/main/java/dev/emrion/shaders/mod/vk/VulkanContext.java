@@ -56,7 +56,9 @@ public final class VulkanContext {
 
 	/** The shared, persisted VkPipelineCache (created on first use). */
 	public PipelineCacheStore pipelineCache() {
-		if (pipelineCache == null) pipelineCache = new PipelineCacheStore(this, FabricLoader.getInstance().getGameDir().resolve("emrionshaders"));
+		// -Demrion.pipelineCacheDir: one cache shared by several dev run dirs; the driver validates the data
+		String dir = System.getProperty("emrion.pipelineCacheDir");
+		if (pipelineCache == null) pipelineCache = new PipelineCacheStore(this, dir != null ? java.nio.file.Path.of(dir) : FabricLoader.getInstance().getGameDir().resolve("emberlight"));
 		return pipelineCache;
 	}
 

@@ -7,7 +7,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * Runs a .properties file through the preprocessor the way Iris does (iris-spec §4.1, Iris PropertiesPreprocessor):
+ * Runs a .properties file through the preprocessor the way Iris does:
  * lines are trimmed and blank lines dropped; a line starting with '#' survives only if it starts with a JCPP directive
  * name (prefix match, so "#iffy" counts as "#if"), otherwise it is a comment and becomes empty; every other '#' is
  * deleted; backslashes are hidden from the preprocessor so line continuations reach the properties parser.

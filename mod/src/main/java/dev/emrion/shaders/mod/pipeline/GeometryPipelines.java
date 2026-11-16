@@ -37,25 +37,16 @@ import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDescriptorImageInfo;
 import org.lwjgl.vulkan.VkWriteDescriptorSet;
 
-/**
- * Raw geometry pipelines that MC draws with unchanged (ARCHITECTURE §5.1): same vertex formats, same set-0 push
- * descriptors (binding = index in the vanilla {@code uniforms()} list), plus our descriptor set 1 and the EmrionDraw push
- * constants, both written when MC binds one of our pipelines ({@code VulkanRenderPass.setPipeline} TAIL).
- */
+/** Raw geometry pipelines MC draws with unchanged: same vertex formats and set-0 push descriptors, plus our set 1 and EmrionDraw push constants. */
 public final class GeometryPipelines {
 	private GeometryPipelines() {}
 
-	/**
-	 * Per-pipeline draw constants: the alpha-test reference, {@code blockAtlas} (unused: atlasSize now follows the bound
-	 * Sampler0, see {@link #sampler0}; shortcut: kept so the m4 branches that build Draw still merge, drop it after), and the extra
-	 * set-0 samplers (bindings {@code firstExtra + i}, kind {@code extras[i]}: 0 white albedo, 1 overlay, 2 lightmap, 3 normals
-	 * and 4 specular of the current Sampler0) that the pack may read but the vanilla pipeline does not push.
-	 */
-	public record Draw(float alphaRef, boolean blockAtlas, int firstExtra, int[] extras, boolean defaults) {}
+	/** Per-pipeline draw constants: alpha-test reference and the extra set-0 samplers the pack reads but vanilla does not push. */
+	public record Draw(float alphaRef, boolean blockAtlas, int firstExtra, int[] extras, boolean defaults, boolean sodium) {}
 
 	/** Vertex buffer slot of the constant default attributes (MC uses slots 0 and 1). */
 	public static final int DEFAULTS_BINDING = 15;
-	/** Canonical input → {VkFormat, offset} in {@link #defaultsBuffer}, formats as in EMRION_BLOCK (FORMAT §7.1). */
+	/** Canonical input → {VkFormat, offset} in {@link #defaultsBuffer}, formats as in EMRION_BLOCK. */
 	public static final Map<String, int[]> DEFAULTS = Map.of(
 			"Normal", new int[] {VK_FORMAT_R8G8B8A8_SNORM, 0}, "mc_Entity", new int[] {VK_FORMAT_R16G16_SINT, 4},
 			"mc_midTexCoord", new int[] {VK_FORMAT_R32G32_SFLOAT, 8}, "at_tangent", new int[] {VK_FORMAT_R8G8B8A8_SNORM, 16},
@@ -91,11 +82,12 @@ public final class GeometryPipelines {
 	private static VkCommandBuffer boundCb;
 	private static VulkanRenderPipeline bound;
 	private static Draw boundDraw;
-	/** EmrionDraw (FORMAT §6 pushConstants): entityColor, entityId, blockEntityId, currentRenderedItemId, alphaTestRef, atlasSize. */
+	/** EmrionDraw push constants: entityColor, entityId, blockEntityId, currentRenderedItemId, alphaTestRef, atlasSize. */
 	private static final ByteBuffer PUSH = MemoryUtil.memCalloc(40);
 
 	/** Called from {@code VulkanRenderPass.setPipeline} TAIL. */
 	public static void onSetPipeline(VkCommandBuffer cb, VulkanRenderPipeline pipeline) {
+		if (dev.emrion.shaders.mod.debug.TerrainStats.ENABLED) dev.emrion.shaders.mod.debug.TerrainStats.bound(cb, NAMES.get(pipeline));
 		Draw d = OURS.get(pipeline);
 		if (d == null) {
 			boundCb = null;
@@ -107,9 +99,24 @@ public final class GeometryPipelines {
 		bind(cb, pipeline, d);
 	}
 
+	/** Vanilla names of our wrapped pipelines (TerrainStats). */
+	private static final Map<VulkanRenderPipeline, String> NAMES = new ConcurrentHashMap<>();
+
 	/** Re-binds set 1 of the currently bound pipeline (after the EmrionPhase offset changed for a new renderStage). */
 	public static void rebind() {
-		if (boundCb != null) bind(boundCb, bound, OURS.get(bound));
+		if (boundCb == null) return;
+		// only the dynamic offsets changed: set 0's push descriptors, the vertex buffer and the push constants stay valid
+		try (MemoryStack stack = MemoryStack.stackPush()) {
+			vkCmdBindDescriptorSets(boundCb, VK_PIPELINE_BIND_POINT_GRAPHICS, bound.pipelineLayout(), 1, stack.longs(set), stack.ints(DYNAMIC_OFFSETS));
+		}
+	}
+
+	/** MC pushes constants at offset 0; for our Sodium terrain pipelines they move to SODIUM_PUSH_OFFSET so EmrionDraw survives. */
+	public static boolean pushConstants(VkCommandBuffer cb, VulkanRenderPipeline pipeline, ByteBuffer value) {
+		Draw d = pipeline == null ? null : OURS.get(pipeline);
+		if (d == null || !d.sodium) return false;
+		vkCmdPushConstants(cb, pipeline.pipelineLayout(), VK_SHADER_STAGE_ALL, VertexLayouts.SODIUM_PUSH_OFFSET, value);
+		return true;
 	}
 
 	/** The render pass ended: nothing of ours is bound any more. */
@@ -135,10 +142,7 @@ public final class GeometryPipelines {
 		vkCmdPushConstants(cb, pipeline.pipelineLayout(), VK_SHADER_STAGE_ALL, 0, PUSH);
 	}
 
-	/**
-	 * FrontendRenderPass set Sampler0 (also replayed after every setPipeline): update atlasSize and the PBR maps of the new
-	 * texture, pushed at once if ours is bound.
-	 */
+	/** Sampler0 changed (also replayed after setPipeline): update atlasSize and the PBR maps of the new texture. */
 	public static void sampler0(@Nullable Object value) {
 		GpuTextureView view = value instanceof TextureViewAndSampler t ? t.view() : null;
 		GpuTexture texture = view == null ? null : view.texture();
@@ -159,10 +163,7 @@ public final class GeometryPipelines {
 		if (normals != EXTRA_VIEWS[PBR] || specular != EXTRA_VIEWS[PBR + 1]) pushExtras(boundCb, bound.pipelineLayout(), boundDraw, PBR);
 	}
 
-	/**
-	 * Incremental push of the extra samplers of kind ≥ {@code minKind}; MC pushes its own bindings later, before the draw
-	 * (push descriptors merge).
-	 */
+	/** Pushes the extra samplers of kind >= minKind; MC pushes its own bindings before the draw (push descriptors merge). */
 	private static void pushExtras(VkCommandBuffer cb, long layout, Draw d, int minKind) {
 		try (MemoryStack stack = MemoryStack.stackPush()) {
 			var writes = VkWriteDescriptorSet.calloc(d.extras.length, stack);
@@ -177,10 +178,7 @@ public final class GeometryPipelines {
 		}
 	}
 
-	/**
-	 * Push-descriptor layout identical to MC's for the vanilla <em>backend</em> pipeline's {@code uniforms()} (binding = index,
-	 * every graphics stage, a pack's tessellation and geometry stages read it too). That list holds only what the vanilla shaders use, in first-use order; the frontend record's list differs.
-	 */
+	/** Same push-descriptor layout as MC's backend pipeline (binding = index in its uniforms(), which differs from the frontend list). */
 	public static long set0Layout(VulkanContext ctx, List<BindGroupLayout.UniformDescription> uniforms, int extraSamplers) {
 		var b = new Descriptors.LayoutBuilder();
 		for (int i = 0; i < uniforms.size(); i++) {
@@ -198,11 +196,7 @@ public final class GeometryPipelines {
 	/** Wireframe debug view (PackManager.setWireframe): read when pipelines are built; needs fillModeNonSolid. */
 	public static volatile boolean wireframe;
 
-	/**
-	 * Builder preset from the vanilla pipeline: vertex input (canonical locations, VertexLayouts), raster state and depth
-	 * state converted to our forward-Z depth (ARCHITECTURE §4.1 step 8: compare mirrored, bias negated). The caller adds
-	 * shader stages, colour targets and the layout.
-	 */
+	/** Builder preset from the vanilla pipeline, with depth state converted to our forward-Z (compare mirrored, bias negated). */
 	public static GraphicsPipelineBuilder builderFor(RenderPipeline vanilla, FrontendRenderPipeline compiled) {
 		return builderFor(vanilla, compiled, true);
 	}
@@ -219,7 +213,8 @@ public final class GeometryPipelines {
 			if (f == null) continue;
 			b.vertexBinding(slot, f.getVertexSize(), f.getStepRate());
 			for (VertexFormatElement e : f.getElements()) {
-				if (VertexLayouts.INPUT_LOCATIONS.contains(e.name())) b.attribute(VertexLayouts.location(e.name()), slot, VulkanConst.toVk(e.format()), e.offset());
+				int location = VertexLayouts.inputLocation(e.name());
+				if (location >= 0) b.attribute(location, slot, VulkanConst.toVk(e.format()), e.offset());
 			}
 		}
 		DepthStencilState depth = vanilla.getDepthStencilState();
@@ -257,16 +252,13 @@ public final class GeometryPipelines {
 				VulkanConst.toVk(f.alpha().sourceFactor()), VulkanConst.toVk(f.alpha().destFactor()), VulkanConst.toVk(f.alpha().op()));
 	}
 
-	/**
-	 * Wraps a raw pipeline so MC can draw with it in place of {@code vanilla}, in passes whose colour attachments are
-	 * {@code targets}. The returned pipeline owns {@code pipeline}, {@code layout} and {@code set0Layout} (MC destroys them on
-	 * close); shader modules are not kept.
-	 */
+	/** Wraps a raw pipeline so MC draws with it in place of {@code vanilla}; MC destroys pipeline and layouts on close. */
 	public static FrontendRenderPipeline wrap(VulkanContext ctx, FrontendRenderPipeline vanilla, long pipeline, long layout, long set0Layout,
 			List<ColorTargetState> targets, Draw draw) {
 		var uniforms = ((VulkanRenderPipeline) vanilla.backendRenderPipeline()).uniforms();
 		var backend = new VulkanRenderPipeline(ctx.device, pipeline, 0L, layout, set0Layout, new LongArrayList(), uniforms);
 		OURS.put(backend, draw);
+		NAMES.put(backend, vanilla.name());
 		return new FrontendRenderPipeline("emrion/" + vanilla.name(), backend, vanilla.vertexFormats(), vanilla.uniformIndices(), vanilla.uniforms(),
 				targets, vanilla.wantsDepthTexture(), vanilla.pushConstantSize());
 	}
@@ -274,6 +266,7 @@ public final class GeometryPipelines {
 	/** Closes a wrapped pipeline (destroyed by MC after the frames in flight) and forgets it. */
 	public static void close(FrontendRenderPipeline p) {
 		OURS.remove((VulkanRenderPipeline) p.backendRenderPipeline());
+		NAMES.remove((VulkanRenderPipeline) p.backendRenderPipeline());
 		p.close();
 	}
 }

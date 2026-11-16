@@ -7,7 +7,7 @@ import java.util.Set;
 
 /**
  * Parses a single source line into an option declaration or an {@code #ifdef}/{@code #ifndef} reference, with Iris's
- * exact rules (Iris OptionAnnotatedSource, iris-spec §3.3). Each line is looked at in isolation.
+ * exact rules (Iris OptionAnnotatedSource). Each line is looked at in isolation.
  */
 final class OptionLineParser {
 	private OptionLineParser() {}

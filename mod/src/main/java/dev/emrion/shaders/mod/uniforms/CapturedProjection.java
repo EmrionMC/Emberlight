@@ -6,7 +6,7 @@ import org.joml.Matrix4f;
 public final class CapturedProjection {
 	private CapturedProjection() {}
 
-	/** Level projection incl. bob, hurt tilt and nausea skew, exactly as MC uploads it this frame. */
+	/** Level projection exactly as MC uploads it this frame: incl. bob, hurt tilt and nausea without a pack; with one those are in viewRotationMatrix (Iris). */
 	public static final Matrix4f LEVEL = new Matrix4f();
 	/** bobHurt · bobView pose (identity when both are off). */
 	public static final Matrix4f BOB = new Matrix4f();

@@ -9,7 +9,7 @@ import org.lwjgl.vulkan.VkDescriptorPoolSize;
 import org.lwjgl.vulkan.VkDescriptorSetAllocateInfo;
 
 /**
- * One pool per pack: the sets are pre-built at load (one per flip state, ARCHITECTURE §5.3) and never freed singly;
+ * One pool per pack: the sets are pre-built at load (one per flip state) and never freed singly;
  * destroying the pool frees them all.
  */
 public final class DescriptorPool {

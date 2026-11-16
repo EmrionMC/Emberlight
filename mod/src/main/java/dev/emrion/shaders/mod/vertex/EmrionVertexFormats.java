@@ -7,18 +7,8 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.CommonLifecycleEvents;
 import net.minecraft.client.Minecraft;
 
 /**
- * Seam between geometry pipelines (agent g1) and vertex data (agent g2).
- * While a pack is active, terrain sections and entities are built with these formats; their element names are the
- * canonical input names of {@link dev.emrion.shaders.format.VertexLayouts#INPUT_LOCATIONS}, and the element GPU formats match
- * the transpiler's canonical GLSL input types (FORMAT.md §7.1 has the table). Both are 56 bytes.
- *
- * <p>Terrain ({@code EMRION_BLOCK}): vanilla BLOCK + Normal (face normal), mc_Entity (block.properties id, 0 = block /
- * 1 = fluid), mc_midTexCoord, at_tangent and at_midBlock. at_midBlock is RGBA16_FLOAT so the shader gets Iris's values
- * directly: xyz = signed byte of (block centre − vertex)·64, w = the block's light emission (0–15).
- *
- * <p>Entities ({@code EMRION_ENTITY}): vanilla ENTITY + mc_midTexCoord, at_tangent and iris_Entity (entityId, blockEntityId,
- * currentRenderedItemId as RGBA16_UINT, w unused). Used for ENTITY draws prepared by the world and hand feature passes only
- * (the GUI keeps vanilla ENTITY), so g1 must swap every ENTITY pipeline drawn in those passes.
+ * Extended vertex formats used while a pack is active (56 B each); element names are the canonical inputs of VertexLayouts.
+ * at_midBlock is RGBA16_FLOAT so shaders get Iris's values directly; EMRION_ENTITY is used only in world and hand passes.
  */
 public final class EmrionVertexFormats {
 	private EmrionVertexFormats() {}
@@ -35,6 +25,19 @@ public final class EmrionVertexFormats {
 			.addAttribute("at_midBlock", GpuFormat.RGBA16_FLOAT)
 			.build();
 
+	/** Sodium's compact 20 B terrain vertex plus the TERRAIN extras (at_midBlock as RGBA8_SINT); 40 B. */
+	public static final VertexFormat SODIUM_TERRAIN = VertexFormat.builder(0)
+			.addAttribute("a_Position", GpuFormat.RG32_UINT)
+			.addAttribute("a_Color", GpuFormat.RGBA8_UNORM)
+			.addAttribute("a_TexCoord", GpuFormat.RG16_UINT)
+			.addAttribute("a_LightAndData", GpuFormat.RGBA8_UINT)
+			.addAttribute("mc_Entity", GpuFormat.RG16_SINT)
+			.addAttribute("Normal", GpuFormat.RGBA8_SNORM)
+			.addAttribute("at_tangent", GpuFormat.RGBA8_SNORM)
+			.addAttribute("mc_midTexCoord", GpuFormat.RG16_UNORM)
+			.addAttribute("at_midBlock", GpuFormat.RGBA8_SINT)
+			.build();
+
 	public static final VertexFormat ENTITY = VertexFormat.builder(0)
 			.addAttribute("Position", GpuFormat.RGB32_FLOAT)
 			.addAttribute("Color", GpuFormat.RGBA8_UNORM)
@@ -47,10 +50,7 @@ public final class EmrionVertexFormats {
 			.addAttribute("iris_Entity", GpuFormat.RGBA16_UINT)
 			.build();
 
-	/**
-	 * World text (POSITION_TEX_LIGHTMAP_COLOR: maps, signs, name tags) as Iris's GLYPH: the same elements as {@link #ENTITY}, so
-	 * it uses the entity vertex variant; ExtendedBufferBuilder fills Normal (face normal), UV1 (no overlay) and the rest.
-	 */
+	/** World text as Iris's GLYPH: same elements as ENTITY, so it uses the entity vertex variant. */
 	public static final VertexFormat GLYPH = VertexFormat.builder(0)
 			.addAttribute("Position", GpuFormat.RGB32_FLOAT)
 			.addAttribute("Color", GpuFormat.RGBA8_UNORM)

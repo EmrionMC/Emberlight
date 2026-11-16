@@ -12,10 +12,8 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Why: the user wants a plain FPS counter in the top-left corner at all times, including with F1 (hidden HUD), which
- * skips every HUD element. Injecting right after the HUD block of Gui.extractRenderState draws it independently of
- * hideGui, below screens/overlays. Off during autotests so comparison screenshots stay clean. The profiler overlay (F7) is
- * drawn below it the same way.
+ * Why: an FPS counter in the top-left corner that stays visible with F1 (hidden HUD): injected right after the HUD block of
+ * Gui.extractRenderState, below screens. Off during autotests for clean screenshots; the F7 overlay is drawn the same way.
  */
 @Mixin(Gui.class)
 abstract class GuiFpsMixin {
@@ -28,7 +26,7 @@ abstract class GuiFpsMixin {
 		if (!shouldRenderLevel) return;
 		Minecraft mc = Minecraft.getInstance();
 		if (!DISABLED) {
-			String fps = mc.getFps() + " FPS";
+			String fps = dev.emrion.shaders.mod.framegen.Presenter.fpsLabel(mc.getFps());
 			graphics.fill(1, 1, 3 + mc.font.width(fps), 11, 0x90505050); // F3's backdrop: readable on a bright sky
 			graphics.text(mc.font, fps, 2, 2, 0xFFFFFFFF, false);
 		}

@@ -10,7 +10,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-/** Why: feeds RtScene with "layer vertices uploaded" and "mesh released" (RAYTRACING.md §2.3, SectionTracker). */
+/** Why: feeds RtScene with "layer vertices uploaded" and "mesh released". */
 @Mixin(SectionRenderDispatcher.RenderSection.class)
 public class RenderSectionRtMixin {
 	@Inject(method = "vertexBufferUploadCallback", at = @At("HEAD"))

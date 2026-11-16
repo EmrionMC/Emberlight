@@ -1,7 +1,7 @@
 package dev.emrion.shaders.mod.vertex;
 
 /**
- * Per-polygon vertex math with Iris's semantics (NormalHelper, NormI8, ExtendedDataHelper; iris-spec §6.1), kept free of
+ * Per-polygon vertex math with Iris's semantics (NormalHelper, NormI8, ExtendedDataHelper), kept free of
  * Minecraft types so it is unit-testable. Positions are xyz-interleaved, UVs uv-interleaved, one entry per vertex.
  */
 public final class QuadMath {

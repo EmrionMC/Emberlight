@@ -11,7 +11,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-/** Why: every MC draw picks its pipeline here; this is the single swap point for our geometry pipelines (ARCHITECTURE §6). */
+/** Why: every MC draw picks its pipeline here; this is the single swap point for our geometry pipelines. */
 @Mixin(RenderSystem.class)
 public class RenderSystemMixin {
 	@Inject(method = "getCompiledPipelineNullable", at = @At("HEAD"), cancellable = true)

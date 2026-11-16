@@ -5,11 +5,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.SequencedMap;
 
-/** Static Iris tables the planner needs: gbuffers/shadow fallback chains (iris-spec §1.2) and geometry → vertex layout (§1.3). */
+/** Static Iris tables the planner needs: gbuffers/shadow fallback chains and geometry → vertex layout. */
 final class IrisPrograms {
 	private IrisPrograms() {}
 
-	/** Legacy colortex aliases, index = buffer (iris-spec §2.1). */
+	/** Legacy colortex aliases, index = buffer. */
 	static final List<String> LEGACY = List.of("gcolor", "gdepth", "gnormal", "composite", "gaux1", "gaux2", "gaux3", "gaux4");
 
 	/** Iris ProgramId → fallback (null = Iris built-in shader). Order = Iris enum order (also the const-collection order). */
@@ -17,7 +17,7 @@ final class IrisPrograms {
 
 	/**
 	 * Iris ProgramId → vertex layout variants of the MC geometry drawn with it.
-	 * shortcut: derived from iris-spec §1.3 by format family; re-check against MC 26.3 RenderPipelines in M3.
+	 * shortcut: derived by format family, re-check against MC RenderPipelines when a variant draws wrong.
 	 */
 	static final Map<String, List<String>> VARIANTS = new LinkedHashMap<>();
 
@@ -29,13 +29,13 @@ final class IrisPrograms {
 	static {
 		String tm = "terrain_mdi", tu = "terrain_ubo", e = "entity", pa = "particle", pc = "position_color", pt = "position_tex",
 				ptc = "position_tex_color", po = "position", pctl = "position_color_tex_lightmap", li = "lines", bl = "block";
-		id("gbuffers_basic", null, po, pc, pctl);
+		id("gbuffers_basic", null, po, pc, pctl, "clouds");
 		id("gbuffers_line", "gbuffers_basic", li);
-		id("gbuffers_textured", "gbuffers_basic", pt, ptc);
+		id("gbuffers_textured", "gbuffers_basic", pt, ptc, "clouds");
 		id("gbuffers_textured_lit", "gbuffers_textured");
 		id("gbuffers_skybasic", "gbuffers_basic", po, pc);
 		id("gbuffers_skytextured", "gbuffers_textured", pt, ptc);
-		id("gbuffers_clouds", "gbuffers_textured", pc);
+		id("gbuffers_clouds", "gbuffers_textured", "clouds", pc);
 		id("gbuffers_terrain", "gbuffers_textured_lit");
 		id("gbuffers_terrain_solid", "gbuffers_terrain", tm, tu, bl);
 		id("gbuffers_terrain_cutout", "gbuffers_terrain", tm, tu, bl);

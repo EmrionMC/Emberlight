@@ -14,11 +14,8 @@ import org.joml.Vector4f;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Iris's HorizonRenderer (iris-spec §0 step 2): with {@code sky=true} (the default) and a sky-lit dimension, Iris draws an
- * inverted octagonal cone (apex 16 below the camera, rim at radius min(render distance × 16, 256) and 16 above) with the
- * SKY pipeline and the fog colour before the sky disc. MC itself leaves everything below the disc's rim at the clear
- * colour, so without the cone the pack's skybasic never shades the space below the horizon, and the area beyond the
- * terrain stays a flat grey wall instead of the pack's sky.
+ * Iris's HorizonRenderer: an inverted octagonal cone drawn with the SKY pipeline before the sky disc, so the pack's skybasic
+ * also shades below the horizon (otherwise the area beyond the terrain stays a flat grey wall).
  */
 public final class HorizonBox {
 	private HorizonBox() {}
@@ -39,7 +36,6 @@ public final class HorizonBox {
 		pass.draw(10, 1, 0, 0);
 	}
 
-	/** Client shutdown: frees the cone's vertex buffer. */
 	public static void close() {
 		if (buffer != null) buffer.close();
 		buffer = null;

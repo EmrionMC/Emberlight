@@ -1,9 +1,8 @@
 package dev.emrion.shaders.converter.options;
 
 /**
- * Cursor over one source line with the exact token rules Iris uses for option lines (Iris ParsedString). Its quirks are
- * part of what counts as an option, so they are kept: taking whitespace trims both ends of the rest, and number
- * scanning continues while the current or the next character is a digit.
+ * Cursor over one source line with Iris's option-line token rules (ParsedString). Its quirks decide what counts as an option,
+ * so they are kept.
  */
 final class LineCursor {
 	private String text;

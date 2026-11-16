@@ -6,7 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Iris program names per group, in execution order (iris-spec §1.1/§1.2, Iris ProgramSet / ProgramId /
+ * Iris program names per group, in execution order (Iris ProgramSet / ProgramId /
  * ShaderPackSourceNames). Distant Horizons programs (dh_*) are not listed: we do not support DH.
  */
 public final class ProgramCatalog {

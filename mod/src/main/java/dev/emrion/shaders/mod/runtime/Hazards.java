@@ -14,12 +14,34 @@ final class Hazards {
 	/** Hazard state of one physical image or buffer. */
 	static class Tracked {
 		final String label;
-		long writeStage, writeAccess, readStages, visibleStages, visibleAccess;
+		long writeStage, writeAccess, readStages;
+		/**
+		 * The last write is visible to stage × access for each pair (dst stages, dst access) of a barrier since it; a Vulkan
+		 * access scope needs both to match, so the union of the stage masks and of the access masks would claim too much.
+		 */
+		final long[] visible = new long[2 * VISIBLE];
+		int visibleCount;
 
 		Tracked(String label) {
 			this.label = label;
 		}
+
+		boolean visible(long stage, long access) {
+			for (int i = 0; i < visibleCount; i++)
+				if ((visible[2 * i] & stage) == stage && (visible[2 * i + 1] & access) == access) return true;
+			return false;
+		}
+
+		void addVisible(long stage, long access) {
+			if (visible(stage, access)) return;
+			// shortcut: once full, the oldest pair is forgotten; that only costs an extra barrier
+			int i = visibleCount < VISIBLE ? visibleCount++ : 0;
+			visible[2 * i] = stage;
+			visible[2 * i + 1] = access;
+		}
 	}
+
+	private static final int VISIBLE = 4;
 
 	private final List<Tracked> touched = new ArrayList<>();
 	private final List<Tracked> pending = new ArrayList<>();
@@ -29,7 +51,10 @@ final class Hazards {
 	private long src, srcAccess, dst, dstAccess;
 
 	void reset() {
-		for (Tracked t : touched) t.writeStage = t.writeAccess = t.readStages = t.visibleStages = t.visibleAccess = 0;
+		for (Tracked t : touched) {
+			t.writeStage = t.writeAccess = t.readStages = 0;
+			t.visibleCount = 0;
+		}
 		touched.clear();
 	}
 
@@ -44,7 +69,7 @@ final class Hazards {
 
 	private void access(Tracked t, long stage, long access, boolean write) {
 		if (t == null) return;
-		if (t.writeStage != 0 && ((t.visibleStages & stage) != stage || (t.visibleAccess & access) != access)) {
+		if (t.writeStage != 0 && !t.visible(stage, access)) {
 			src |= t.writeStage;
 			srcAccess |= t.writeAccess;
 			dst |= stage;
@@ -76,11 +101,9 @@ final class Hazards {
 			masks[1] = srcAccess;
 			masks[2] = dst;
 			masks[3] = dstAccess;
-			// the barrier made every earlier write visible to these stages
-			for (Tracked t : pending) {
-				t.visibleStages |= dst;
-				t.visibleAccess |= dstAccess;
-			}
+			// the barrier made every earlier write its source scope covers visible to these stages × accesses
+			for (Tracked t : pending)
+				if ((t.writeStage & ~src) == 0 && (t.writeAccess & ~srcAccess) == 0) t.addVisible(dst, dstAccess);
 		}
 		for (int i = 0; i < pending.size(); i++) {
 			Tracked t = pending.get(i);
@@ -88,7 +111,8 @@ final class Hazards {
 			if (pendingAccess[3 * i + 2] == 1) {
 				t.writeStage = pendingAccess[3 * i];
 				t.writeAccess = pendingAccess[3 * i + 1];
-				t.readStages = t.visibleStages = t.visibleAccess = 0;
+				t.readStages = 0;
+				t.visibleCount = 0;
 			} else {
 				t.readStages |= pendingAccess[3 * i];
 			}

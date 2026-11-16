@@ -20,14 +20,7 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.ResourceManager;
 import org.jspecify.annotations.Nullable;
 
-/**
- * The labPBR maps of the texture a draw binds as Sampler0 (Iris's PBRTextureManager), pushed as the set-0 samplers
- * EmrionNormals/EmrionSpecular (FORMAT §7.1). The texture is found in MC's TextureManager by identity: a {@link TextureAtlas}
- * uses its {@link PbrAtlases} (built in the background on first use), a {@link SimpleTexture} (exact class, as Iris) loads
- * {@code <id>_n.png}/{@code <id>_s.png} at the next frame start, anything else (dynamic textures, skins, render targets) gets
- * the 1×1 defaults. Render thread only. Cleared, and the maps freed, on every atlas upload (resource reload) and when the
- * pack turns off.
- */
+/** labPBR maps of the draw's Sampler0 (Iris PBRTextureManager); unknown textures get the 1x1 defaults. Render thread only. */
 public final class PbrTextures {
 	private PbrTextures() {}
 

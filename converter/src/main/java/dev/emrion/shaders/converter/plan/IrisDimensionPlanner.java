@@ -27,10 +27,7 @@ import java.util.TreeSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/**
- * Iris-faithful dimension planner (FORMAT.md §7). Everything is decided statically, by simulating one frame the way
- * Iris builds its pipeline: program table, flip schedule (iris-spec §2.2), targets, set-1 resources and command list.
- */
+/** Iris-faithful dimension planner: decides everything statically by simulating one frame the way Iris builds its pipeline. */
 public final class IrisDimensionPlanner implements DimensionPlanner {
 
 	@Override
@@ -66,7 +63,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 
 	private static final Res SET0 = new Res("set0", null, null, null, null);
 
-	/** RGB-only formats are not colour-attachment capable in Vulkan; promote them (FORMAT.md §2). */
+	/** RGB-only formats are not colour-attachment capable in Vulkan; promote them. */
 	public static String promote(String f) {
 		return switch (f) {
 			case "R3_G3_B2" -> "RGBA8";
@@ -159,7 +156,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 			Set<String> cleared = new HashSet<>();
 			for (var t : targets) if (t.clear()) cleared.add(t.name());
 
-			// ---- frame (iris-spec §0) ----
+			// ---- frame ----
 			List<Command> frame = new ArrayList<>();
 			List<Manifest.ClearOp> first = new ArrayList<>();
 			for (var t : targets) if (t.kind().equals("image") && t.clear()) first.add(new Manifest.ClearOp(t.name(), "main", null));
@@ -195,7 +192,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 			frame.add(geometryCmd("hand_translucent", afterDeferred));
 			frame.addAll(composite);
 			frame.addAll(fin);
-			// End-of-frame "swap": alt → main for flipped buffers that are not cleared (iris-spec §2.2).
+			// End-of-frame "swap": alt → main for flipped buffers that are not cleared.
 			for (int n : finalFlips)
 				if (!cleared.contains("colortex" + n))
 					frame.add(new Command("copy", null, null, null, "colortex" + n, null, "alt", "main", null, null));
@@ -222,7 +219,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 		// ---------------------------------------------------------------------------------------------------------
 		// Inputs
 
-		/** Pack-wide const directives: fragment sources in Iris's collection order, later wins (iris-spec §3.4). */
+		/** Pack-wide const directives: fragment sources in Iris's collection order, later wins. */
 		void collectPackConsts() {
 			for (var g : STAGE_ORDER) {
 				List<ResolvedPack.ProgramSource> group = new ArrayList<>();
@@ -263,7 +260,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 			});
 		}
 
-		/** iris-spec §2.5: a raw texture (value with spaces) only replaces a sampler declared with its type (texture.deferred.colortex6.1). */
+		/** A raw texture (value with spaces) only replaces a sampler declared with its type (texture.deferred.colortex6.1). */
 		String stageTexture(String stage, String sampler, String glslType) {
 			var l = stageTextures.get(stage + "." + sampler);
 			if (l == null) return null;
@@ -299,7 +296,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 				if (compute) pass.computes().put(m.group(3) == null || m.group(3).equals("csh") ? "" : m.group(3), a.program());
 				else pass.program()[0] = a.program();
 			}
-			// Iris ProgramId fallback chains (iris-spec §1.2).
+			// Iris ProgramId fallback chains.
 			for (String id : IrisPrograms.FALLBACK.keySet()) {
 				String p = id;
 				while (p != null && !geometryNames.contains(p)) p = IrisPrograms.FALLBACK.get(p);
@@ -310,7 +307,6 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 				if (!geometry.containsKey(n)) info(n, "no MC geometry is drawn with this program; skipped");
 		}
 
-		/** iris-spec §1.6. */
 		void activateShadows() {
 			Boolean prop = bool(props.get("shadow.enabled"));
 			boolean sampled = false;
@@ -335,7 +331,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 			return n.equals("shadow") || n.equals("watershadow") || n.startsWith("shadowtex") || n.startsWith("shadowcolor");
 		}
 
-		/** Iris creates colortex lazily: draw buffers of any program, samplers by name or alias, colorimgN (iris-spec §2.1). */
+		/** Iris creates colortex lazily: draw buffers of any program, samplers by name or alias, colorimgN. */
 		void allocateColortexByName() {
 			for (String p : planned()) {
 				var a = analyses.get(p);
@@ -364,7 +360,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 		}
 
 		// ---------------------------------------------------------------------------------------------------------
-		// Flip simulation (iris-spec §2.2)
+		// Flip simulation
 
 		TreeMap<Integer, Pass> passes(ProgramGroup g) { return passes.getOrDefault(g, new TreeMap<>()); }
 
@@ -372,11 +368,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 
 		int state(List<Integer> alt, List<Integer> shadowAlt) { return flipStates.computeIfAbsent(List.of(alt, shadowAlt), k -> flipStates.size()); }
 
-		/**
-		 * Iris ShadowCompositeRenderer, simulated once: shadowcomp_pre flips, then each shadowcomp pass reads its snapshot
-		 * (flipped → alt), writes the other side and flips what it drew (flip.&lt;pass&gt;.&lt;buf&gt; as for colortex). The shadow pass
-		 * always writes main; everything outside shadowcomp reads the final state.
-		 */
+		/** Iris ShadowCompositeRenderer simulated once: each shadowcomp pass reads its snapshot, writes the other side and flips it. */
 		void simulateShadowFlips() {
 			Set<Integer> f = new TreeSet<>();
 			explicitFlips("shadowcomp_pre").forEach((n, b) -> { if (b && !f.remove(n)) f.add(n); });
@@ -422,7 +414,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 				String p = pass.program()[0];
 				if (p == null) {
 					if (g == ProgramGroup.FINAL) out.add(cmd("final", null, fs));
-					continue; // compute-only passes do not flip (iris-spec §1.1)
+					continue; // compute-only passes do not flip
 				}
 				var a = analyses.get(p);
 				for (int n : mipmapBuffers(a)) {
@@ -516,6 +508,8 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 					Res r = switch (s.name()) { // RT helpers (RtPatcher): the TLAS and the block atlas for alpha tests
 						case "emrRtTlas" -> new Res("acceleration_structure", null, null, "emrion_tlas", null);
 						case "emrRtAtlas" -> new Res("sampled_image", null, null, "block_atlas", null);
+						case "emrRtAo" -> new Res("sampled_image", null, null, "emrion_rtao", sampler("nearest", "none", "clamp", null));
+						case "emrRtEntityAtlas" -> new Res("sampled_image", null, null, "emrion_rt_entity_atlas", sampler("nearest", "none", "clamp", null));
 						default -> resolveSampler(c, a.group(), s.name(), s.glslType(), water);
 					};
 					if (r == SET0) continue;
@@ -543,6 +537,10 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 				for (var buf : a.buffers()) {
 					if (buf.blockName().equals("EmrRtSections")) { // RT helper section table (RtPatcher)
 						b.put(buf.blockName(), bind(new Res("storage_buffer", null, null, "emrion_rt_sections", null)));
+						continue;
+					}
+					if (buf.blockName().equals("EmrRtLights")) { // RT block-light grid (rt/complementary/blocklight.glsl)
+						b.put(buf.blockName(), bind(new Res("storage_buffer", null, null, "emrion_rt_lights", null)));
 						continue;
 					}
 					String key = "bufferObject." + buf.declaredBinding();
@@ -623,7 +621,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 			return resources.computeIfAbsent(r, k -> next);
 		}
 
-		/** iris-spec §2.6: name → resource, per program group, with stage custom-texture overrides. */
+		/** Name → resource, per program group, with stage custom-texture overrides. */
 		Res resolveSampler(Ctx c, ProgramGroup g, String name, String type, boolean water) {
 			boolean full = !g.isGeometry();
 			String canon = canonical(name, full, water);
@@ -733,7 +731,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 		}
 
 		/**
-		 * iris-spec §2.5 raw texture {@code <file> <TEXTURE_1D|2D|3D|RECTANGLE> <internal format> <w> [h] [d] <pixel format>
+		 * Raw texture {@code <file> <TEXTURE_1D|2D|3D|RECTANGLE> <internal format> <w> [h] [d] <pixel format>
 		 * <pixel type>}: Iris samples it linear/clamped unless an .mcmeta says otherwise. The file is converted on copy.
 		 */
 		String rawTexture(String value) {
@@ -742,7 +740,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 			int dims = switch (target) {
 				case "TEXTURE_2D", "TEXTURE_RECTANGLE" -> 2;
 				case "TEXTURE_3D" -> 3;
-				default -> 0; // shortcut: TEXTURE_1D (no pack uses it) would need 1D image views
+				default -> 0; // shortcut: TEXTURE_1D needs 1D image views, add if a pack uses it
 			};
 			if (p.length != dims + 5 || !KNOWN_FORMATS.contains(p[2].toUpperCase(Locale.ROOT))) {
 				warn(null, "unsupported raw custom texture '" + value + "'");
@@ -765,7 +763,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 
 		boolean nameTaken(String n) { return textures.values().stream().anyMatch(t -> t.name().equals(n)); }
 
-		/** noisetex: texture.noise PNG, else Iris's generated noise of noiseTextureResolution² (iris-spec §2.5). */
+		/** noisetex: texture.noise PNG, else Iris's generated noise of noiseTextureResolution². */
 		String noiseTexture() {
 			String v = props.get("texture.noise");
 			if (v != null) {
@@ -886,7 +884,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 		static boolean isInteger(String f) { return f.endsWith("I"); }
 
 		// ---------------------------------------------------------------------------------------------------------
-		// Shadow directives (iris-spec §2.4)
+		// Shadow directives
 
 		boolean any(String... keys) {
 			for (String k : keys) if (Boolean.TRUE.equals(bool(consts.get(k)))) return true;
@@ -1000,7 +998,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 		List<Integer> drawBuffers(Transpiler.ProgramAnalysis a) {
 			var d = directives(a);
 			if (d != null && d.drawBuffers() != null) return d.drawBuffers();
-			return a.group() == ProgramGroup.SHADOW ? List.of(0, 1) : List.of(0); // iris-spec §3.2, §2.4
+			return a.group() == ProgramGroup.SHADOW ? List.of(0, 1) : List.of(0);
 		}
 
 		Set<Integer> mipmapBuffers(Transpiler.ProgramAnalysis a) {

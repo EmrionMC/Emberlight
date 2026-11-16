@@ -1,11 +1,8 @@
 package dev.emrion.shaders.mod.runtime;
 
 /**
- * Sodium's render-distance test for chunk sections (OcclusionCuller.visitNode/testDistance in Sodium 0.9.3): the point of
- * the section box, grown by one block on every side, that is nearest to the camera must lie inside a vertical cylinder
- * of radius {@code distance} (render distance × 16) and within {@code distance} vertically. Vanilla keeps every section
- * within a square-ish chunk radius instead, so with a pack its corner sections reach past {@code far}, where the pack's
- * border fog paints them as a flat grey wall while Iris (on Sodium) shows sky there.
+ * Sodium's cylindrical render-distance test for sections (as Iris on Sodium sees them). Vanilla's square-ish radius lets
+ * corner sections reach past {@code far}, where the pack's border fog paints them as a grey wall.
  */
 public final class HorizonCull {
 	private HorizonCull() {}

@@ -17,16 +17,8 @@ import java.util.SequencedMap;
 import java.util.Set;
 
 /**
- * Parses uniform.&lt;type&gt;.&lt;name&gt; / variable.&lt;type&gt;.&lt;name&gt; entries of shaders.properties (iris-spec §4.3)
- * into type-checked, serialised ASTs (FORMAT.md §6.1), in evaluation order. Owner: agent (e).
- *
- * <p>Iris behaviour kept: the first declaration of a name wins; a declaration that fails to parse or type-check is
- * dropped, and so is everything that references it; a declaration may reference later ones (the output is
- * topologically sorted, stable in declaration order); a name that shadows a built-in is dropped (references keep
- * reading the built-in). Every {@code smooth(...)} call site gets its own {@code stateId} (0, 1, … in output order);
- * the optional first "id" argument is <b>ignored</b> like in Iris (each call has its own SmoothFloat even when two
- * calls pass the same id), so it is only kept as the informational {@code "id"} field.
- * Deviation: a reference cycle drops only the uniforms in/depending on the cycle (Iris rejects all custom uniforms).
+ * Parses uniform.* / variable.* entries of shaders.properties into typed ASTs in evaluation order. As Iris: first declaration
+ * wins, broken ones drop with their dependents, and every {@code smooth()} call gets its own state (the id argument is ignored).
  */
 public final class CustomUniformParser {
 	private CustomUniformParser() {}

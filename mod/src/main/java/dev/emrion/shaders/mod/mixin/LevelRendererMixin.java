@@ -35,17 +35,16 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Why: the level's frame structure lives here (ARCHITECTURE §6). {@code render} HEAD is Iris's beginLevelRendering
- * (uniforms, plan up to the first world phase); after the frame graph executed, the rest of the plan runs (composites,
- * final). In the main pass, MC's "Main" render pass becomes our opaque gbuffers pass, and the classic translucent part is
- * moved into a second pass after the solid hand and the deferred passes. The other wraps only set Iris's renderStage per
- * draw group, and skip vanilla clouds when the pack turns them off.
+ * Why: the level's frame structure. {@code render} HEAD is Iris's beginLevelRendering; MC's "Main" pass becomes our opaque
+ * gbuffers pass, and translucents move to a second pass after the solid hand and the deferred passes.
  */
 @Mixin(LevelRenderer.class)
 public class LevelRendererMixin {
 	@Inject(method = "render", at = @At("HEAD"))
 	private void emrion$levelStart(CallbackInfo ci) {
-		if (EmrionShadersClient.active()) PackManager.onLevelStart(Minecraft.getInstance().getDeltaTracker().getGameTimeDeltaPartialTick(false));
+		if (!EmrionShadersClient.active()) return;
+		PackManager.onLevelStart(Minecraft.getInstance().getDeltaTracker().getGameTimeDeltaPartialTick(false));
+		dev.emrion.shaders.mod.upscale.VanillaUpscale.beginLevel(); // after the pack's start: only when no pack renders this frame
 	}
 
 	@Inject(method = "render", at = @At(value = "INVOKE", target = "Lcom/mojang/blaze3d/framegraph/FrameGraphBuilder;execute(Lcom/mojang/blaze3d/resource/GraphicsResourceAllocator;Lcom/mojang/blaze3d/framegraph/FrameGraphBuilder$Inspector;)V", shift = At.Shift.AFTER))
@@ -80,7 +79,7 @@ public class LevelRendererMixin {
 			boolean wireframe, Operation<Void> original) {
 		int stage = group == ChunkSectionLayerGroup.TRANSLUCENT ? GeometryHooks.TERRAIN_TRANSLUCENT : GeometryHooks.TERRAIN_SOLID;
 		// Iris (IrisSamplers.getTerrainCache, breaksAnisotropy): nearest min/mag with mips, not MC 26.3's linear chunk sampler
-		GpuSampler s = EmrionShadersClient.active() ? RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST, true) : sampler;
+		GpuSampler s = EmrionShadersClient.active() && GeometryHooks.packRendering() ? RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST, true) : sampler;
 		GeometryHooks.withStage(stage, () -> original.call(chunks, group, pass, s, atlas, wireframe));
 	}
 

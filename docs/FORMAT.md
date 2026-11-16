@@ -17,7 +17,7 @@ The JSON examples below show intent. Where an example and `Manifest.java` disagr
   src/<dim>/<program>.<stage>[.<variant>].glsl   transpiled GLSL (debug aid, always written)
 ```
 
-- `cacheRoot` = `.minecraft/emrionshaders/cache` (mod) or the CLI's `<out-dir>`.
+- `cacheRoot` = `.minecraft/emberlight/cache` (mod) or the CLI's `<out-dir>`.
 - `cacheKey = hex(sha256(converterVersion ‖ formatVersion ‖ sha256(pack bytes, sorted by path) ‖ normalised settings ‖ environment))`, first 24 hex chars.
   "environment" covers the inputs that change preprocessing: MC version, GPU vendor/renderer macros, OS macro, plus the
   requested dimension filter when one is given (CLI `--dimension`), because it changes which plans the manifest holds.
@@ -358,7 +358,9 @@ conversion without RT support. The cache key adds `rt=<sorted request>` only the
 "rt": {
   "effects": ["shadows", "shadows:full"],                       // applied request entries (effect[:option])
   "unavailable": { "reflections": "table complementary-r5 has no reflections patches" },
-  "patched": { "shadows": ["world0/gbuffers_terrain.fsh", "world0/composite.fsh", …] }
+  "patched": { "shadows": ["world0/gbuffers_terrain.fsh", "world0/composite.fsh", …] },
+  "anyHitIds": [10003, 10005]                                   // block ids an active skip list decides per id (shadows' foliage
+                                                                // skip): the mod's opacity micromaps leave their cutout hits to the shaders
 }
 ```
 
@@ -368,6 +370,8 @@ Resources added to set 1 of the patched programs (bindings assigned like any oth
 |---|---|---|
 | `acceleration_structure` | `emrion_tlas` | `RtScene`'s TLAS (fixed for the scene's lifetime, rebuilt every frame) |
 | `storage_buffer` | `emrion_rt_sections` | `RtScene`'s section table (`uvec4`: vertex heap address lo/hi, layer, pad), indexed by `instanceCustomIndex` |
+| `sampled_image` | `emrion_rtao` | The RT AO pass's output (R32F, screen size, 1 = unoccluded), written before the first pass that samples it (effect `ao`) |
+| `sampled_image` | `emrion_rt_entity_atlas` | `RtEntities`' 2048² copy of the entity textures traced this frame (helper sampler `emrRtEntityAtlas`, nearest/clamp); white when no effect traces entities |
 | `sampled_image` | `block_atlas` | the block atlas (alpha test of cutout hits) |
 
 Patched stages are emitted as `#version 460` with `GL_EXT_ray_query`, `GL_EXT_buffer_reference` and

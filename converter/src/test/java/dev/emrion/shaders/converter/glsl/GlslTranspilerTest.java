@@ -421,7 +421,8 @@ class GlslTranspilerTest {
 	void fullscreenVariantHasNoVertexInputs() throws Exception {
 		Out o = composite(VS, FS.replace("tex,", "colortex0,").replace("sampler2D tex;", "sampler2D colortex0;"));
 		assertFalse(o.vs().contains(" in "), o.vs());
-		assertTrue(o.vs().contains("vec2 emr_fsUV() { return vec2(float((gl_VertexIndex << 1) & 2), float(gl_VertexIndex & 2)); }"));
+		assertTrue(o.vs().contains("vec2 emr_fsUV() { int v = emr_fsVertexId(); return vec2(float(v == 1 || v == 2), float(v >= 2)); }"));
+		assertTrue(o.vs().contains("int emr_fsVertexId() { return int[](0, 1, 2, 2, 3, 0)[gl_VertexIndex]; }"));
 		assertTrue(o.vs().contains("texCoord = vec4(emr_fsUV(), 0.0, 1.0).xy;"));
 		assertTrue(o.vs().contains("mat4(vec4(2.0, 0.0, 0.0, 0.0), vec4(0.0, 2.0, 0.0, 0.0), vec4(0.0), vec4(-1.0, -1.0, 0.0, 1.0)) * vec4(emr_fsUV(), 0.0, 1.0)"));
 	}
@@ -469,6 +470,80 @@ class GlslTranspilerTest {
 		assertTrue(fs.contains("const float cloudHeight = 192.0;"));
 		assertTrue(fs.contains("const int unknownThing = int(0);"));
 		assertFalse(fs.contains("unused"));
+	}
+
+	@Test
+	void constantsOfAnUnprovidedUniformDefaultAreKept() throws Exception {
+		List<PreprocessedStage> st = List.of(TranspilerTestSupport.stage("composite", ProgramGroup.COMPOSITE, StageType.FRAGMENT, """
+				#version 130
+				const float K = 0.5;
+				const int N = 2;
+				uniform float strength = K;
+				uniform float weights[N];
+				void main() { gl_FragData[0] = vec4(strength, weights[1], 0.0, 1.0); }
+				"""));
+		Transpiler.ProgramAnalysis a = TR.analyze(st);
+		String fs = TR.emit(a, new Transpiler.EmitContext(Map.of(), n -> 2, Map.of(0, 0), null), "fullscreen").glsl().get(StageType.FRAGMENT);
+		assertTrue(fs.contains("const float K = 0.5;") && fs.contains("const float strength = K;"), fs);
+		assertTrue(fs.contains("const int N = 2;") && fs.contains("const float weights[N] = float[2](float(0), float(0));"), fs);
+		if (validator) assertNull(TranspilerTestSupport.validate(tmp, "uniformConsts", StageType.FRAGMENT, fs));
+	}
+
+	@Test
+	void constantExpressionArraySizesTakeAllTheirLocations() throws Exception {
+		Out o = composite("""
+				#version 130
+				const int N = 2;
+				varying vec4 foo[N + 1];
+				varying vec4 baz[2+1];
+				varying vec4 bar;
+				void main() { foo[2] = vec4(1.0); baz[2] = vec4(1.0); bar = vec4(1.0); gl_Position = ftransform(); }
+				""", """
+				#version 130
+				const int N = 2;
+				varying vec4 foo[N + 1];
+				varying vec4 baz[2+1];
+				varying vec4 bar;
+				void main() { gl_FragData[0] = foo[2] + baz[2] + bar; }
+				""");
+		assertTrue(o.fs().contains("layout(location = 0) in vec4 foo[N + 1];"), o.fs());
+		assertTrue(o.fs().contains("layout(location = 3) in vec4 baz[2+1];"), o.fs());
+		assertTrue(o.fs().contains("layout(location = 6) in vec4 bar;"), o.fs());
+	}
+
+	@Test
+	void keywordsKeepTheirMeaningInFunctionParametersOf4xxStages() throws Exception {
+		Out o = run("composite", ProgramGroup.COMPOSITE, null, null, null, null, """
+				#version 430
+				layout(local_size_x = 1) in;
+				layout(rgba8) uniform writeonly image3D lightImg;
+				void store(writeonly image3D dst) { imageStore(dst, ivec3(0), vec4(1.0)); }
+				void main() { store(lightImg); }
+				""");
+		assertTrue(o.glsl().get(StageType.COMPUTE).contains("void store(writeonly image3D dst)"), o.glsl().get(StageType.COMPUTE));
+	}
+
+	@Test
+	void fragmentOnlyProgramsReadTheLegacyVertexOutputs() throws Exception {
+		Out o = run("gbuffers_textured", ProgramGroup.GBUFFERS, "entity", null, null, """
+				#version 120
+				varying vec4 irs_texCoords[3];
+				varying vec4 irs_Color;
+				void main() {
+					gl_Position = ftransform();
+					irs_texCoords[0] = gl_TextureMatrix[0] * gl_MultiTexCoord0;
+					irs_texCoords[1] = gl_TextureMatrix[1] * gl_MultiTexCoord1;
+					irs_texCoords[2] = gl_TextureMatrix[1] * gl_MultiTexCoord2;
+					irs_Color = gl_Color;
+				}
+				""", """
+				#version 120
+				uniform sampler2D texture;
+				void main() { gl_FragData[0] = texture2D(texture, gl_TexCoord[0].xy) * gl_Color; }
+				""");
+		assertTrue(o.vs().contains("layout(location = 0) out vec4 irs_texCoords[3];") && o.vs().contains("layout(location = 3) out vec4 irs_Color;"), o.vs());
+		assertTrue(o.fs().contains("layout(location = 0) in vec4 irs_texCoords[3];") && o.fs().contains("layout(location = 3) in vec4 irs_Color;"), o.fs());
+		assertTrue(o.fs().contains("texture(emr_kw_texture, irs_texCoords[0].xy) * irs_Color"), o.fs());
 	}
 
 	@Test
@@ -533,6 +608,101 @@ class GlslTranspilerTest {
 		String fs = TR.emit(a, new Transpiler.EmitContext(Map.of(), n -> 2, Map.of(0, 0), null), "entity").glsl().get(StageType.FRAGMENT);
 		assertTrue(fs.contains("float(emr_draw.entityId)"), fs);
 		assertFalse(a.vertexInputs().contains("iris_Entity"));
+	}
+
+	@Test
+	void undeclaredIdsWithAGeometryStageAndIdParametersWork() throws Exception {
+		// Shrimple: the hand reads currentRenderedItemId without declaring it (Iris replaces it anyway) and has id parameters
+		List<PreprocessedStage> st = List.of(
+				TranspilerTestSupport.stage("gbuffers_hand", ProgramGroup.GBUFFERS, StageType.VERTEX, VS),
+				TranspilerTestSupport.stage("gbuffers_hand", ProgramGroup.GBUFFERS, StageType.GEOMETRY, """
+						#version 150
+						layout(triangles) in;
+						layout(triangle_strip, max_vertices = 3) out;
+						in vec2 texCoord[];
+						out vec2 tc;
+						void main() { for (int i = 0; i < 3; i++) { tc = texCoord[i]; gl_Position = gl_in[i].gl_Position; EmitVertex(); } }
+						"""),
+				TranspilerTestSupport.stage("gbuffers_hand", ProgramGroup.GBUFFERS, StageType.FRAGMENT, """
+						#version 150
+						in vec2 tc;
+						float light(const in int entityId) { return float(entityId); }
+						void main() { gl_FragData[0] = vec4(float(currentRenderedItemId) + light(3), tc, 1.0); }
+						"""));
+		Transpiler.ProgramAnalysis a = TR.analyze(st);
+		String fs = TR.emit(a, new Transpiler.EmitContext(Map.of(), n -> 2, Map.of(0, 0), null), "entity").glsl().get(StageType.FRAGMENT);
+		assertTrue(fs.contains("float(emr_draw.currentRenderedItemId)"), fs);
+		assertTrue(fs.contains("float light(const in int entityId) { return float(entityId); }"), fs);
+	}
+
+	@Test
+	void compositesSeeIrisFogOffConstants() throws Exception {
+		// Iris: FogMode.OFF outside gbuffers binds fogMode 0 and fogShape -1 (Shrimple's composite fog tests fogShape == 1)
+		Out o = composite(VS, """
+				#version 150
+				uniform int fogMode;
+				uniform int fogShape;
+				out vec4 outColor;
+				void main() { outColor = vec4(float(fogMode), float(fogShape == 1), 0.0, 1.0); }
+				""");
+		assertTrue(o.fs().contains("float(0)"), o.fs());
+		assertTrue(o.fs().contains("float((-1) == 1)"), o.fs());
+		Out g = gbuffers("terrain", """
+				#version 150
+				in vec3 vaPosition;
+				void main() { gl_Position = vec4(vaPosition, 1.0); }
+				""", """
+				#version 150
+				uniform int fogShape;
+				out vec4 outColor;
+				void main() { outColor = vec4(float(fogShape), 0.0, 0.0, 1.0); }
+				""");
+		assertFalse(g.fs().contains("float((-1))"), g.fs()); // gbuffers keep the real uniform
+		Out own = composite(VS, """
+				#version 150
+				out vec4 outColor;
+				float fogShape(in vec3 pos) { return pos.x; }
+				void main() { outColor = vec4(fogShape(vec3(1.0)), 0.0, 0.0, 1.0); }
+				""");
+		assertTrue(own.fs().contains("float fogShape(in vec3 pos)"), own.fs()); // Bliss: a pack function of that name stays
+	}
+
+	@Test
+	void functionOutParametersKeepTheCallersValue() throws Exception {
+		// Insanity: GetMaterials never writes porosity; GL keeps the caller's 0.5, an undefined SPIR-V out made the terrain NaN
+		Out o = gbuffers("terrain", """
+				#version 150
+				in vec3 vaPosition;
+				void main() { gl_Position = vec4(vaPosition, 1.0); }
+				""", """
+				#version 150
+				out vec4 outColor;
+				void get(out float a, inout float b, out vec3 c[2]);
+				void get(out float a, inout float b, out vec3 c[2]) { b = 1.0; c[0] = vec3(0.0); c[1] = vec3(0.0); }
+				void main() { float a = 0.5, b = 0.0; vec3 c[2]; get(a, b, c); outColor = vec4(a, b, c[0].x, 1.0); }
+				""");
+		assertTrue(o.fs().contains("void get(inout float a, inout float b, inout vec3 c[2]);"), o.fs());
+		assertTrue(o.fs().contains("void get(inout float a, inout float b, inout vec3 c[2]) {"), o.fs());
+		assertTrue(o.fs().contains("layout(location = 0) out vec4 outColor;"), o.fs()); // interface outs stay
+	}
+
+	@Test
+	void interfaceBlocksGetLocationsByBlockName() throws Exception {
+		Out o = gbuffers("terrain", """
+				#version 150
+				in vec3 vaPosition;
+				out vec2 extra;
+				out VertexData { vec4 color; flat int id; vec2 uv[2]; } vOut;
+				void main() { extra = vec2(0.0); vOut.color = vec4(1.0); vOut.id = 1; vOut.uv[0] = vec2(0.0); vOut.uv[1] = vec2(0.0); gl_Position = vec4(vaPosition, 1.0); }
+				""", """
+				#version 150
+				in vec2 extra;
+				in VertexData { vec4 color; flat int id; vec2 uv[2]; } vIn;
+				void main() { gl_FragData[0] = vIn.color + vec4(extra, vIn.uv[1]); }
+				""");
+		assertTrue(o.vs().contains("layout(location = 0) out vec2 extra;"), o.vs());
+		assertTrue(o.vs().contains("layout(location = 1) out VertexData "), o.vs());
+		assertTrue(o.fs().contains("layout(location = 1) in VertexData "), o.fs());
 	}
 
 	@Test
@@ -678,7 +848,7 @@ class GlslTranspilerTest {
 				void main() { gl_FragData[0] = vec4(ssbo.data[0]) + vec4(texCoord, 0.0, 0.0); }
 				""");
 		assertTrue(o.fs().matches("(?s).*layout\\(std430, set = 1, binding = \\d+\\) readonly buffer blockData .*"));
-		assertEquals(new Transpiler.BufferDecl("blockData", 3, true), o.analysis().buffers().getFirst());
+		assertEquals(new Transpiler.BufferDecl("blockData", 3, true, true), o.analysis().buffers().getFirst());
 	}
 
 	@Test

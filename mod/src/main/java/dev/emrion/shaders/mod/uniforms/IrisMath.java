@@ -6,8 +6,7 @@ import org.joml.Vector3f;
 import org.joml.Vector4f;
 
 /**
- * Pure matrix/angle math for the Iris uniforms (no MC classes, unit-tested). Everything produced here is GL convention:
- * NDC z in [-1, 1], near → -1 (ARCHITECTURE §5.2).
+ * Pure matrix/angle math for the Iris uniforms (no MC classes). Output is GL convention: NDC z in [-1, 1], near → -1.
  */
 public final class IrisMath {
 	private IrisMath() {}
@@ -22,12 +21,7 @@ public final class IrisMath {
 	/** Iris HandRenderer.DEPTH: the hand projection squeezes clip z so the hand does not clip into blocks. */
 	public static final float HAND_DEPTH = 0.125f;
 
-	/**
-	 * dest = C·p, C mapping MC 26.3's reverse-Z zero-to-one clip space to GL clip space: z' = w − 2z (x, y, w unchanged).
-	 * Reverse-Z: z_ndc = 1 at near, 0 at far. GL: −1 at near, +1 at far. z'/w = 1 − 2·z/w maps 1 → −1 and 0 → 1.
-	 * For MC's Projection (JOML setPerspective with near/far swapped and zZeroToOne) this equals
-	 * {@code setPerspective(fov, aspect, near, far, false)} exactly (see IrisMathTest).
-	 */
+	/** dest = C·p: MC's reverse-Z [1 near, 0 far] clip space to GL clip space, z' = w − 2z (x, y, w unchanged). */
 	public static Matrix4f reverseZToGl(Matrix4fc p, Matrix4f dest) {
 		// Row 2 (m02, m12, m22, m32) becomes row3 − 2·row2.
 		float m02 = p.m03() - 2 * p.m02(), m12 = p.m13() - 2 * p.m12(), m22 = p.m23() - 2 * p.m22(), m32 = p.m33() - 2 * p.m32();
@@ -43,10 +37,7 @@ public final class IrisMath {
 		return c;
 	}
 
-	/**
-	 * sunPosition/moonPosition: gbufferModelView · RotY(−90°) · RotZ(sunPathRotation) · RotX(rawAngle) · (0, 100, 0, 1).
-	 * rawAngle is the SUN_ANGLE/MOON_ANGLE attribute in degrees (not the +90 one). Iris uses +100 for the moon too.
-	 */
+	/** sunPosition/moonPosition as Iris computes them; rawAngle in degrees, and Iris uses +100 for the moon too. */
 	public static Vector3f celestialPosition(Matrix4fc gbufferModelView, float sunPathRotation, float rawAngle, Vector3f dest) {
 		SCRATCH.set(gbufferModelView)
 				.rotateY((float) Math.toRadians(-90.0))
@@ -69,11 +60,7 @@ public final class IrisMath {
 		return xyz(SCRATCH.transform(SCRATCH4.set(0, 100, 0, 0)), dest);
 	}
 
-	/**
-	 * Iris ShadowMatrices.createModelViewMatrix (iris-spec §2.4). shadowAngle is Iris's shadowAngle uniform (0..1).
-	 * The result maps <b>player space</b> (world position − unshifted camera position, i.e. MC's camera-relative render
-	 * space) to shadow view space: R · T(cam mod interval − interval/2), R = RotX(90)·RotZ(−360·skyAngle)·RotX(sunPathRotation).
-	 */
+	/** Iris ShadowMatrices.createModelViewMatrix: player space to shadow view space, snapped to the shadow interval. */
 	public static Matrix4f shadowModelView(float shadowAngle, float sunPathRotation, float intervalSize,
 	                                       double camX, double camY, double camZ, Matrix4f dest) {
 		float skyAngle = shadowAngle < 0.25f ? shadowAngle + 0.75f : shadowAngle - 0.25f;

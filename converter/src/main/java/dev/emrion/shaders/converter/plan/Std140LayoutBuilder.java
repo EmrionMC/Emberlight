@@ -15,7 +15,7 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.function.Function;
 
-/** std140 {@code EmrionUniforms} layout (FORMAT.md §6) from the union of all referenced uniforms. */
+/** std140 {@code EmrionUniforms} layout from the union of all referenced uniforms. */
 public final class Std140LayoutBuilder implements UniformLayoutBuilder {
 
 	/** Members the transpiler injects for compat built-ins (gl_Fog, chunk offset, gl_TextureMatrix[1]). Always present. */
@@ -72,8 +72,8 @@ public final class Std140LayoutBuilder implements UniformLayoutBuilder {
 					continue;
 				}
 				if (!"block".equals(b.get().location()))
-					// shortcut: per-draw/per-phase built-ins without a slot in EmrionDraw/EmrionPhase are written once per
-					// frame into the block; give them a real slot when a pack needs per-draw accuracy.
+					// shortcut: per-draw built-ins without a slot in EmrionDraw/EmrionPhase are written once per frame; add a slot when a pack needs it
+
 					diagnostics.add(new Diagnostic(Diagnostic.Severity.WARNING, null, 0, a.program(), null,
 							"uniform " + u.name() + " is " + b.get().location() + "-scoped in Iris but updated per frame here"));
 				if (!b.get().glslType().equals(u.glslType()))

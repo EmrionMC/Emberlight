@@ -30,6 +30,11 @@ public final class BlockContext {
 		set(EmrionVertexFormats.ids().block(fluid.createLegacyBlock()), 1, state.getLightEmission(), localX, localY, localZ);
 	}
 
+	/** Sodium path: hands this block to a Sodium vertex (compat.sodium; typed loosely so this class needs no Sodium types). */
+	public void copyTo(dev.emrion.shaders.mod.compat.sodium.VertexBlockData v) {
+		v.emrion$setBlock(id, renderType, emission, x, y, z);
+	}
+
 	private void set(int id, int renderType, int emission, int x, int y, int z) {
 		this.id = id;
 		this.renderType = renderType;

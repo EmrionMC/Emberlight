@@ -15,12 +15,8 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Why: the PBR atlases mirror their atlas. {@code upload} RETURN is where a reload's stitched atlas layout becomes final
- * (and every cached per-texture PBR map is stale); {@code cycleAnimationFrames} TAIL is the atlas's animation tick (PBR
- * frames advance in the same tick);
- * {@code createTexture} TAIL fills a new PBR atlas with Iris's default before MC blits the sprites into it, and records every
- * atlas texture so atlasSize can tell atlases from plain textures. {@code upload} HEAD hands the sprite rectangles to
- * SparseAtlas, which backs only the tiles they touch.
+ * Why: the PBR atlases mirror their atlas: created with Iris's defaults in createTexture, invalidated when upload finalises
+ * the layout, animated in the same tick, and backed sparsely from the sprite rectangles.
  */
 @Mixin(TextureAtlas.class)
 public abstract class TextureAtlasMixin extends AbstractTexture {

@@ -1,4 +1,4 @@
-// Vertex-data debug view (-Demrion.debug.vertex=true): EMRION_BLOCK attributes at their canonical locations (FORMAT.md §7.1).
+// Vertex-data debug view (-Demrion.debug.vertex=true): EMRION_BLOCK attributes at their canonical locations.
 // Set-0 bindings are placeholders (index into VertexLayouts.SET0_CANONICAL + Projection=8, Globals=9), patched at load.
 layout(std140, set = 0, binding = 9) uniform Globals {
     ivec3 CameraBlockPos; float GlintAlpha; vec3 CameraOffset; float GameTime; vec2 ScreenSize; int MenuBlurRadius; int UseRgss;

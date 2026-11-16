@@ -9,7 +9,7 @@ import org.spongepowered.asm.mixin.injection.ModifyArg;
 
 /**
  * Why: BLAS builds read MC's terrain vertex heaps in place. Heaps live as long as the SectionRenderDispatcher, so the usage
- * bits are set at creation whenever the device is RT-capable (RAYTRACING.md §2.2). Vertex heaps only (usage 32); index heaps untouched.
+ * bits are set at creation whenever the device is RT-capable. Vertex heaps only (usage 32); index heaps untouched.
  */
 @Mixin(UberGpuBuffer.UberGpuBufferHeap.class)
 public class UberGpuBufferRtMixin {

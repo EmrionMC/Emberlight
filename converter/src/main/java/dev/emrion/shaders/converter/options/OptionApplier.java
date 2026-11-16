@@ -7,7 +7,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Rewrites option lines in source text exactly like Iris (OptionAnnotatedSource.edit, iris-spec §3.3). Line count and
+ * Rewrites option lines in source text exactly like Iris (OptionAnnotatedSource.edit). Line count and
  * positions never change. Every annotated line is edited, using that line's own default.
  */
 public final class OptionApplier {

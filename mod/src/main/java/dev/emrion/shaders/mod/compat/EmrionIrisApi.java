@@ -17,10 +17,8 @@ import net.irisshaders.iris.api.v0.IrisShadowRenderCallback;
 import net.irisshaders.iris.api.v0.IrisTextVertexSink;
 
 /**
- * The Iris API (v0, revision 4 as Iris 1.11.7 for 26.3) backed by {@link PackManager}, for mods that adapt to shaders.
- * Only reachable when Iris is not installed: {@link IrisApiShim} then puts the API classes on the class path and their
- * {@code IrisApiInternal} returns {@link #INSTANCE}. Iris-internal hooks (custom pipeline assignment, shadow-pass
- * callbacks, the text vertex sink) have no equivalent here: they are accepted and ignored, or throw for the sink.
+ * The Iris API (v0, revision 4) backed by {@link PackManager}; only reachable without Iris. Iris-internal hooks are accepted
+ * and ignored, the text vertex sink throws.
  */
 public final class EmrionIrisApi implements IrisApi, IrisApiConfig {
 	// lambdas, not method references: PackManager needs a running game, the unit test builds its own instance
@@ -61,7 +59,7 @@ public final class EmrionIrisApi implements IrisApi, IrisApiConfig {
 
 	@Override
 	public String getMainScreenLanguageKey() {
-		return "key.emrionshaders.packs";
+		return "key.emberlight.packs";
 	}
 
 	@Override
@@ -81,7 +79,7 @@ public final class EmrionIrisApi implements IrisApi, IrisApiConfig {
 
 	@Override
 	public IrisTextVertexSink createTextVertexSink(int maxQuadCount, IntFunction<ByteBuffer> bufferProvider) {
-		throw new UnsupportedOperationException("Emrion Shaders: the Iris text vertex sink is not available (Iris is not installed)");
+		throw new UnsupportedOperationException("Emberlight: the Iris text vertex sink is not available (Iris is not installed)");
 	}
 
 	@Override
@@ -105,6 +103,6 @@ public final class EmrionIrisApi implements IrisApi, IrisApiConfig {
 
 	@Override
 	public boolean isReverseZDuringShaders() {
-		return false; // pack geometry renders forward Z (ARCHITECTURE §4.1), as Iris
+		return false; // pack geometry renders forward Z, as Iris
 	}
 }

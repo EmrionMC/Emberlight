@@ -5,7 +5,7 @@ import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** FORMAT.md texture format names (Iris/GL, after promotion) to MC {@link GpuFormat}s. */
+/** Manifest texture format names (Iris/GL) to MC {@link GpuFormat}s. */
 public final class Formats {
 	private Formats() {}
 
@@ -23,7 +23,7 @@ public final class Formats {
 			case "R11F_G11F_B10F": return GpuFormat.RG11B10_FLOAT;
 			case "RGB10_A2": return GpuFormat.RGB10A2_UNORM;
 			case "RGB10_A2UI": return GpuFormat.RGB10A2_UINT;
-			// shortcut: packed low-precision GL formats get RGBA8 (more precision, same look); exact packing never matters to packs.
+			// shortcut: packed low-precision GL formats get RGBA8 (more precision, same look); map exactly if a pack depends on it
 			case "RGBA2", "RGBA4", "RGB5_A1", "RGB565", "R3_G3_B2": return GpuFormat.RGBA8_UNORM;
 			default:
 		}

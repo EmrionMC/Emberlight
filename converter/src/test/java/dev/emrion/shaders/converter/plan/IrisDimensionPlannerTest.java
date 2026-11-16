@@ -11,7 +11,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class IrisDimensionPlannerTest {
 
-	// ---- flip schedule (iris-spec §2.2) ----
+	// ---- flip schedule ----
 
 	@Test
 	void compositeReadsMainWritesAltThenFlips() {
@@ -225,7 +225,7 @@ class IrisDimensionPlannerTest {
 		assertEquals(List.of(r.binding("composite", "vox").binding()), prog.writesStorage());
 	}
 
-	// ---- resources (iris-spec §2.6) ----
+	// ---- resources ----
 
 	@Test
 	void aliasesResolvePerGroup() {

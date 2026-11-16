@@ -10,8 +10,7 @@ import java.util.Map;
 
 /**
  * Pack-wide const directives of one dimension (render-target formats/clears, shadow settings, …): Iris merges the
- * fragment-stage consts of every enabled program in its directive order, a later program overriding an earlier one
- * (iris-spec §3.4).
+ * fragment-stage consts of every enabled program in its directive order, a later program overriding an earlier one.
  */
 public final class PackConsts {
 	private PackConsts() {}

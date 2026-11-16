@@ -1,11 +1,6 @@
 package dev.emrion.shaders.converter.glsl;
 
-/**
- * Output of the preprocessor for one program stage: options applied, includes inlined, all conditionals resolved,
- * macros expanded. Only #version, #extension and #pragma remain. Comments are stripped from {@code text}.
- * {@code directives} were parsed from the comment-preserving variant (Iris semantics, iris-spec §3.1).
- * Producer: agent (a). Consumer: agent (b) Transpiler.
- */
+/** One preprocessed stage. {@code directives} come from the comment-preserving text (Iris reads them from comments). */
 public record PreprocessedStage(
 		String program,          // e.g. "gbuffers_terrain", "composite1", "shadowcomp"
 		ProgramGroup group,

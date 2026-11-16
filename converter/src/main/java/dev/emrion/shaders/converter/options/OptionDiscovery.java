@@ -10,16 +10,8 @@ import java.util.TreeMap;
 import java.util.function.Consumer;
 
 /**
- * Finds options in all pack sources that Iris loads (every file reachable by #include from a program file), with Iris's
- * rules (iris-spec §3.3, Iris ShaderPackOptions / OptionSet):
- * <ul>
- *   <li>a boolean option ({@code #define} or {@code const bool}) only counts if its name appears in a bare {@code #ifdef NAME}/{@code #ifndef NAME}
- *       line anywhere in the pack (Iris's include graph is one component, so references are pack-wide);</li>
- *   <li>the same name declared again merges if the default is identical; a different default drops the option
- *       ("ambiguous"), and a later declaration starts it again;</li>
- *   <li>when merging, the first declaration with a comment provides the comment.</li>
- * </ul>
- * Files are visited in sorted path order (Iris uses hash order; only the tie-breaking of conflicts depends on it).
+ * Finds options with Iris's rules: a boolean only counts if a bare {@code #ifdef/#ifndef NAME} names it somewhere in the pack;
+ * redeclarations merge if the default matches, otherwise the option is dropped as ambiguous.
  */
 public final class OptionDiscovery {
 	private OptionDiscovery() {}

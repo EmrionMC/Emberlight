@@ -7,31 +7,9 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Iris standard macros (iris-spec §3.5) for a given environment. Owner: agent (a).
- * Values must match what Iris defines on the user's machine (NVIDIA, Linux, MC 26.3) so the pack takes the same branches.
- *
- * <p>Contents of {@link #build}, in Iris order (Iris StandardMacros + IrisDefines):
- * <ul>
- *   <li>MC_VERSION: "26.3" → 260300 (major + 2-digit minor + 2-digit patch).</li>
- *   <li>MC_MIPMAP_LEVEL: 4 (the user's video setting; the mod may override it).</li>
- *   <li>IRIS_VERSION: 11107, the Iris 1.11.7 the user runs (spec read from checkout bff1e69 = 1.11.4). The pack only tests ≥10800 and &lt;11103.</li>
- *   <li>MC_GL_VERSION 460, MC_GLSL_VERSION 460: NVIDIA reports "4.6.0 NVIDIA …" / "4.60 NVIDIA".</li>
- *   <li>MC_OS_LINUX | MC_OS_WINDOWS | MC_OS_MAC | MC_OS_UNKNOWN; MC_GL_VENDOR_* and MC_GL_RENDERER_* by prefix of the
- *       lower-cased vendor/renderer string, exactly Iris's tables.</li>
- *   <li>IS_IRIS, IRIS_REQUIRES_SEPARATE_ENTITY_DRAWS, IRIS_HAS_TRANSLUCENCY_SORTING (empty), MAX_COLOR_BUFFERS 32,
- *       IRIS_TAG_SUPPORT 2.</li>
- *   <li>DH_BLOCK_UNKNOWN 0 … DH_BLOCK_ILLUMINATED 15.</li>
- *   <li>MC_NORMAL_MAP, MC_SPECULAR_MAP (empty), MC_RENDER_QUALITY 1.0, MC_SHADOW_QUALITY 1.0, MC_HAND_DEPTH 0.125.</li>
- *   <li>MC_RENDER_STAGE_&lt;phase&gt; = WorldRenderingPhase ordinal (NONE 0 … HAND_TRANSLUCENT 23).</li>
- *   <li>BIOME_&lt;PATH&gt; = registration index in MC 26.3's Biomes class (THE_VOID 0 … END_BARRENS 66).</li>
- *   <li>CAT_&lt;CATEGORY&gt; = Iris BiomeCategories ordinal (NONE 0 … UNDERGROUND 18); PPT_NONE 0, PPT_RAIN 1, PPT_SNOW 2.</li>
- *   <li>IRIS_FEATURE_&lt;flag&gt; (empty) for every flag in {@link #SUPPORTED_FEATURES}. Iris itself never adds these to
- *       programs unconditionally: {@link DefaultPackLoader} treats them as the "usable flags" set and re-adds them per
- *       Iris rules (all usable flags for shaders.properties, only the pack's optional flags for programs).</li>
- * </ul>
- * Not emitted (environment-dependent, unused by the target pack): MC_GL_&lt;extension&gt; for every GL extension,
- * labPBR texture-format macros, DISTANT_HORIZONS*, IRIS_HAS_CONNECTED_TEXTURES (Iris adds it when Continuity is loaded;
- * callers that want it add it to the map), IS_MONOCLE, ALLOWS_UNKNOWN_SHADERS.
+ * Iris standard macros (StandardMacros + IrisDefines) for a given environment, in Iris order. Values must match Iris on the
+ * same machine so the pack takes the same branches. IRIS_FEATURE_* here are the usable flags; DefaultPackLoader re-adds them
+ * per Iris rules. Environment-dependent macros the target pack does not use (MC_GL_&lt;extension&gt;, DISTANT_HORIZONS*) are left out.
  */
 public final class StandardMacros {
 	private StandardMacros() {}
@@ -43,7 +21,7 @@ public final class StandardMacros {
 	/** Iris 1.11.4 → 1 + 11 + 04. */
 	public static final String IRIS_VERSION = "11107";
 
-	/** Feature flags (iris-spec §4.2) the converter and mod implement. */
+	/** Feature flags the converter and mod implement. */
 	public static final Set<String> SUPPORTED_FEATURES = Set.of(
 			"SEPARATE_HARDWARE_SAMPLERS", "HIGHER_SHADOWCOLOR", "CUSTOM_IMAGES", "PER_BUFFER_BLENDING", "COMPUTE_SHADERS",
 			"ENTITY_TRANSLUCENT", "REVERSED_CULLING", "BLOCK_EMISSION_ATTRIBUTE", "CAN_DISABLE_WEATHER", "SSBO",

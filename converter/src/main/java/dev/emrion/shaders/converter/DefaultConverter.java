@@ -25,6 +25,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -86,7 +87,7 @@ public final class DefaultConverter implements Converter {
 		try (PackSource source = opener.open(request.pack());
 		     ExecutorService pool = Executors.newFixedThreadPool(threads)) {
 			String packHash = source.contentHash();
-			String key = CacheKey.compute(packHash, request.settings(), environment.mcVersion(), environment.macros(), request.dimensions(), request.rt());
+			String key = CacheKey.compute(packHash, request.settings(), environment.mcVersion(), environment.macros(), request.dimensions(), request.rt(), request.sodium());
 			if (request.useCache()) {
 				Result hit = cached(request.cacheRoot().resolve(key), key);
 				if (hit != null) return hit;
@@ -142,10 +143,12 @@ public final class DefaultConverter implements Converter {
 		Result execute() throws IOException {
 			ResolvedPack pack = loader.load(source, request.settings(), environment.macros(), diagnostics);
 			Manifest.Rt rt = null;
-			if (!request.rt().isEmpty()) { // RT variant (RAYTRACING.md §3.2); an empty set never gets here
+			List<String> rtFrees = List.of();
+			if (!request.rt().isEmpty()) { // RT variant; an empty set never gets here
 				var patched = dev.emrion.shaders.converter.glsl.RtPatcher.apply(pack, request.rt());
 				pack = patched.pack();
 				rt = patched.rt();
+				rtFrees = patched.frees();
 				diagnostics.addAll(patched.diagnostics());
 			}
 			progress.progress("load", 1, 1);
@@ -154,6 +157,11 @@ public final class DefaultConverter implements Converter {
 			int[] failed = {0};
 
 			Map<String, Map<String, Transpiler.ProgramAnalysis>> analyses = analyse(pack, dims, failed);
+			if (!rtFrees.isEmpty()) {
+				List<Diagnostic> d = new java.util.ArrayList<>();
+				pack = dev.emrion.shaders.converter.glsl.RtPatcher.free(pack, rtFrees, analyses, d);
+				diagnostics.addAll(d);
+			}
 			progress.progress("plan", 0, dims.size());
 			Manifest.UniformLayout layout = layoutBuilder.build(
 					analyses.values().stream().flatMap(m -> m.values().stream()).toList(), custom, diagnostics);
@@ -170,6 +178,16 @@ public final class DefaultConverter implements Converter {
 
 			List<StageJob> jobs = emit(plans, analyses);
 			Path tmp = CacheDir.begin(request.cacheRoot(), key);
+			try {
+				return writeOutput(pack, plans, jobs, layout, rt, failed, tmp);
+			} catch (IOException | RuntimeException e) {
+				CacheDir.deleteRecursively(tmp); // failed or cancelled (interrupted): nothing stays behind
+				throw e;
+			}
+		}
+
+		Result writeOutput(ResolvedPack pack, Map<String, DimensionPlanner.DimensionPlan> plans, List<StageJob> jobs, Manifest.UniformLayout layout, Manifest.Rt rt,
+		             int[] failed, Path tmp) throws IOException {
 			List<StageResult> results = compile(jobs, tmp);
 			progress.progress("write", 0, 1);
 
@@ -203,7 +221,7 @@ public final class DefaultConverter implements Converter {
 			var anyDim = new TreeMap<>(pack.dimensions()).firstEntry();
 			if (anyDim != null) {
 				var consts = dev.emrion.shaders.converter.pack.PackConsts.merge(anyDim.getValue());
-				for (String k : List.of("wetnessHalflife", "drynessHalflife", "eyeBrightnessHalflife", "centerDepthHalflife"))
+				for (String k : List.of("wetnessHalflife", "drynessHalflife", "eyeBrightnessHalflife", "centerDepthHalflife", "ambientOcclusionLevel"))
 					if (consts.containsKey(k)) {
 						try { out.put(k, Double.parseDouble(consts.get(k).replaceAll("[fF]$", ""))); }
 						catch (NumberFormatException ignored) { /* Iris skips unparsable const values too */ }
@@ -272,18 +290,31 @@ public final class DefaultConverter implements Converter {
 			for (var plan : plans.entrySet())
 				for (var program : new TreeMap<>(plan.getValue().emits()).entrySet()) {
 					List<String> variants = program.getValue().vertexVariants();
+					// Sodium draws every chunk mesh that vanilla would draw with terrain_mdi
+					if (request.sodium() && variants != null && variants.contains("terrain_mdi"))
+						variants = java.util.stream.Stream.concat(variants.stream(), java.util.stream.Stream.of("terrain_sodium")).toList();
 					if (variants == null || variants.isEmpty()) emits.add(new Emit(plan.getKey(), program.getKey(), null, true));
 					else for (int i = 0; i < variants.size(); i++) emits.add(new Emit(plan.getKey(), program.getKey(), variants.get(i), i == 0));
 				}
-			List<Transpiler.EmitResult> results = parallel(emits.stream().<Callable<Transpiler.EmitResult>>map(e -> () -> {
+			// one task per program: the transpiler parses it once for all its variants
+			List<List<Emit>> programs = new ArrayList<>();
+			for (Emit e : emits) {
+				if (e.first()) programs.add(new ArrayList<>());
+				programs.getLast().add(e);
+			}
+			List<Transpiler.EmitResult> results = new ArrayList<>();
+			for (var rs : parallel(programs.stream().<Callable<List<Transpiler.EmitResult>>>map(es -> () -> {
+				Emit e = es.getFirst();
 				var analysis = analyses.get(e.dim()).get(e.program());
-				if (analysis == null) return null;
+				List<String> variants = new ArrayList<>();
+				es.forEach(x -> variants.add(x.variant()));
+				if (analysis == null) return java.util.Collections.nCopies(es.size(), null);
 				try {
-					return transpiler.emit(analysis, plans.get(e.dim()).emits().get(e.program()).context(), e.variant());
+					return transpiler.emitVariants(analysis, plans.get(e.dim()).emits().get(e.program()).context(), variants);
 				} catch (RuntimeException ex) {
-					return new Transpiler.EmitResult(Map.of(), List.of(Diagnostic.error(null, 0, "transpiler crashed: " + ex)));
+					return java.util.Collections.nCopies(es.size(), new Transpiler.EmitResult(Map.of(), List.of(Diagnostic.error(null, 0, "transpiler crashed: " + ex))));
 				}
-			}).toList());
+			}).toList())) results.addAll(rs);
 
 			List<StageJob> jobs = new ArrayList<>();
 			for (int i = 0; i < emits.size(); i++) {
@@ -314,7 +345,14 @@ public final class DefaultConverter implements Converter {
 		List<StageResult> compile(List<StageJob> jobs, Path tmp) throws IOException {
 			AtomicInteger done = new AtomicInteger();
 			progress.progress("compile", 0, jobs.size());
-			List<StageResult> results = parallel(jobs.stream().<Callable<StageResult>>map(job -> () -> {
+			// identical (stage, source) compiles once; a copy reuses its SPIR-V when that compile was clean (diagnostics name the job)
+			Map<String, StageJob> firsts = new HashMap<>();
+			List<StageJob> unique = new ArrayList<>(), copies = new ArrayList<>();
+			for (StageJob job : jobs) {
+				if (job.glsl() == null || firsts.putIfAbsent(job.stage() + "\0" + job.glsl(), job) == null) unique.add(job);
+				else copies.add(job);
+			}
+			java.util.function.Function<StageJob, Callable<StageResult>> compileJob = job -> () -> {
 				try {
 					if (job.glsl() == null) return new StageResult(job, null, List.of());
 					var r = compiler.compile(job.baseName(), job.glsl(), job.stage(), srcLines(job.srcPath(), job.source()));
@@ -325,12 +363,25 @@ public final class DefaultConverter implements Converter {
 				} finally {
 					progress.progress("compile", done.incrementAndGet(), jobs.size());
 				}
-			}).toList());
+			};
+			Map<StageJob, StageResult> byJob = new java.util.IdentityHashMap<>();
+			for (StageResult r : parallel(unique.stream().map(compileJob).toList())) byJob.put(r.job(), r);
+			List<StageJob> recompile = new ArrayList<>();
+			for (StageJob job : copies) {
+				StageResult first = byJob.get(firsts.get(job.stage() + "\0" + job.glsl()));
+				if (first.spv() == null || !first.diagnostics().isEmpty()) recompile.add(job);
+				else {
+					byJob.put(job, new StageResult(job, first.spv(), List.of()));
+					progress.progress("compile", done.incrementAndGet(), jobs.size());
+				}
+			}
+			for (StageResult r : parallel(recompile.stream().map(compileJob).toList())) byJob.put(r.job(), r);
+			List<StageResult> results = jobs.stream().map(byJob::get).toList();
 			for (StageResult r : results) {
 				diagnostics.addAll(r.diagnostics());
 				StageJob job = r.job();
-				if (job.glsl() != null) write(tmp.resolve(job.srcPath()), job.glsl().getBytes(StandardCharsets.UTF_8));
-				if (r.spv() != null) write(tmp.resolve(job.spvPath()), r.spv());
+				if (job.glsl() != null) write(tmp, job.srcPath(), job.glsl().getBytes(StandardCharsets.UTF_8));
+				if (r.spv() != null) write(tmp, job.spvPath(), r.spv());
 			}
 			return results;
 		}
@@ -364,7 +415,7 @@ public final class DefaultConverter implements Converter {
 						continue;
 					}
 				}
-				write(tmp.resolve(file), data);
+				write(tmp, file, data);
 				String filter = t.filter(), wrap = t.wrap();
 				// Iris applies the PNG's .mcmeta ("texture": {"blur", "clamp"}) to custom textures.
 				var mcmeta = source.readString(t.file() + ".mcmeta");
@@ -413,7 +464,11 @@ public final class DefaultConverter implements Converter {
 		};
 	}
 
-	private static void write(Path file, byte[] bytes) throws IOException {
+	/** {@code rel} holds pack-chosen names (dimension folders, texture names): it must not lead out of the output dir. */
+	private static void write(Path dir, String rel, byte[] bytes) throws IOException {
+		dir = dir.toAbsolutePath().normalize();
+		Path file = dir.resolve(rel).normalize();
+		if (!file.startsWith(dir) || file.equals(dir)) throw new IOException("output path leaves the cache dir: " + rel);
 		Files.createDirectories(file.getParent());
 		Files.write(file, bytes);
 	}

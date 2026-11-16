@@ -12,18 +12,8 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * C-style preprocessor with the observable behaviour of JCPP 1.4.14 as Iris drives it (iris-spec §3.1):
- * environment macros are predefined (not written into the source), comments are kept, active {@code #version} and
- * {@code #extension} lines are hoisted to the top in order of appearance, and every other directive is consumed.
- * Includes are expanded beforehand by {@link IncludeExpander} (Iris does that textually, too).
- *
- * <p>One pass produces two texts: {@link Result#text()} without comments and {@link Result#textWithComments()}.
- * Both keep the body on the same line as the source: output line {@code hoisted.size() + k} is source line {@code k}.
- *
- * <p>JCPP behaviours reproduced: {@code #pragma} and {@code #line} lines are dropped; {@code #error}, unknown
- * directives and bad {@code #if} expressions are only logged (here: warnings) and evaluation continues with "false";
- * {@code __LINE__} is the physical line of the include-expanded text; {@code __FILE__} is {@code "<no file>"};
- * only a literal {@code #version}/{@code #extension} (no space after '#') is hoisted, Iris finds them by text replace.
+ * C preprocessor with the observable behaviour of JCPP 1.4.14 as Iris drives it: #version/#extension hoisted, other directives
+ * consumed, errors only logged. Output keeps source lines aligned (line {@code hoisted.size() + k} is source line {@code k}).
  */
 public final class Preprocessor {
 	/** PROPERTIES: no hoisting, unknown directives are silent (in .properties '#' starts a comment). */
@@ -70,6 +60,16 @@ public final class Preprocessor {
 	private int plainLines, commentedLines;
 	private int counter;
 	private PpLexer lexer;
+	/** Tokens all macro expansions may still produce (exponential macro chains); see {@link #EXPANSION_BUDGET}. */
+	private long budget = EXPANSION_BUDGET;
+	/** The last emitted token ended where an expansion began or ended: a following token must not merge with it. */
+	private boolean boundary;
+	private PpToken last;
+
+	/** Per run: the most any stage of the 20 test packs needs is under 7,000 tokens; bounds time and output (tens of MB). */
+	static final long EXPANSION_BUDGET = 5_000_000;
+	/** Zero-width space around expansion results: {@link #emit} keeps the tokens on both sides apart ({@code 1.0-BIAS}). */
+	private static final PpToken BOUNDARY = new PpToken(Kind.WS, "", 0, Set.of(), false);
 
 	private Preprocessor(Mode mode, Map<String, String> predefined) {
 		this.mode = mode;
@@ -129,6 +129,8 @@ public final class Preprocessor {
 	}
 
 	private void emit(PpToken t) {
+		PpToken prev = last;
+		if (!t.text().isEmpty()) last = t;
 		switch (t.kind()) {
 			case COMMENT -> {
 				commented.append(t.text());
@@ -145,10 +147,28 @@ public final class Preprocessor {
 			case PLACEMARKER -> {
 			}
 			default -> {
+				if (t.text().isEmpty()) { // BOUNDARY
+					boundary = true;
+					return;
+				}
+				if (boundary && prev != null && merges(prev, t)) {
+					plain.append(' ');
+					commented.append(' ');
+				}
+				boundary = false;
 				plain.append(t.text());
 				commented.append(t.text());
 			}
 		}
+	}
+
+	/** Written next to each other, GLSL would lex the two tokens differently (as one word or one longer operator). */
+	static boolean merges(PpToken a, PpToken b) {
+		char x = a.text().charAt(a.text().length() - 1), y = b.text().charAt(0);
+		if (a.kind() == Kind.IDENT || a.kind() == Kind.NUMBER) return PpLexer.isIdentPart(y) || a.kind() == Kind.NUMBER && y == '.';
+		if (x == '.') return Character.isDigit(y);
+		return a.kind() == Kind.PUNCT && b.kind() == Kind.PUNCT && Set.of("++", "--", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<", ">>", "<=", ">=", "==",
+				"!=", "&&", "||", "^^", "//", "/*", "*/").contains("" + x + y);
 	}
 
 	private static int count(String s) {
@@ -313,7 +333,7 @@ public final class Preprocessor {
 				PpToken p = rest.get(k);
 				if (p.kind() == Kind.IDENT) params.add(p.text());
 				else if (!p.is(",")) {
-					// shortcut: variadic macros are not supported (GLSL has none); upgrade if a pack needs __VA_ARGS__.
+					// shortcut: no variadic macros (GLSL has none), add if a pack needs __VA_ARGS__
 					warn(line, "Unsupported macro parameter '" + p.text() + "' in #define " + name);
 					return;
 				}
@@ -406,6 +426,7 @@ public final class Preprocessor {
 		}
 		Macro m = macros.get(name);
 		if (m == null || t.hide().contains(name)) return false;
+		if (budget < 0) return false; // exhausted: the rest stays unexpanded (and fails to compile) instead of hanging
 		if (!m.function()) {
 			src.pushFront(substitute(m, null, union(t.hide(), name)));
 			return true;
@@ -487,15 +508,22 @@ public final class Preprocessor {
 				if (arg.isEmpty()) out.add(new PpToken(Kind.PLACEMARKER, "", b.line(), Set.of(), false));
 				else out.addAll(arg);
 			} else {
+				out.add(BOUNDARY);
 				out.addAll(expandList(arg));
+				out.add(BOUNDARY);
 			}
 		}
 		List<PpToken> pasted = paste(out);
-		List<PpToken> result = new ArrayList<>(pasted.size());
+		List<PpToken> result = new ArrayList<>(pasted.size() + 2);
+		result.add(BOUNDARY);
 		for (PpToken t : pasted) {
 			if (t.kind() == Kind.PLACEMARKER) continue;
 			result.add(t.withHide(t.hide().isEmpty() ? hs : unionAll(t.hide(), hs)));
 		}
+		result.add(BOUNDARY);
+		budget -= result.size();
+		if (budget < 0 && budget + result.size() >= 0)
+			warn(lexer == null ? 0 : lexer.line(), "Macro expansion exceeds " + EXPANSION_BUDGET + " tokens (recursive macro chain?); the rest stays unexpanded");
 		return result;
 	}
 

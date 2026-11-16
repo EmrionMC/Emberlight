@@ -15,11 +15,7 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.SequencedMap;
 
-/**
- * The Iris settings file {@code shaderpacks/<pack>.txt} (iris-spec §7): java.util.Properties, ISO-8859-1. Iris writes it
- * with {@code Properties.store(out, null)}, which on current JDKs emits a date comment and the keys in sorted order;
- * using the same call keeps our files byte-compatible with Iris (apart from the date).
- */
+/** The Iris settings file {@code <pack>.txt}, written with Properties.store like Iris so files stay byte-compatible. */
 public final class IrisSettings {
 	private IrisSettings() {}
 
@@ -54,11 +50,7 @@ public final class IrisSettings {
 		}
 	}
 
-	/**
-	 * What Iris keeps in the file for these option values: every declared option whose value differs from its default
-	 * (booleans only as exactly "true"/"false", strings unchecked). Keys of {@code existing} that match no declared option
-	 * are kept as they are: Iris itself drops them on its next load, but we never lose a user's entry.
-	 */
+	/** The non-default options, as Iris stores them; unknown keys of {@code existing} are kept (Iris drops them). */
 	public static Map<String, String> nonDefault(List<Manifest.OptionDecl> declared, Map<String, String> values, Map<String, String> existing) {
 		Map<String, String> out = new LinkedHashMap<>();
 		java.util.Set<String> known = new java.util.HashSet<>();
@@ -75,10 +67,7 @@ public final class IrisSettings {
 		return out;
 	}
 
-	/**
-	 * Writes {@code settings} like Iris unless the file already holds exactly these pairs, so an unchanged file stays
-	 * byte-identical (Iris would rewrite it with a new date line). Returns whether the file was written or deleted.
-	 */
+	/** Writes like Iris unless the file already holds exactly these pairs, so unchanged files keep their date line. */
 	public static boolean update(Path file, Map<String, String> settings) throws IOException {
 		if (Files.exists(file) ? read(file).equals(settings) : settings.isEmpty()) return false;
 		write(file, settings);

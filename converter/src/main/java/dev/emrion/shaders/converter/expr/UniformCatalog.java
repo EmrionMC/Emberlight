@@ -8,16 +8,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 
-/**
- * Catalogue of every Iris built-in uniform (iris-spec §5): name → GLSL type and update frequency.
- * Used by the converter (is a pack uniform built-in? which type?) and the expression type checker.
- * Owner: agent (e).
- *
- * <p>Source of truth is Iris {@code CommonUniforms.addNonDynamicUniforms/addDynamicUniforms} and the classes they call.
- * Frequencies follow Iris (once / per_tick / per_frame); Iris "dynamic" uniforms become per_draw (push constants) or
- * per_phase (EmrionPhase block). Not listed: Sodium/vanilla internals registered via externallyManagedUniform
- * ({@code iris_ModelViewMatrix}, {@code u_RegionOffset}, …), which no pack declares.
- */
+/** Every Iris built-in uniform with GLSL type and update frequency, following Iris CommonUniforms. */
 public final class UniformCatalog {
 	private UniformCatalog() {}
 
@@ -209,12 +200,7 @@ public final class UniformCatalog {
 		return Collections.unmodifiableCollection(BY_NAME.values());
 	}
 
-	/**
-	 * Built-ins a custom-uniform expression may reference: Iris builds the expression inputs from
-	 * {@code CommonUniforms.addNonDynamicUniforms} only, so fog*, entityId, atlasSize, renderStage, blendFunc, … are
-	 * unknown variables there. entityColor/blockEntityId/currentRenderedItemId are inputs with their Iris ONCE
-	 * values (vec4(0), -1, -1), not the per-draw values.
-	 */
+	/** Built-ins a custom-uniform expression may use: only Iris's non-dynamic uniforms, the per-draw ids at their ONCE values. */
 	public static Set<String> expressionInputs() {
 		return Collections.unmodifiableSet(INPUTS);
 	}

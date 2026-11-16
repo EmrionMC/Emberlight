@@ -1,0 +1,25 @@
+{
+  "required": true,
+  "package": "dev.emrion.shaders.mod.mixin.sodium",
+  "plugin": "dev.emrion.shaders.mod.compat.sodium.SodiumMixinPlugin",
+  "compatibilityLevel": "JAVA_25",
+  "client": [
+    "ArenaAggregatorRtMixin",
+    "BlockRendererMixin",
+    "ChunkBuilderMeshingTaskMixin",
+    "ChunkMeshFormatsMixin",
+    "ChunkVertexMixin",
+    "DefaultChunkRendererMixin",
+    "DefaultFluidRendererMixin",
+    "ExtendedBufferBuilderMixin",
+    "RenderRegionManagerMixin",
+    "RenderSectionManagerMixin",
+    "SectionRenderDataStorageAccessor",
+    "SectionRenderDataStorageMixin",
+    "ShaderChunkRendererMixin",
+    "SodiumWorldRendererAccessor",
+    "SodiumWorldRendererMixin",
+    "VKMultiDrawBatchMixin"
+  ],
+  "injectors": { "defaultRequire": 1 }
+}

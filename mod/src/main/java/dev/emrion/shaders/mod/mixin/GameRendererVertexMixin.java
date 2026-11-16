@@ -17,10 +17,12 @@ public class GameRendererVertexMixin {
 	private FeatureRenderDispatcher.PreparedFrame emrion$extendEntities(FeatureRenderDispatcher dispatcher, SubmitNodeStorage storage,
 			Operation<FeatureRenderDispatcher.PreparedFrame> original) {
 		EntityIds.extending = EmrionVertexFormats.entitiesActive();
+		dev.emrion.shaders.mod.upscale.ObjectMotion.begin(false);
 		try {
 			return original.call(dispatcher, storage);
 		} finally {
 			EntityIds.extending = false;
+			dev.emrion.shaders.mod.upscale.ObjectMotion.end();
 		}
 	}
 }

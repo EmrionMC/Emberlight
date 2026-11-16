@@ -4,18 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Untyped parser for the Iris custom-uniform expression language, behaving like kroppeb stareval's bottom-up
- * operator-precedence parser with IrisOptions (iris-spec §4.3). Quirks kept on purpose:
- * <ul>
- *   <li>Binary priorities: {@code * / %} (0) &lt; {@code + -} (1) &lt; comparisons (2) &lt; <b>{@code && ||} share level 3</b>;
- *       all left-associative, so {@code a || b && c} is {@code (a || b) && c}. Unary {@code - !} bind tighter than any binary.</li>
- *   <li>No unary {@code +}. {@code ≠ ≤ ≥} are accepted.</li>
- *   <li>Member access ({@code .x}) only applies to identifiers or other accesses, never to calls or brackets.
- *       The accessor is a whole word ({@code .xy} is a single accessor and later fails as an unknown function).</li>
- *   <li>Anything followed by {@code (} directly after an identifier is a call, even with spaces ({@code f (x)}).
- *       Calls allow a trailing comma; plain brackets do not.</li>
- *   <li>Number tokens are {@code [0-9.][0-9.a-zA-Z]*}; {@code 1e-5} therefore fails.</li>
- * </ul>
+ * Parser for the Iris custom-uniform expression language, quirks of stareval kept: {@code && ||} share one priority
+ * (so {@code a || b && c} is {@code (a || b) && c}), no unary {@code +}, and {@code 1e-5} is not a number.
  */
 final class ExprParser {
 	private ExprParser() {}

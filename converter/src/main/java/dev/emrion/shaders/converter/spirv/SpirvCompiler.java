@@ -8,7 +8,8 @@ import java.util.List;
 
 /**
  * GLSL 450 → SPIR-V via lwjgl-shaderc (target Vulkan 1.2 / SPIR-V 1.5, optimisation level "performance").
- * Owner: agent (c). Must be thread-safe (pool shaderc compilers like MC's GlslCompiler does).
+ * Must be thread-safe (pool shaderc compilers like MC's GlslCompiler does).
+
  */
 public interface SpirvCompiler extends AutoCloseable {
 

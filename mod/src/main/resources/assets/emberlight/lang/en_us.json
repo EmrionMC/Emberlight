@@ -1,0 +1,10 @@
+{
+  "key.emberlight.packs": "Shader Packs",
+  "key.emberlight.profiler": "Profiler Overlay (ms per pass)",
+  "key.emberlight.reload": "Reload Shader Pack",
+  "key.emberlight.toggle": "Toggle Shaders",
+  "key.emberlight.wireframe": "Wireframe (debug mode, singleplayer)",
+  "key.category.emberlight.main": "Emberlight",
+  "key.emberlight.rt": "Toggle ray tracing (Emberlight RT)",
+  "key.emberlight.snapshot": "Debug Snapshot (position, settings, screenshot)"
+}

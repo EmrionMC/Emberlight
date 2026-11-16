@@ -23,13 +23,14 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /** Parses every custom uniform/variable of the real target shaders.properties (Unbound r5.9.3 + Euphoria 1.10.5). */
 class TargetPackTest {
-	/** complementary-features.md §3.2: custom uniforms live in Overworld programs. */
+	/** custom uniforms live in Overworld programs. */
 	static final List<String> OVERWORLD_LIVE = List.of("framemod2", "framemod8", "eyeBrightnessM", "eyeBrightnessM2",
 			"frameTimeSmooth", "rainFactor", "thunderFactor", "inDry", "inRainy", "inSnowy", "inNetherWastes", "inCrimsonForest",
 			"inWarpedForest", "inBasaltDeltas", "inSoulValley", "inPaleGarden", "inSulfurCaves", "inVanillaEnd",
 			"maxBlindnessDarkness", "starter", "worldAgeSmooth");
 
-	/** Environment for the throwaway preprocessing below (the real one is agent (a)'s). */
+	/** Environment for the throwaway preprocessing below. */
+
 	static final Map<String, String> DEFINES = Map.of("IRIS_VERSION", "11200", "MC_VERSION", "260300", "IS_IRIS", "",
 			"MC_OS_LINUX", "", "SMOOTH_WORLD_ANIMATIONS", "", "RAIN_FADE_TIMER", "3");
 
@@ -41,7 +42,7 @@ class TargetPackTest {
 	static void load() throws IOException {
 		Path base = Path.of(System.getProperty("emrion.testpacks", "testpacks"));
 		Path file = base.resolve("unbound-euphoria/shaders/shaders.properties");
-		if (!Files.exists(file)) file = Path.of("../testpacks/unbound-euphoria/shaders/shaders.properties");
+		if (!Files.exists(file)) file = Path.of(System.getProperty("emrion.testpacks", "../testpacks"), "unbound-euphoria/shaders/shaders.properties");
 		assumeTrue(Files.exists(file), "target pack not available");
 		props = preprocess(Files.readAllLines(file));
 		uniforms = CustomUniformParser.parse(props, diagnostics);

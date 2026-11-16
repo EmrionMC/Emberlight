@@ -4,12 +4,7 @@ import dev.emrion.shaders.format.Manifest;
 
 import java.nio.ByteBuffer;
 
-/**
- * Seam between the frame executor (agent d2) and the uniform providers (agent u).
- * Fills the std140 blocks described by {@link Manifest.UniformLayout} (FORMAT.md §6).
- * All matrices are in GL convention (ARCHITECTURE §4.1 step 8 / §5.2): projection = C·P_mc with z' = w − 2z.
- * Render thread only; must not allocate per frame.
- */
+/** Fills the std140 uniform blocks. Matrices are in GL convention; render thread only, no per-frame allocation. */
 public interface UniformSystem {
 
 	/** Iris render phases that change the EmrionPhase block. renderStage ordinals are set per draw group via {@link #setRenderStage}. */

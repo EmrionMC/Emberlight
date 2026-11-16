@@ -15,10 +15,8 @@ import java.util.Map;
 import java.util.function.Function;
 
 /**
- * Type resolution exactly like stareval's ExpressionResolver: the expected type flows top-down from the declared
- * uniform type, overloads are tried first without implicit casts, then through a final int→float cast, then with
- * implicit casts on the arguments. That decides e.g. that {@code frameCounter % 2} as a float is an int remainder cast
- * to float, and that {@code 1/2} is a float division. Produces the typed JSON AST of FORMAT.md §6.1.
+ * Type resolution like stareval's ExpressionResolver: expected type flows top-down; overloads are tried without casts, then
+ * with a final int→float cast, then with argument casts. Produces the typed JSON AST.
  */
 final class Resolver {
 	static final class ResolveException extends RuntimeException {

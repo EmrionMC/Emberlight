@@ -14,7 +14,7 @@ import static dev.emrion.shaders.converter.plan.PlannerTestSupport.plan;
 import static dev.emrion.shaders.converter.plan.PlannerTestSupport.props;
 import static org.junit.jupiter.api.Assertions.*;
 
-/** Complementary Unbound r5.9.3 + EP 1.10.5, world0, user settings: inputs from docs/research/complementary-features.md §1-§5. */
+/** Complementary Unbound r5.9.3 + EP 1.10.5, world0, target settings: inputs from docs/research/complementary-features.md. */
 class ComplementaryWorld0PlanTest {
 
 	/** lib/pipelineSettings.glsl + lib/common.glsl consts, included by every program. */
@@ -128,7 +128,7 @@ class ComplementaryWorld0PlanTest {
 	@Test
 	void flipSchedule() {
 		var r = run();
-		// Iris toggles every draw buffer of every composite-like pass (iris-spec §2.2), so every written buffer needs an alt
+		// Iris toggles every draw buffer of every composite-like pass, so every written buffer needs an alt
 		// image; the buffers read and written within one pass (0, 2, 3, 5, plus 1, 4, 7) all ping-pong.
 		Set<Integer> alt = new TreeSet<>();
 		for (var t : r.dim().targets()) if (t.hasAlt()) alt.add(Integer.parseInt(t.name().substring(8)));

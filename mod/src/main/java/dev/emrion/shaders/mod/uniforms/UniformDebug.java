@@ -18,12 +18,7 @@ import net.minecraft.client.Minecraft;
 import org.joml.Matrix4f;
 import org.joml.Vector4f;
 
-/**
- * {@code -Demrion.debug.uniforms=true}: runs an {@link IrisUniformSystem} next to vanilla rendering and logs every
- * built-in once after {@code emrion.debug.uniforms.frames} (default 600) world frames, plus sanity checks.
- * {@code -Demrion.debug.uniforms.manifest=<manifest.json>} uses a converted pack's layout and custom uniforms
- * (dimension world0) instead of a synthetic layout with every block built-in.
- */
+/** {@code -Demrion.debug.uniforms=true}: logs every built-in once next to vanilla rendering, plus sanity checks. */
 public final class UniformDebug {
 	public static final boolean ENABLED = Boolean.getBoolean("emrion.debug.uniforms");
 	private static final int FRAMES = Integer.getInteger("emrion.debug.uniforms.frames", 600);

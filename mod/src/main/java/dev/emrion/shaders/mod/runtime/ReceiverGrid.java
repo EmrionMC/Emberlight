@@ -10,7 +10,7 @@ import org.joml.Matrix4fc;
  * Boxes are camera-relative; light space is the shadow model-view rotation (view +Z points towards the light).
  */
 public final class ReceiverGrid {
-	/** User option "Shadow culling" ({@code perf.shadowReceivers}): off, outside (only outside the voxel volume), all. */
+	/** Option "Shadow culling" ({@code perf.shadowReceivers}): off, outside (only outside the voxel volume), all. */
 	public static final List<String> MODES = List.of("off", "outside", "all");
 	public static volatile String mode = "all";
 

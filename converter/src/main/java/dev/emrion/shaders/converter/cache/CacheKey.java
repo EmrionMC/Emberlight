@@ -5,7 +5,6 @@ import dev.emrion.shaders.format.Manifest;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -14,7 +13,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
-/** cacheKey of FORMAT.md §1: first 24 hex chars of sha256(converterVersion ‖ formatVersion ‖ pack hash ‖ settings ‖ environment). */
+/** Cache key: first 24 hex chars of sha256(converterVersion ‖ formatVersion ‖ pack hash ‖ settings ‖ environment). */
 public final class CacheKey {
 	private CacheKey() {}
 
@@ -27,34 +26,42 @@ public final class CacheKey {
 		return compute(packHash, settingsFile, mcVersion, macros, dimensions, java.util.Set.of());
 	}
 
-	/** @param rt RT effects of the request; only a non-empty set adds to the key, so RT off keeps today's key and directory */
 	public static String compute(String packHash, Path settingsFile, String mcVersion, Map<String, String> macros,
 	                             List<String> dimensions, java.util.Set<String> rt) throws IOException {
+		return compute(packHash, settingsFile, mcVersion, macros, dimensions, rt, false);
+	}
+
+	/**
+	 * @param rt     RT effects of the request; only a non-empty set adds to the key, so RT off keeps the plain key
+	 * @param sodium only true adds to the key (same reason)
+	 */
+	public static String compute(String packHash, Path settingsFile, String mcVersion, Map<String, String> macros,
+	                             List<String> dimensions, java.util.Set<String> rt, boolean sodium) throws IOException {
 		StringBuilder env = new StringBuilder("mc=").append(mcVersion).append('\n');
 		new TreeMap<>(macros).forEach((k, v) -> env.append(k).append('=').append(v).append('\n'));
 		if (dimensions != null && !dimensions.isEmpty())
 			env.append("dimensions=").append(String.join(",", dimensions.stream().sorted().toList())).append('\n');
 		if (!rt.isEmpty()) env.append("rt=").append(String.join(",", rt.stream().sorted().toList())).append('\n')
 				.append("rtTables=").append(dev.emrion.shaders.converter.rt.RtPatchTable.fingerprint()).append('\n'); // RT bodies change without a VERSION bump
+		if (sodium) env.append("sodium=").append(Converter.SODIUM_VARIANT).append('\n');
 		return sha256(String.join("\0", Converter.VERSION, Integer.toString(Manifest.FORMAT_VERSION), packHash,
 				normaliseSettings(settingsFile), env)).substring(0, 24);
 	}
 
-	/** key=value lines trimmed and sorted by key; blank and '#' lines dropped, so reordering or comments do not invalidate. */
+	/**
+	 * The settings as the converter parses them (Properties, like Iris), sorted by key, so reordering or comments do not
+	 * invalidate but a value the parser keeps different (a trailing space) does. Backslash-escaped so no two maps collide.
+	 */
 	static String normaliseSettings(Path settingsFile) throws IOException {
 		if (settingsFile == null) return "";
-		// ISO-8859-1 never fails to decode; Iris reads the file the same way.
-		TreeMap<String, String> entries = new TreeMap<>();
-		for (String raw : Files.readAllLines(settingsFile, StandardCharsets.ISO_8859_1)) {
-			String line = raw.strip();
-			if (line.isEmpty() || line.startsWith("#")) continue;
-			int eq = line.indexOf('=');
-			if (eq < 0) entries.put(line, "");
-			else entries.put(line.substring(0, eq).strip(), line.substring(eq + 1).strip());
-		}
 		StringBuilder sb = new StringBuilder();
-		entries.forEach((k, v) -> sb.append(k).append('=').append(v).append('\n'));
+		new TreeMap<>(dev.emrion.shaders.converter.options.IrisSettings.read(settingsFile))
+				.forEach((k, v) -> sb.append(escape(k).replace("=", "\\=")).append('=').append(escape(v)).append('\n'));
 		return sb.toString();
+	}
+
+	private static String escape(String s) {
+		return s.replace("\\", "\\\\").replace("\n", "\\n");
 	}
 
 	private static String sha256(String s) {

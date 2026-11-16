@@ -8,9 +8,8 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Rewrites set-0 {@code Binding} decorations in SPIR-V from placeholder indices (into {@code placeholders}, normally
- * {@code VertexLayouts.SET0_CANONICAL}) to the index of that name in the replaced vanilla pipeline's {@code uniforms()}
- * list, which is the binding MC pushes it at (FORMAT.md §7.1). Parses OpDecorate itself; no spvc needed.
+ * Rewrites set-0 bindings in SPIR-V from placeholder indices to the index of that name in the vanilla pipeline's
+ * {@code uniforms()} list, which is the binding MC pushes it at.
  */
 public final class Set0Patcher {
 	private static final int MAGIC = 0x07230203;

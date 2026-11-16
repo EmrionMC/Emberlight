@@ -1,5 +1,5 @@
 #version 460
-// RT-1 debug view (-Demrion.rt.debug=true): traces the TLAS from the camera, writes face normals faded by distance.
+// RT debug view (-Demrion.rt.debug=true): traces the TLAS from the camera, writes face normals faded by distance.
 // Cutout/translucent candidates are alpha-tested against the block atlas (cutoff 0.1, mip 0) like the pack's cutout.
 #extension GL_EXT_ray_query : require
 #extension GL_EXT_buffer_reference : require

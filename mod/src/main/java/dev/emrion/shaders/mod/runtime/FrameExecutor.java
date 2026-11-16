@@ -39,8 +39,8 @@ import org.lwjgl.vulkan.VkRect2D;
 import org.lwjgl.vulkan.VkViewport;
 
 /**
- * Runs a dimension's {@code once} and {@code frame} commands (FORMAT §7.4) on a {@link PackRuntime}, in plan order, split at
- * the {@code geometry} phases that MC's own draw code renders (ARCHITECTURE §5.5):
+ * Runs a dimension's {@code once} and {@code frame} commands on a {@link PackRuntime}, in plan order, split at the
+ * {@code geometry} phases that MC's own draw code renders:
  * <ul>
  *   <li>{@link #levelStart} (LevelRenderer.render HEAD): uniforms, {@code once}, every command before the first world phase;</li>
  *   <li>{@link #advanceTo} (from the hooks, outside MC render passes): the raw commands up to a phase, then the hook opens
@@ -53,11 +53,11 @@ import org.lwjgl.vulkan.VkViewport;
  * {@link dev.emrion.shaders.mod.vk.RawCommands#submit} fences everything, including the vertex-stage image/SSBO stores.
  */
 public final class FrameExecutor {
-	/** A/B switches for the benchmark (docs/BENCHMARK.md); both on by default. */
+	/** A/B switches for benchmarking; both on by default. */
 	private static final boolean DEFER_CLEARS = !"false".equals(System.getProperty("emrion.perf.deferClears")),
 			COMPUTE_CLEARS = !"false".equals(System.getProperty("emrion.perf.computeClears"));
 	private static final long SHADER_STAGES = VK_PIPELINE_STAGE_2_PRE_RASTERIZATION_SHADERS_BIT | FRAGMENT; // VS, TCS, TES, GS
-	/** Iris WorldRenderingPhase ordinals have 24 entries (iris-spec §1.4). */
+	/** Iris WorldRenderingPhase has 24 ordinals. */
 	private static final int STAGES = 24;
 	/** EmrionPhase blocks per frame at most: FULLSCREEN plus every (WORLD/HAND/SHADOW, renderStage). */
 	public static final int PHASE_BLOCKS = 1 + 3 * STAGES;
@@ -76,6 +76,8 @@ public final class FrameExecutor {
 	/** Frame-start clears of raw images moved behind their last use in the frame (see {@link DeferredClears}). */
 	private final DeferredClears deferred;
 	private boolean firstFrame = true;
+	/** The RT AO pass ran this frame (it runs once, before the first pass that samples emrion_rtao). */
+	private boolean aoDone;
 
 	/** Next frame command to run; -1 outside a level render. */
 	private int cursor = -1;
@@ -132,6 +134,12 @@ public final class FrameExecutor {
 		long t = Profiler.cpuStart(), raw = Profiler.rawSoFar();
 		ShadowPass.render(this, level);
 		Profiler.shadowEnd(t, raw);
+		var rtScene = dev.emrion.shaders.mod.rt.RtScene.get();
+		if (rtScene != null) {
+			VkCommandBuffer cb = begin();
+			rtScene.refreshEntities(cb);
+			RawCommands.submit(rt.ctx, cb);
+		}
 	}
 
 	/** True if this dimension's plan draws a shadow pass (Iris then turns off vanilla entity shadows). */
@@ -149,6 +157,7 @@ public final class FrameExecutor {
 		uniforms.beginFrame(partialTick);
 		rt.ring.nextFrame();
 		for (int[] p : phaseOffsets) java.util.Arrays.fill(p, -1);
+		aoDone = false;
 		var layout = rt.manifest.uniforms();
 		long frameOffset = rt.ring.alloc(layout.size());
 		uniforms.writeFrameBlock(MemoryUtil.memByteBuffer(rt.ring.address(frameOffset), layout.size()).order(java.nio.ByteOrder.nativeOrder()));
@@ -186,7 +195,7 @@ public final class FrameExecutor {
 		int i = 0;
 		for (; i < dim.frame().size() && !dim.frame().get(i).cmd().equals("geometry"); i++) {
 			deferredClears(cb, i);
-			run(cb, dim.frame().get(i));
+			if (!rt.skip[i]) run(cb, dim.frame().get(i));
 			Profiler.mark(cb, frameLabels[i]);
 		}
 		cursor = i;
@@ -230,6 +239,7 @@ public final class FrameExecutor {
 			deferredClears(cb, dim.frame().size());
 			RawCommands.submit(rt.ctx, cb);
 		}
+		rt.swapFlippedTargets();
 		cursor = -1;
 		firstFrame = false;
 	}
@@ -245,7 +255,7 @@ public final class FrameExecutor {
 				Profiler.mark(cb, "MC (between our passes)");
 			}
 			deferredClears(cb, i);
-			run(cb, c);
+			if (!rt.skip[i]) run(cb, c);
 			Profiler.mark(cb, frameLabels[i]);
 		}
 		if (cb != null) RawCommands.submit(rt.ctx, cb);
@@ -256,7 +266,7 @@ public final class FrameExecutor {
 
 	/**
 	 * Opens the gbuffers render pass of a geometry command: every gbuffers target on the side the command's flip state reads
-	 * (gbuffers write the read side, iris-spec §2.2), plus depthtex0; in the SHADOW context the shadowcolor targets (main)
+	 * (gbuffers write the read side, as Iris), plus depthtex0; in the SHADOW context the shadowcolor targets (main)
 	 * plus shadowtex0. MC draws into it; the swap picks {@code ctx}'s pipelines.
 	 * The caller binds MC's default uniforms if MC does not, closes the pass and calls {@link #endPhase}.
 	 */
@@ -268,13 +278,43 @@ public final class FrameExecutor {
 		for (String t : pp.gbuffers.targets(ctx)) d.withColorAttachment((shadow ? rt.image(t, "main") : rt.read(t, flip)).attachView);
 		d.withDepthAttachment(rt.image(shadow ? "shadowtex0" : "depthtex0", "main").attachView);
 		RenderPass pass = RenderSystem.getDevice().createCommandEncoder().createRenderPass(d.build());
+		groupFlip = flip;
+		group = 0;
+		GeometryHooks.attachmentGroups = !shadow && pp.gbuffers.groups.size() > 1;
 		GeometryPipelines.set = rt.sets[g.flipState()];
 		this.context = ctx;
 		this.phase = phase;
 		this.stage = -1;
 		setStage(stage);
 		phaseLabel = frameLabels[dim.frame().indexOf(g)];
+		dev.emrion.shaders.mod.debug.TerrainStats.phase = phaseLabel;
 		return pass;
+	}
+
+	private Manifest.FlipState groupFlip;
+	private int group;
+
+	/**
+	 * Before {@code p} is set in the open gbuffers pass whose attachments come in groups: if {@code p} draws into another group,
+	 * ends the rendering on {@code cb} and resumes it with that group's attachments (same depth, contents loaded). Returns the
+	 * new attachment list for MC's pass, or null if nothing changed.
+	 */
+	public @Nullable List<RenderPassDescriptor.Attachment<java.util.Optional<Vector4fc>>> switchGroup(VkCommandBuffer cb,
+			com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline p) {
+		int g = pp.gbuffers.group(p);
+		if (g < 0 || g == group) return null;
+		group = g;
+		var d = RenderPassDescriptor.builder(() -> "emrion group");
+		for (String t : pp.gbuffers.groups.get(g)) d.withColorAttachment(rt.read(t, groupFlip).attachView);
+		var views = d.build().colorAttachments();
+		var depth = (VulkanGpuTextureView) rt.image("depthtex0", "main").attachView;
+		RawPass.end(cb);
+		// attachment writes of one rendering instance are not ordered against the next one's without a barrier
+		memory(cb, COLOR_OUT | DEPTH, COLOR_WRITE | DEPTH_WRITE, COLOR_OUT | DEPTH,
+				COLOR_READ | COLOR_WRITE | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | DEPTH_WRITE);
+		RawPass.resume(cb, depth.getWidth(0), depth.getHeight(0), depth.vkImageView(),
+				views.stream().mapToLong(a -> ((VulkanGpuTextureView) a.textureView()).vkImageView()).toArray());
+		return views;
 	}
 
 	/** The draw context of the open phase (which pipelines the swap returns); null outside a phase. */
@@ -299,6 +339,7 @@ public final class FrameExecutor {
 		if (context == null) return;
 		context = null;
 		GeometryPipelines.unbind();
+		GeometryHooks.attachmentGroups = false;
 		Profiler.mark(phaseLabel);
 	}
 
@@ -320,6 +361,11 @@ public final class FrameExecutor {
 	// ---- commands ------------------------------------------------------------------------------------------------------
 
 	private void run(VkCommandBuffer cb, Manifest.Command c) {
+		if (rt.rtAo != null && !aoDone && c.program() != null && readsRtAo(dim.programs().get(c.program()), c.flipState())) {
+			rt.rtAo.dispatch(cb, hazards, rt.image("depthtex0", "main"), rt.atlasView(), uniforms.gbufferProjection(), uniforms.gbufferModelView(),
+					rt.upscaler != null && rt.upscaler.rayReconstruction());
+			aoDone = true;
+		}
 		switch (c.cmd()) {
 			case "geometry" -> { return; } // drawn by MC through the hooks (advanceTo / beginPhase)
 			case "clear" -> clear(cb, firstFrame ? c.targets() : deferred.start().getOrDefault(c, c.targets()));
@@ -327,10 +373,18 @@ public final class FrameExecutor {
 			case "fullscreen" -> fullscreen(cb, c);
 			case "final" -> finalPass(cb, c);
 			case "mipmaps" -> mipmaps(cb, rt.image(c.target(), c.side()));
-			case "copy" -> copy(cb, rt.image(c.target(), c.from()), rt.image(c.target(), c.to()));
+			case "copy" -> {
+				if (!rt.swapped.contains(c.target())) copy(cb, rt.image(c.target(), c.from()), rt.image(c.target(), c.to()));
+			}
 			case "copy_depth" -> copy(cb, rt.image(c.from(), "main"), rt.image(c.to(), "main"));
 			default -> throw new IllegalStateException("unknown frame command " + c.cmd());
 		}
+	}
+
+	private boolean readsRtAo(Manifest.Program p, int flip) {
+		var res = rt.bindingResource[flip];
+		for (int b : p.set1()) if (b < res.length && res[b] == rt.rtAo.output) return true;
+		return false;
 	}
 
 	private static String label(Manifest.Command c) {
@@ -414,7 +468,7 @@ public final class FrameExecutor {
 
 	private void bindSet(VkCommandBuffer cb, int bindPoint, int flip) {
 		try (MemoryStack stack = MemoryStack.stackPush()) {
-			vkCmdBindDescriptorSets(cb, bindPoint, pp.layout, 1, stack.longs(rt.sets[flip]), stack.ints(dynamicOffsets));
+			vkCmdBindDescriptorSets(cb, bindPoint, pp.layout, 1, stack.longs(setOverride != 0 ? setOverride : rt.sets[flip]), stack.ints(dynamicOffsets));
 		}
 	}
 
@@ -459,16 +513,82 @@ public final class FrameExecutor {
 	}
 
 	private void finalPass(VkCommandBuffer cb, Manifest.Command c) {
+		if (rt.upscaler != null) upscale(cb);
+		if (dev.emrion.shaders.mod.framegen.FrameGenConfig.mode != dev.emrion.shaders.mod.framegen.FrameGenConfig.Mode.OFF) { // inputs for frame generation
+			var depth = rt.image("depthtex0", "main");
+			dev.emrion.shaders.mod.framegen.FrameGen.capture(rt.width, rt.height, depth.image, depth.sampled, depth.vkFormat,
+					rt.upscaler != null ? rt.upscaler.mv : null, uniforms.gbufferModelView());
+		}
 		if (c.program() == null) { // no final program: Iris copies colortex0's read side to the screen
-			blit(cb, rt.read("colortex0", rt.flipState(c.flipState())), mcColor);
+			blit(cb, rt.upscaler != null ? rt.upscaled : rt.read("colortex0", rt.flipState(c.flipState())), mcColor);
 			return;
 		}
 		var p = dim.programs().get(c.program());
 		declareSet1(p, c.flipState(), SHADER_STAGES);
 		hazards.write(mcColor, COLOR_OUT, COLOR_WRITE);
+		if (rt.upscaler == null) {
+			hazards.flush(cb);
+			draw(cb, p, c.program(), c.flipState(), mcColor.width, mcColor.height, mcColor.attach);
+			return;
+		}
+		hazards.read(rt.upscaled, FRAGMENT, SAMPLED_READ);
 		hazards.flush(cb);
-		draw(cb, p, c.program(), c.flipState(), mcColor.width, mcColor.height, mcColor.attach);
+		// final at window size: its own set (the cut target -> upscaled image) and frame block (window-size viewWidth/viewHeight)
+		int frame = dynamicOffsets[0];
+		dynamicOffsets[0] = finalFrameBlock(frame);
+		setOverride = rt.finalSet;
+		try {
+			draw(cb, p, c.program(), c.flipState(), mcColor.width, mcColor.height, mcColor.attach);
+		} finally {
+			setOverride = 0;
+			dynamicOffsets[0] = frame;
+		}
 	}
+
+	/** Motion vectors and FSR/DLSS from the cut target (render size) to rt.upscaled (window size). */
+	private void upscale(VkCommandBuffer cb) {
+		var depth = rt.image("depthtex0", "main");
+		var behind = rt.image("depthtex1", "main"); // null when the pack never reads depthtex1
+		if (behind == null) behind = depth;
+		hazards.read(rt.upscaleInput, COMPUTE, SAMPLED_READ);
+		hazards.read(depth, COMPUTE, SAMPLED_READ);
+		if (behind != depth) hazards.read(behind, COMPUTE, SAMPLED_READ);
+		if (rt.masks != null) hazards.read(rt.masks, COMPUTE, SAMPLED_READ);
+		var rrNormal = rt.rrFlip == null ? null : rt.read("colortex4", rt.rrFlip);
+		var rrMaterial = rt.rrFlip == null ? null : rt.read("colortex6", rt.rrFlip);
+		if (rrNormal != null) {
+			hazards.read(rrNormal, COMPUTE, SAMPLED_READ);
+			hazards.read(rrMaterial, COMPUTE, SAMPLED_READ);
+		}
+		hazards.write(rt.upscaled, COMPUTE, STORAGE_WRITE);
+		hazards.flush(cb);
+		rt.upscaler.dispatch(cb, rt.upscaleInput.image, rt.upscaleInput.sampled, rt.upscaleInput.vkFormat, depth.image, depth.sampled, behind.sampled,
+				uniforms.gbufferModelView(), rt.masks == null ? null
+						: new dev.emrion.shaders.mod.upscale.Upscaler.Masks(rt.masks.image, rt.masks.vkFormat, rt.masks.sampled, rt.compositionMask),
+				!rt.upscaler.rayReconstruction() ? null : new dev.emrion.shaders.mod.upscale.Upscaler.RrInputs(rt.atlasView(),
+						rrNormal != null ? rrNormal.sampled : 0, rrMaterial != null ? rrMaterial.sampled : 0, rrNormal != null,
+						uniforms.gbufferProjection(), uniforms.gbufferModelView()));
+		Profiler.mark(cb, "upscale");
+	}
+
+	/** A copy of this frame's uniform block with viewWidth/viewHeight/iris_ScreenSize at the window size; returns its ring offset. */
+	private int finalFrameBlock(int frameOffset) {
+		var layout = rt.manifest.uniforms();
+		long o = rt.ring.alloc(layout.size());
+		MemoryUtil.memCopy(rt.ring.address(frameOffset), rt.ring.address(o), layout.size());
+		var b = MemoryUtil.memByteBuffer(rt.ring.address(o), layout.size()).order(java.nio.ByteOrder.nativeOrder());
+		for (var m : layout.members()) {
+			switch (m.name()) {
+				case "viewWidth" -> b.putFloat(m.offset(), rt.displayWidth);
+				case "viewHeight" -> b.putFloat(m.offset(), rt.displayHeight);
+				case "iris_ScreenSize" -> b.putFloat(m.offset(), rt.displayWidth).putFloat(m.offset() + 4, rt.displayHeight);
+				default -> {}
+			}
+		}
+		return (int) o;
+	}
+
+	private long setOverride;
 
 	private void draw(VkCommandBuffer cb, Manifest.Program p, String program, int flip, int w, int h, long... views) {
 		RawPass.begin(cb, w, h, views);
@@ -487,7 +607,7 @@ public final class FrameExecutor {
 		}
 		vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pp.pipelines.get(program));
 		bindSet(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, flip);
-		vkCmdDraw(cb, 3, 1, 0, 0);
+		vkCmdDraw(cb, 6, 1, 0, 0); // a quad as in Iris: packs reshape it from its 0..1 UVs (Shrimple's bloom tiles)
 		RawPass.end(cb);
 	}
 
@@ -512,6 +632,11 @@ public final class FrameExecutor {
 	/** Full mip chain by successive linear blits (nearest for integer formats), level i-1 → i. */
 	private void mipmaps(VkCommandBuffer cb, PackRuntime.Img img) {
 		if (img == null || img.mips <= 1) return;
+		Long areaPipeline = img.isDepth || BLIT_MIPS ? null : pp.mip.get(img.vkFormat);
+		if (areaPipeline != null && img.tex != null) {
+			areaMipmaps(cb, img, areaPipeline);
+			return;
+		}
 		hazards.write(img, TRANSFER, TRANSFER_READ | TRANSFER_WRITE);
 		hazards.flush(cb);
 		int aspect = img.isDepth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
@@ -526,6 +651,25 @@ public final class FrameExecutor {
 				region.dstOffsets(1).set(Math.max(1, img.width >> level), Math.max(1, img.height >> level), 1);
 				vkCmdBlitImage(cb, img.image, VK_IMAGE_LAYOUT_GENERAL, img.image, VK_IMAGE_LAYOUT_GENERAL, region, filter);
 			}
+		}
+	}
+
+	/** -Demrion.perf.blitMips=true: the old vkCmdBlitImage chain (A/B timing; wrong on odd sizes). */
+	private static final boolean BLIT_MIPS = Boolean.getBoolean("emrion.perf.blitMips");
+
+	/** Mip chain with glGenerateMipmap's box filter over each texel's full footprint (odd sizes included), level i-1 -> i. */
+	private void areaMipmaps(VkCommandBuffer cb, PackRuntime.Img img, long pipeline) {
+		hazards.write(img, COLOR_OUT | FRAGMENT, COLOR_WRITE | SAMPLED_READ);
+		hazards.flush(cb);
+		for (int level = 1; level < img.mips; level++) {
+			if (level > 1) memory(cb, COLOR_OUT, COLOR_WRITE, FRAGMENT, SAMPLED_READ); // previous level written
+			int w = Math.max(1, img.width >> level), h = Math.max(1, img.height >> level);
+			RawPass.begin(cb, w, h, img.levelView(level));
+			vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+			RawPass.pushImages(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pp.helperLayout, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, rt.nearestSampler(),
+					img.levelView(level - 1));
+			vkCmdDraw(cb, 3, 1, 0, 0);
+			RawPass.end(cb);
 		}
 	}
 

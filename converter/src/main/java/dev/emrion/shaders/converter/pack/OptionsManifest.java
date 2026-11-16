@@ -12,7 +12,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-/** Builds FORMAT.md §4 {@link Manifest.Options}. */
+/** Builds the manifest's {@link Manifest.Options}. */
 final class OptionsManifest {
 	private OptionsManifest() {}
 

@@ -5,7 +5,7 @@ import dev.emrion.shaders.converter.expr.UniformCatalog;
 import java.util.Map;
 import java.util.Optional;
 
-/** Fallback built-in table for tests until agent (e)'s UniformCatalog is merged (iris-spec §5 subset). */
+/** Small built-in uniform table for tests (a subset of Iris's built-ins). */
 final class TestCatalog {
 	private TestCatalog() {}
 

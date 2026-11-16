@@ -1,0 +1,1 @@
+dark  | 0.5 -57 51.5 0 30 | 18000 | clear | fill -4 -61 49 4 -54 59 minecraft:stone_bricks hollow; setblock 0 -60 57 minecraft:torch; setblock 0 -60 55 minecraft:cobblestone; setblock 2 -60 57 minecraft:cobblestone

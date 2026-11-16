@@ -10,13 +10,9 @@ import java.util.Set;
 import java.util.function.Predicate;
 
 /**
- * Moves the frame-start clears of raw images (voxel volumes and other custom images) behind the image's last use in the
- * frame: from the second frame on they are cleared right after that use in the previous frame. Nothing touches the image in
- * between, so every access sees the same zeroed contents, but the clear (≈0.4 ms for the 160 MB of voxel images of the
- * target pack) no longer serialises the frame start: it runs inside the composite command buffer, where precise barriers
- * let it overlap the following passes. It goes after the first shader pass behind any transfers (mipmaps, copies) that
- * follow the last use, because that pass's barrier waits for the transfer stage and so would wait for the clear too. An image no command ever touches needs no clear after the first frame.
- * Only images a clear command zeroes before any access qualify, and only when no other clear in the frame touches them.
+ * Moves frame-start clears of raw images (voxel volumes etc.) to right after the image's last use in the previous frame, so
+ * the clear overlaps later passes instead of serialising the frame start. Only images cleared before any access and touched
+ * by no other clear qualify.
  */
 record DeferredClears(Map<Manifest.Command, List<Manifest.ClearOp>> start, List<Manifest.ClearOp>[] before) {
 	private static final Set<String> TRANSFERS = Set.of("mipmaps", "copy", "copy_depth", "clear");
@@ -43,6 +39,7 @@ record DeferredClears(Map<Manifest.Command, List<Manifest.ClearOp>> start, List<
 				if (at < frame.size() && TRANSFERS.contains(frame.get(at).cmd())) {
 					while (at < frame.size() && TRANSFERS.contains(frame.get(at).cmd())) at++;
 					if (at < frame.size() && !frame.get(at).cmd().equals("geometry")) at++;
+					while (at < frame.size() && frame.get(at).cmd().equals("geometry")) at++; // runRange never runs clears at geometry
 				}
 				if (before[at] == null) before[at] = new ArrayList<>();
 				before[at].add(op);

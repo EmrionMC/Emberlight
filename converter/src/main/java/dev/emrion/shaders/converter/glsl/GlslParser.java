@@ -6,11 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
-/**
- * Light structural parse (ARCHITECTURE §4.1): splits a token stream into global-scope items (directives, function
- * definitions with body ranges, prototypes, declarations with qualifiers/type/declarators, interface blocks).
- * Expressions and statements are not parsed; rewriters work on token ranges.
- */
+/** Light structural parse into global-scope items; expressions and statements are not parsed, rewriters work on token ranges. */
 public final class GlslParser {
 	private GlslParser() {}
 

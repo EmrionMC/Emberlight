@@ -11,16 +11,8 @@ import java.util.Random;
 import static dev.emrion.shaders.converter.expr.Type.*;
 
 /**
- * The Iris function table (IrisFunctions + stareval casts), used by the type resolver (signatures, priorities,
- * constant parameters) and by the runtime (implementations). Registration order matters for overload ambiguity and
- * mirrors Iris. Values are Java float/int/boolean exactly like stareval's FunctionReturn.
- *
- * <p>Reproduced quirks: n-ary {@code min/max} (3..16 args) evaluate {@code args[1]} instead of {@code args[i]}, so
- * they only look at the first two; {@code &&}/{@code ||} do not short-circuit; the multi-branch {@code if} evaluates
- * the else value after every false condition; float-vector operators (JOML) write into one buffer per overload that
- * all call sites share, so {@code (a+b)+(c+d)} sees the aliased value Iris sees.
- * Not reproduced: the vector {@code equal(...)} functions (registered twice with the same signature in Iris, so every
- * call is ambiguous and fails anyway); integer division by zero / randomInt(0) return 0 instead of throwing.
+ * The Iris function table (IrisFunctions + stareval casts); registration order mirrors Iris for overload ambiguity. Iris
+ * quirks kept: n-ary {@code min/max} only look at the first two args, {@code && ||} do not short-circuit, vector ops alias.
  */
 final class Functions {
 	private Functions() {}
@@ -587,10 +579,7 @@ final class Functions {
 		add(new Fn("smooth", FLOAT, params, constant, priority, (a, c) -> { throw new IllegalStateException("smooth"); }));
 	}
 
-	/**
-	 * Iris SmoothFloat: exponential smoothing with Δt = frameTime. A fade time t becomes the half-life 0.1·t seconds,
-	 * decay k = ln2 / halfLife; 0 means "jump". The first value is taken as is.
-	 */
+	/** Iris SmoothFloat: half-life = 0.1 × fade time, Δt = frameTime; 0 jumps, the first value is taken as is. */
 	static final class SmoothState {
 		private static final double LN_OF_2 = Math.log(2.0);
 		float accumulator;

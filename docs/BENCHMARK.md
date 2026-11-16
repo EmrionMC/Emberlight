@@ -2,7 +2,7 @@
 
 The acceptance criterion is: **looks the same as Iris on OpenGL, with more FPS**, for *Complementary Unbound r5.9.3 +
 Euphoria Patches 1.10.5* with the user's settings file. This page explains how to render the same scenes with the real
-Iris + Sodium on OpenGL (the reference) and with Emrion Shaders on Vulkan, how to compare them, and how to benchmark.
+Iris + Sodium on OpenGL (the reference) and with Emberlight on Vulkan, how to compare them, and how to benchmark.
 It also lists the baseline numbers.
 
 ## Inputs shared by both runs
@@ -75,6 +75,32 @@ Format: `name | x y z yaw pitch | time | weather | commands`. For each scene the
 runs the commands and waits for the sections again (a `summon` or `setblock` in a chunk that is not loaded yet fails without
 an error, which left the entities scene empty before 2026-11-13), removes every entity without the tag `emrion` (worldgen animals wander differently in every run),
 waits 5 s and 200 frames so TAA and other temporal effects settle, hides HUD/F3/screens, and takes the screenshot.
+
+**Fast mode (default since 2026-11-14, `-Demrion.autotest.fast=false` for the old fixed waits):** instead of the 8 s chunk
+wait and the 5 s / 200-frame settle, a scene is shot as soon as every chunk within render distance - 1 is on the client, all
+sections are built, and the image has converged: a 1/8-size readback per tick, compared with one at least 250 ms and 24 frames
+older, has a mean absolute RGB difference below `-Demrion.autotest.converge.threshold` (0.4) five ticks in a row. The old
+waits stay as the upper bound. A script step `settle [MAX_S]` does the same between script steps (`-Demrion.autotest.fastwait=true`
+also ends `wait N` early). `-Demrion.autotest.configs=off:rtset enabled=false|gi:rtset enabled=true,gi=medium` renders every
+scene once per configuration in one game start (`<tag>-<scene>-<config>.png`); `-Demrion.autotest.bench.seconds=S` shortens
+every bench. Each bench also logs the spread of 0.5 s windows (`Benchmark spread: ... avg +- X at 95%`), and the run ends with
+`Autotest timing:`, the harness time per phase. `runClient` shares one VkPipelineCache across all checkouts
+(`~/.cache/emberlight-dev`, `-PpipelineCacheDir=` for the run dir's own), sets `inactivityFpsLimit:minimized` (the default
+`afk` caps an unattended game at 30 FPS after one minute), and syncs the comparison world with rsync instead of a full copy.
+
+Measured (5 scenes x 3 RT configurations + 5 benches, 2026-11-14): old harness 3 starts of ~95 s plus a 134 s bench run
+(~425 s), fast harness one start of 94 s. Screenshots match the old ones within run-to-run noise (MAE 0.3-0.7 for off and RT
+shadows); RT GI in overview/forest differed by MAE 1.1-1.3 (floor 0.7-1.6): its slow accumulation can pass the threshold early,
+so use a lower threshold or a longer `settle` for GI comparisons.
+
+**Packs with temporal effects** (TAA history, bloom fed into TAA, auto exposure, time-smoothed uniforms) do not converge to
+the same image in two renderers that run at different frame rates: the convergence check can pass at different points of a
+slow drift. For those, `-Demrion.autotest.settle.exactFrames=300` shoots exactly 300 rendered frames after the chunks are ready and rain and thunder
+have finished fading (game ticks, so a fast renderer would otherwise shoot mid-fade),
+`-Demrion.autotest.frameTime=0.016666668` pins `frameTime` (and with it every smoothed uniform and custom `smooth()`) in both
+runs, and `-Demrion.autotest.shots=3` adds `<scene>-s2`/`-s3` shots `shotGap` (8) frames apart; `compare_scenes.py` compares
+their per-pixel median. Shrimple, two run pairs: each renderer repeats itself within MAE 0.6-0.8 (overview) and ~3
+(entities, waving leaves); without the pinning the same pack drifted by 5-10 % between runs.
 
 | Scene | Position (x y z yaw pitch) | Time | Weather | What it covers |
 |---|---|---|---|---|
@@ -155,6 +181,101 @@ references; the layer reported nothing, also nothing alive at exit):
 
 Entities is above the floor only through the chicken's wing flap (entity animation time is not pinned).
 
+## Debug snapshots, the test server and replay
+
+### Taking a snapshot (in game)
+
+Press **F9** (rebindable: Controls > Emberlight > Debug Snapshot; vanilla 26.3 leaves F9 free) or type
+`/emberlight snapshot`. Emberlight writes `<gameDir>/emberlight/snapshots/<yyyy-MM-dd_HH-mm-ss>/` with
+`screenshot.png` (what is on screen, HUD included unless F1 hid it) and `snapshot.json`. It copies a one-line summary and
+the folder path to the clipboard and puts "Snapshot saved (F9)" in chat (click the folder name to open it). It costs
+nothing until it is used.
+
+`snapshot.json`:
+
+| Section | Fields |
+|---|---|
+| `player` | `x y z` (exact doubles), `yaw pitch bodyYaw eyeY`, `gameMode`, `flying`, `underwater`, `eyeBlockLight eyeSkyLight`, `selectedSlot`, `mainHand offHand hotbar[9]` (as `id[components] count`, the form `/item replace` takes), `effects[]` (`id amplifier duration`, -1 = infinite), `target` (block under the crosshair: `pos face state`) |
+| `world` | `name` (save folder, or the server entry's name), `levelName`, `seed` (singleplayer), `server` (address, multiplayer), `dimension`, `biome` |
+| `time` | `dayTime` (default clock, day count included), `gameTime`, `moonPhase` |
+| `weather` | `state` (clear/rain/thunder), `rain thunder` (levels 0-1) |
+| `options` | `camera` (FIRST_PERSON, THIRD_PERSON_BACK/FRONT), `fov fovEffectScale bobView gamma renderDistance effectiveRenderDistance guiScale hudHidden`, `windowWidth/Height framebufferWidth/Height fullscreen` |
+| `pack` | `name enabled running`, `settings` (the `shaderpacks/<pack>.txt` values in effect) |
+| `emberlight` | the whole `config/emberlight.properties` with the live RT, upscaling and frame generation values on top (`rt.*`, `upscale.*`, `framegen.*`, `pack`, `perf.*`, `profiler.*`, ...) |
+| `system` | `gpu vendor driver backend`, `fps` (rendered) and `presentedFps` (with frame generation), `os java`, `mods` (id: version), `lastHitches` (the last 20 lines of `logs/emberlight-hitches.log`) |
+
+### The test world and the test server
+
+The test world is seed 2026 (the harness seed, normal terrain, a river at 468 64 468) with test areas built by
+`mod/tools/testworld/build.sh` (commands from `build_commands.py`, the optional torch hall from a `torch_hall.schem` you supply). Signs mark each
+area; `/function emberlight:<spot>` teleports there (`/function emberlight:help` lists them); `README.txt` in the world folder lists them too.
+
+| Spot | Teleport | What |
+|---|---|---|
+| `spawn` | 580.5 65 590.5 | the test pad, sign board |
+| `hall` | 332.5 -39 324.5 180 20 | a torch hall (optional schematic), underground, as in the harness hall scene |
+| `shaft` | 402.5 -38.4 405.3 180 52 | white concrete shaft with glowstone and a fence post, open to the sky (face-direction shadow bug) |
+| `overhang` | 512.5 66 528.5 180 10 | white and red concrete platform on pillars in sunlight |
+| `river` | 552.5 68 540.5 180 25 | stepped riverbed (1-5 deep), NoAI squids, glow squid and cod, gold block 5 deep at 552 59 528, plank platform, stained glass, boats on water and land |
+| `clock` | 599.5 66 520.5 180 15 | observer clock driving a crafter and a lamp, torches and wall torches |
+| `armour` / `armour_front` | 620.5 66 520.5 180 5 / 620.5 66 502.5 0 5 | enchanted armour and sword on an armour stand behind a stone brick wall |
+| `lava` | 640.5 69 523.5 180 35 | lava pit: a pool of sources and lava flowing down from the rim |
+| `portals` | 622.5 67 572.5 180 10 | Nether portal, End portal (full frame), End gateway |
+| `nether` | Nether 0.5 64 -10.5 0 20 | closed netherrack room with lava, glowstone, shroomlight, lanterns (as the harness Nether scene) |
+| `end` | End 100.5 49 0.5 90 0 | obsidian platform facing the main island (entering the End starts the dragon fight) |
+
+Without `/function`: `/execute in minecraft:the_nether run tp @s 0.5 64 -10.5 0 20` and so on.
+
+It is hosted by a local test server: Fabric 26.3 (Fabric API, WorldEdit 7.4.6), reachable on **127.0.0.1:25570 only**
+(offline mode, so it must never be reachable from outside; whitelist your own account and the offline test account, both
+op). If the server runs on another machine, forward the port with an SSH tunnel. The server is not part of the repo.
+
+Suggested server settings: low priority (`nice 10`), `-Xms1G -Xmx2G`, pause ticking after 60 s without players. Builds
+made on that server are what the harness tests, so it always sees the current state of that world.
+
+### Harness on the server
+
+`-Pserver=127.0.0.1:25570` makes `runClient` join the server as an offline test player (`-PtestUsername`, default `EmbTest`)
+instead of opening a singleplayer world. Commands go through chat as that op player; `@a` in scene and script commands
+becomes `@s`, and the harness never kills entities there (it does in singleplayer). At the end it sets
+`advance_time`/`advance_weather` back to true and the player to creative. Scene commands that `fill` or `summon` change
+the shared world: use them only in empty areas. `join` reconnects. Do not run a test while another game client is running on the same GPU.
+
+```sh
+./gradlew :mod:runClient -Pcompare -Pserver=127.0.0.1:25570 "-Demrion.autotest.pos=512.5 66 528.5 180 10" -Demrion.autotest.quit=true
+```
+
+### Replay: the `snapshot` step
+
+`snapshot FILE` (a script step) recreates a snapshot: `execute in <dimension> run tp` to the exact pose (pinned every
+tick, so no gravity or drift), game mode, day time (moon phase included), weather and the exact rain/thunder levels
+(held on the client), effects, hotbar, offhand and selected slot, camera mode, FOV, FOV effects, bobbing, gamma, render distance, GUI scale,
+HUD hidden, window size; it writes the snapshot's Emberlight config (`rt.*`, upscaler, frame generation, ...) and pack
+settings and reloads the pack (the snapshot's pack if this run has it, else the current one with those settings), waits
+for the swap and for the image to settle, and shoots `<tag>-snapshot-<folder>.png`.
+
+Where: `-Demrion.autotest.world`/`-Pserver` win. Without them the snapshot picks: a snapshot taken on a local server
+(127.x/localhost, i.e. the test server) joins that server; otherwise the singleplayer save of the same
+name in `mod/run/saves`, or a new world from the snapshot's seed (same terrain, but trees and builds differ, see Inputs).
+From another server or world everything but the terrain is restored. A snapshot step adds `--username` with the test player name.
+
+```sh
+./gradlew :mod:runClient -Pcompare "-Demrion.autotest.script=snapshot /path/to/snapshots/2026-11-15_12-00-00/snapshot.json" -Demrion.autotest.quit=true
+```
+
+Check (2026-11-15, Complementary Unbound + Euphoria, RT off, frameTimeCounter 100, 1920x1080): F9 in one run, the
+`snapshot` step in a fresh run, `screenshot.png` against the replay shot:
+
+| Where | MAE | SSIM |
+|---|---|---|
+| singleplayer `scenes`, river at 64.5 70 110.5 | 0.45 | 0.996 |
+| (same run, scene shot vs snapshot shot: the noise floor) | 0.43 | 0.996 |
+| test server, `overhang` | 0.34 | 0.997 |
+| test server, `river` (the NoAI squid and cod still bob) | 0.59 | 0.991 |
+
+Not reproduced: entity and particle state, animation phase (pin it with `-Demrion.autotest.frameTimeCounter`), the
+nausea/portal skew (`nausea` step), the view-bob phase (`bob` step), and startup-only config keys.
+
 ## Benchmark with Iris + Sodium
 
 ### In the dev environment
@@ -171,7 +292,7 @@ frame-to-frame times at the `overview` position (render distance 16), writes a C
 3. Video settings: render distance 16, vsync off, max framerate unlimited. Window 1920×1080 (or fullscreen; note which).
 4. Wait about 15 s for the chunks, then read FPS from F3 or a frame-time tool (for example MangoHud with
    `MANGOHUD_CONFIG=log_duration=30` and its avg / 1% low) for 30 s.
-5. Do the same in the Vulkan build with Emrion Shaders (Options > Video > Graphics API: Prefer Vulkan) and the same pack.
+5. Do the same in the Vulkan build with Emberlight (Options > Video > Graphics API: Prefer Vulkan) and the same pack.
 
 The full instance has more mods and a 256x resource pack, so its numbers differ from the dev runs. Compare like with like.
 
@@ -181,7 +302,7 @@ Hardware: AMD Ryzen 7 5800X3D, NVIDIA RTX 4070 Ti (driver 615.78), Linux 7.2 (Ar
 Sodium 0.9.3-beta.1, MC 26.3 dev environment, 1920×1080, render distance 16, scene `overview`, 30 s, the user's settings.
 Each side was run 3 times, interleaved (Iris, Emrion, Iris, …), same world and settings.
 
-**Measure only on an otherwise idle GPU.** A second game instance (another agent's scene run, even one still loading)
+**Measure only on an otherwise idle GPU.** A second game instance (even one still loading)
 cut Emrion from ≈ 131 to 57–98 FPS and Iris from 75 to 36–64 FPS in our first attempts. Runs that overlapped another
 game JVM during the 30 s window were discarded and repeated.
 
@@ -272,7 +393,9 @@ less than Iris against itself (overview 0.40/0.996, cave 0.42/0.997, night 0.23/
 | F7 (*Profiler Overlay*) | ms per pass and the CPU breakdown, averaged over 0.5 s, top left |
 | `-Demrion.debug.overlay=true` | start with the overlay shown (also in autotest screenshots) |
 | `-Demrion.debug.timings=true` (`.seconds=5`) | log the full profile every 5 s |
+| `-Demrion.debug.terrainMarks=true` | split each geometry phase per terrain pipeline (GPU timestamp + pipeline statistics: primitives, vertex and fragment invocations, logged every 600 frames as `Terrain stats`) |
 | `-Demrion.autotest.profile=true` | log the profile averaged over the benchmark window (`Benchmark profile:`) |
+| `-Demrion.debug.pipelineStats=true` | enable `VK_KHR_pipeline_executable_properties` and log the driver's statistics of every pack gbuffers pipeline as it is built (`Pipeline stats <program>[<variant>] <vanilla pipeline> [FS] Register Count=… Local Memory Size=…`; on NVIDIA the local memory value carries a 2^36 flag, the rest is the spill size in bytes) |
 | `-Demrion.perf.deferClears=false`, `-Demrion.perf.computeClears=false` | A/B switches for the clear optimisations |
 | `-Demrion.perf.sparseAtlases=true` | sparse atlases (M5b): −6.7 GB at 256x, ≈ −10 % FPS there on NVIDIA |
 | `-Demrion.debug.vram=true` | name every VMA allocation; the autotest `mem` step writes `emrion-vma-N.json` (`mod/tools/vram_report.py`) |
@@ -483,7 +606,7 @@ for the WSR hit points) is safe for the voxelizer by construction but gains noth
 the flood fill reaches lies that far below the camera.
 
 Option: shader options → *Performance...* → *Shadow culling: Off / Outside voxel volume / Full* (tooltip), stored as
-`perf.shadowReceivers=off|outside|all` in `config/emrionshaders.properties`, default `all`; `-Demrion.perf.shadowReceivers`
+`perf.shadowReceivers=off|outside|all` in `config/emberlight.properties`, default `all`; `-Demrion.perf.shadowReceivers`
 overrides it. It takes effect on the next frame, no reconversion.
 
 ### Image
@@ -525,8 +648,8 @@ voxelization (world-space reflections and coloured light can show blocks that ar
 
 `-Demrion.autotest.script="step;step;..."` runs after the scene shots (full list in `AutoTest`'s Javadoc): `wait S`,
 `size WxH`, `fullscreen on|off`, `gui N`, `cmd COMMAND`, `shot NAME`, `mem` (FPS and VMA budget per heap), `pack off|on`,
-`reload`, `leave`, `join`, `hud`, `f3 on|off`, `screen pause|inventory|chat|none`, `use down|up`, `press KEY`,
-`repeat N { ... }`. Commands run as the server, so target players with `@a`/`@p`, not `@s`.
+`reload`, `leave`, `join`, `hud`, `f3 on|off`, `screen pause|inventory|chat|packs|none`, `screen rt|upscale|framegen|perf|dlss|options[:ID]` (an Emberlight page, for GUI screenshots), `use down|up`, `swing` (main-hand attack swing), `press KEY`,
+`repeat N { ... }`, `turnshot DEG FRAMES NAME [DX DZ]` (frame-exact turn/move, shoots the last moving frame; frameTimeCounter restarts at 100, so a `turnshot 0 …` at the end pose gives a matching still reference for upscaler motion tests; `fgturn` does the same turn and saves the frame generator's interpolated frame in front of the last one, to compare with a `turnshot 0 …` at the half-step pose and time offset `-0.008333`). Commands run as the server, so target players with `@a`/`@p`, not `@s`.
 
 Fault injection (dev only): `-Demrion.debug.throwIn=levelStart,shadow,phase,finish` throws once in each FrameExecutor entry
 point after `-Demrion.debug.throwAfter=200` level frames; `-Demrion.debug.failAlloc=N` makes the N-th raw image allocation fail
@@ -540,3 +663,271 @@ The implicit `MND_enable_timeline_semaphore` layer adds a struct that makes the 
 0x92d66fc1 (pMultisampleState-09026) is a false positive of this layer version for our vertex-only pipelines, and MC's debug
 callback turns every reported error into a failed pipeline creation. Messages appear in the log as `(Minecraft) Validation Error`.
 The layer predates some structs MC and the driver use, so a few `pNext` warnings at startup are expected.
+Steam has since moved the library to `~/.local/share/Steam/steamrt64/libVkLayer_khronos_validation.so`; a manifest still
+pointing at `ubuntu12_64` fails silently (one "cannot open shared object file" line, then no validation at all).
+`-PrenderDebugLabels=1` starts the game with `--renderDebugLabels`, so MC names its buffers and images: a leak report then
+says e.g. `VkBuffer 0x…[Shared index buffer]` (a Sodium buffer), while our own `RawBuffer`s stay unnamed.
+
+## M8-S1: Sodium step-1 gate (2026-11-13, `sodium/s1-terrain`)
+
+Overview, 1080p, RD 16, 30 s, pinned `frameTimeCounter=100`, interleaved runs. "Vanilla" is master `c2a3393` (same code
+as this branch without `-Psodium`, checked with one extra run: 96.2 FPS). "Sodium" is this branch with `-Psodium`.
+
+| | run 1 | run 2 | run 3 | 1% low |
+|---|---|---|---|---|
+| vanilla chunk path | 97.9 | 98.1 | 98.1 (and 98.0) | 72–79 |
+| Sodium chunk path | 140.4 | 142.9 | 142.6 | 124–126 |
+
+**This is not a like-for-like comparison.** GPU profile (`-Demrion.autotest.profile=true`, ms/frame):
+
+| pass | vanilla | Sodium |
+|---|---|---|
+| shadow_opaque | 3.35 | 0.22 |
+| shadow_translucent | 0.20 | 0.05 |
+| shadow pass CPU recording | 3.15 | 0.08 |
+| gbuffers opaque | 2.38 | 2.74 |
+| gbuffers translucent | 1.03 | 0.85 |
+
+- Almost all of the FPS gap is the shadow pass. On Sodium it still draws only the camera's render lists (step-1 interim, see
+  SODIUM.md §6), so it covers far less terrain than the vanilla path's full shadow-frustum section set (ForcedSections).
+- The main view is the comparable part: opaque **+0.36 ms**, translucent −0.18 ms, net **+0.18 ms slower on Sodium**. The
+  estimate in SODIUM.md §5 was −0.2…−0.6 ms. Possible causes, not yet measured: per-vertex decoding in the pack's large
+  vertex shader, Sodium's smaller per-region/per-facing draws, and the missing mc_Entity ids changing which foliage paths run.
+- **Vanilla baseline is 98 FPS today, not the 137 recorded for M5–M7.** The vanilla shadow_opaque pass now costs 3.35 ms GPU
+  (M7 records 0.47 ms) plus 3.15 ms CPU. This is a regression on master, independent of Sodium, and probably comes from the
+  full shadow-frustum coverage (ForcedSections).
+- Gate: numerically ≥ 137 (143), but the real decision waits for step 3. Once Sodium's shadow pass covers the same sections,
+  it can be compared fairly.
+
+## M8-S2: Sodium path vs vanilla path (2026-11-13, `sodium/s1-terrain`, steps 1–4)
+
+Same code; "Sodium" = `-Psodium` (Sodium 0.9.3-beta.1 meshes and draws terrain, our extended vertex, our shadow lists),
+"vanilla" = without it. 1080p, RD 16, pinned `frameTimeCounter=100`, 30 s, runs interleaved V S V S V S under one exclusive
+GPU hold (no other game running).
+
+| scene | vanilla FPS (runs) | Sodium FPS (runs) | Δ | 1% low vanilla / Sodium |
+|---|---|---|---|---|
+| overview | 129.6 / 129.7 / 126.8 (128.7) | 119.0 / 118.2 / 116.8 (118.0) | −8.3 % | 101–103 / 94–103 |
+| sunset | 162.0 / 160.0 / 161.3 (161.1) | 152.8 / 154.7 / 151.4 (153.0) | −5.0 % | 128–133 / 130–136 |
+| forest | 194.2 / 195.1 / 197.9 (195.7) | 191.7 / 194.7 / 193.1 (193.2) | −1.3 % | 149–156 / 157–160 |
+
+GPU profile, overview (`-Demrion.autotest.profile=true`, ms/frame, one 25 s run each):
+
+| | vanilla | Sodium | vanilla RD 32 | Sodium RD 32 | vanilla 960×540 | Sodium 960×540 |
+|---|---|---|---|---|---|---|
+| FPS | 128.2 | 116.5 | 90.5 | 88.7 | 203.0 | 187.7 |
+| GPU frame | 7.67 | 8.49 | 10.72 | 10.93 | 4.83 | 5.22 |
+| gbuffers opaque | 2.48 | 2.95 | 4.51 | 4.59 | 1.54 | 1.80 |
+| gbuffers translucent | 1.07 | 1.20 | 1.47 | 1.42 | 0.56 | 0.56 |
+| shadow_opaque | 0.78 | 0.91 | 0.99 | 1.39 | 0.78 | 0.94 |
+| shadow_translucent | 0.15 | 0.34 | 0.14 | 0.14 | 0.13 | 0.18 |
+| CPU: shadow pass recording | 1.74 | 0.81 | 2.37 | 1.38 | 1.63 | 0.81 |
+| CPU: MC (rest) | 0.89 | 0.66 | 2.43 | 1.96 | 0.77 | 0.51 |
+
+- Every scene stays **GPU-bound** on this machine, even at RD 32, so Sodium's CPU savings (shadow recording −0.9…−1.0 ms, MC
+  rest −0.2…−0.5 ms per frame) do not show as FPS. They show as better 1% lows in sunset and forest.
+- The Sodium path costs **+0.3…+0.8 ms GPU** per frame:
+  - Opaque: +0.47 ms at RD 16. Of that, +0.26 ms remains at a quarter of the pixels, so about half scales with pixels and half does not. At RD 32 it is equal.
+  - Shadow: +0.13…+0.40 ms. Sodium's built set is Iris's set and larger than MC's occlusion graph (1560 against 951
+    sections after culling), which is the price of Iris-exact shadow coverage.
+- Ruled out (measured, reverted): draw order (sorting sections near to far inside a region: 2.87 → 2.86 ms), block-face
+  culling (off: 2.84 ms), the per-vertex section-time fetch (9a1c34d, opaque 2.95 ms with it skipped), and descriptor churn
+  (MC pushes descriptors only when they change). Sodium draws fewer opaque triangles (648 k after face culling against 955 k).
+- Chunk rebuild after a full remesh: vanilla 666–830 ms, Sodium 1232–1702 ms. Sodium's "all built" test is its build queue
+  being empty, not MC's `hasRenderedAllSections`, and our extended encoder (normal/tangent per quad) runs on its workers, so
+  the column is rough (SODIUM.md §1).
+- Sodium 0.9.3-beta.5 (`sodium/beta5`): overview 118.1 FPS, opaque 2.92 ms, the same as beta.1.
+- Device-local shared quad index buffer (Sodium makes it host-visible, `USAGE_MAP_WRITE`): uploaded once into a device-local
+  buffer, overview 116.7 FPS, opaque 2.91 ms. No effect, reverted. The section-time buffer is no longer read with fade-in off.
+- **Goal not reached:** Sodium ≥ vanilla on GPU-bound scenes. Still unexplained: the non-pixel part of the opaque gap.
+  Host-visible buffers are ruled out (above). Untested: Sodium's shared quad index buffer is one large INT buffer, where MC
+  uses SHORT/INT per section.
+
+## Raster path at 1440p (2026-11-14, `perf/raster`)
+
+Goal: a faster non-RT path with no visible change. 2560×1440, RD 16, pinned `frameTimeCounter=100`, the user's pack and settings,
+Sodium 0.9.3-beta.5. Each launch runs a warm-up scene first, then benchmarks 5 scenes for 20–30 s each
+(`-Demrion.autotest.benchmark.perScene=true`, one CSV per scene).
+"Before" is master `f94b71c` (3 runs; a cold first run without warm-up was dropped). "After" is this branch (vanilla: 2 runs, a third had a
+425 ms stall in the first scene; Sodium: 3 runs).
+
+| Scene | vanilla before | vanilla after | Δ | Sodium before | Sodium after | Δ |
+|---|---|---|---|---|---|---|
+| overview | 96.4 | 98.8 | +2.5 % | 86.3 | 88.5 | +2.5 % |
+| forest | 147.8 | 152.2 | +3.0 % | 139.7 | 144.7 | +3.6 % |
+| water | 83.1 | 84.8 | +2.0 % | 79.7 | 81.9 | +2.8 % |
+| cave | 232.1 | 242.8 | +4.6 % | 194.7 | 218.7 | **+12.3 %** |
+| sunset | 114.5 | 118.0 | +3.1 % | 106.8 | 111.4 | +4.3 % |
+
+Same build with the switches off (`-Demrion.perf.flipSwap=false -Demrion.perf.identitySkip=false`; Sodium:
+`-Demrion.perf.sodiumVisibleReceivers=false`), 2 runs each, gives the same picture: vanilla overview 96.3 → 98.8, cave 226.4 → 242.8;
+Sodium cave 200.9 → 218.7, sunset 109.8 → 111.4.
+
+### What changed
+
+| Change | GPU (overview, 1440p) | Switch |
+|---|---|---|
+| **End-of-frame copies become image swaps** (`FlipSwap`). Iris copies every flipped colortex alt → main at the end of the frame. When the first access to the alt side in every frame is a full overwrite (a fullscreen pass without blending, viewport scale/offset or discard in its SPIR-V, or a clear), swapping the two images leaves main with exactly the copied content; only the dead alt side differs. Targets with mips or storage bindings are never swapped. A second set of descriptor sets covers the swapped assignment. Unbound: colortex1, 2, 4, 7 (colortex5 has mips and keeps its copy). | copies 0.18 → 0.02 ms | `emrion.perf.flipSwap` |
+| **Identity copy pairs are skipped** (`IdentityCopies`). composite2 and composite3 only do `vec4(texelFetch(colortex0, ivec2(gl_FragCoord.xy), 0).rgb, 1.0)` into R11G11B10F (main → alt → main). They are recognised in the SPIR-V. When alt is overwritten before its next read (here: the frame-start clear), both are skipped. | 0.08 → 0 ms | `emrion.perf.identitySkip` |
+| **Sodium shadow receivers: visible sections only.** The receiver grid used every built section in the camera frustum, including terrain hidden behind walls. Now it uses air in the frustum (volumetrics sample the shadow map there) plus the sections Sodium's render lists draw this frame. This matches the vanilla path's reachable-only receivers. | cave: shadow_opaque 0.49 → 0.21 ms; overview 0.99 → 0.84 ms | `emrion.perf.sodiumVisibleReceivers` |
+
+Image check (MAE mean / SSIM, after against before): vanilla overview 0.42 / 0.996, forest 0.52 / 0.994, water 0.63 / 0.988,
+cave 0.21 / 0.998, sunset 0.33 / 0.996. Sodium: 0.34 / 0.997, 0.62 / 0.992, 0.62 / 0.989, 0.26 / 0.998, 0.33 / 0.996. Two runs
+of the same build differ by the same amount (vanilla 0.22–0.64, Sodium 0.23–0.63). The diff panels show only falling leaf particles
+and water. RT-off converter output is unchanged (no converter change; `TargetPackRtTest` passes).
+
+### Profile at 1440p (vanilla, overview, before)
+
+GPU 10.4 ms per frame: opaque 3.23, composite1 1.58, translucent 1.53, shadow_opaque 0.80, shadowcomp 0.62, deferred1 0.62,
+composite5 0.34, deferred voxel clears 0.29, composite6 0.17, composite 0.16. Everything this mod adds around the pack's shaders
+is small: frame-start clears 0.05, mipmaps (colortex0 twice, 3 and 5) 0.13, depth copies 0.05, end-of-frame copies 0.18,
+composite2+3 0.09. The rest is the pack's own shader work.
+
+### Investigated, not changed
+
+- **Sodium: 16-bit quad indices** instead of the shared INT buffer (own SHORT buffer for regions up to 16 384 quads): opaque
+  3.91 vs 3.89 ms, no gain. Index values (and so vertex reuse) are the same, only the fetch width changes.
+- **Sodium: indirect backend** (`vkCmdDrawIndexedIndirect` instead of `VK_EXT_multi_draw`): 3.87 vs 3.89 ms, no gain.
+- **Sodium: block-face culling off** (fewer, larger draws; rasterizer back-face culling makes it pixel-identical): 1440p
+  opaque 3.94 vs 3.89 ms, forest 2.47 vs 2.31 ms. Slower: the extra vertex work outweighs the draw count.
+- **Sodium vertex decode:** `terrain_sodium` vs `terrain_mdi` vertex SPIR-V: 1526 vs 1415 instructions; the difference is the
+  bit unpacking (about 30 ALU ops plus the section-time fetch that is already skipped without fade-in), against a shader of about
+  1400. Not the cause of the opaque gap. The remaining Sodium opaque gap (+0.65 ms at 1440p overview, +0.25 ms in the cave)
+  stays open. (Found and fixed: draw order across regions, see "Sodium opaque gap" below.)
+- **Mipmaps** (colortex0/3/5): the pack requests them (`mipmap.*`) and samples the levels. 0.13 ms in total, needed.
+- **Clears:** 0.05 ms in total with targets in VRAM. The 14 ms seen once came from targets spilled to system RAM (M5b). The
+  alt sides of colortex0/3 are fully overwritten before they are read, but both targets have mip chains and the clear zeroes all
+  levels, so dropping it is not provably invisible.
+- **Barriers, layouts, load ops:** raw passes already use one precise sync2 barrier per pass, every image stays in GENERAL, and
+  LOAD vs DONT_CARE makes no difference on a desktop GPU (no tile memory).
+- **Shadow map resolution:** 2048, as the pack's `SHADOW_QUALITY=3` + `SHADOW_SMOOTHING=4` select.
+- **Deferred voxel clears (0.29 ms):** the pack declares the images with clear; whether a later pass rewrites every texel is not
+  provable from the shaders.
+- **CPU:** the frame is GPU-bound in every scene (4–9 ms per frame blocked on the GPU), so render-thread work does not limit FPS
+  here. Sodium's slower full remesh (SODIUM.md §1) was not changed.
+
+## Sodium opaque gap: draw order across regions (2026-11-15, `perf/sodium-opaque`)
+
+2560×1440, RD 16, pinned `frameTimeCounter=100`, the target pack (Unbound r5.9.3 + Euphoria Patches 1.10.5) with the
+settings of the reference test instance, its `emberlight.properties` with upscaling and frame generation off,
+Sodium 0.9.3-beta.5 with that instance's `sodium-options.json`. Scenes overview, forest, cave, 20 s each, 3 interleaved runs
+(vanilla, Sodium before, Sodium after) per RT mode, median. "Before" is the same build with `-Demrion.perf.sodiumBands=false`.
+
+**Where the time went.** `-Demrion.debug.terrainMarks=true` (new) splits every geometry phase per terrain pipeline with a GPU
+timestamp and a pipeline-statistics query (primitives in, vertex invocations, primitives after clipping, fragment
+invocations). Per frame, main view, solid terrain:
+
+| scene | vanilla: prims after clip / FS invocations / ms | Sodium before | Sodium after |
+|---|---|---|---|
+| cave | 2.8 k / 3.76 M / 0.77 | 2.4 k / 4.66 M / 0.95 | 2.4 k / 3.97 M / 0.81 |
+| overview | 385 k / 3.24 M | 328 k / 3.48 M | 329 k / 3.37 M |
+
+Sodium already draws fewer triangles (block-face culling), so neither vertex work nor draw count is the gap. It is
+**overdraw**: in the cave Sodium runs the fragment shader 24 % more often than vanilla (1.26 per pixel against 1.02).
+Vanilla's multi-draw-indirect list is sorted near to far across all sections. Sodium draws region by region (8×4×8
+sections). It sorts regions by distance and keeps the sections inside a region in octree order. So the far cave sections of
+a near region are shaded before the box walls in the next region hide them. With this pack's expensive terrain fragment
+shader, and with RT ray queries in it, that costs real time. The earlier "+0.65 ms at the overview" no longer reproduces on
+`test/all-current` (vanilla opaque rose to ≈3.95 ms; both paths are equal there now). What is left is the order effect.
+
+**Fix** (`DefaultChunkRendererMixin`, `VKMultiDrawBatchMixin`): for the opaque passes, each region's command list is
+filled in distance bands (Chebyshev section distance 0, 1, 2–3, 4–7, 8–15, 16+; sorted near to far inside a band). The
+regions are then drawn once per band, nearest band first, each draw covering that band's sub-range of the region's
+commands. The commands are the same (same face culling, same shared index buffer), only their order changes. Translucent
+passes and the shadow pass are unchanged. Finer far bands (10 half-octave bands) measured no faster. The indirect backend
+keeps Sodium's order.
+
+| RT off | vanilla FPS / GPU / opaque | Sodium before | Sodium after |
+|---|---|---|---|
+| overview | 65.3 / 11.90 / 3.98 | 81.0 / 11.74 / 3.99 | 81.8 / 11.52 / 3.92 |
+| forest | 118.3 / 7.44 / 2.45 | 120.0 / 7.25 / 2.34 | 120.0 / 7.17 / 2.20 |
+| cave | 163.4 / 4.44 / 0.79 | 177.3 / 4.85 / 1.02 | 180.0 / 4.64 / 0.84 |
+
+| RT RTX | vanilla FPS / GPU / opaque | Sodium before | Sodium after |
+|---|---|---|---|
+| overview | 41.0 / 24.32 / 9.43 | 40.8 / 24.43 / 9.51 | 41.2 / 24.23 / 9.37 |
+| forest | 52.2 / 18.99 / 6.95 | 53.3 / 18.70 / 6.82 | 54.0 / 18.45 / 6.62 |
+| cave | 59.7 / 16.17 / 4.43 | 59.7 / 15.89 / 5.03 | 60.0 / 15.83 / 4.47 |
+
+(ms per frame. RTX = the instance's RT settings: style rtx, full shadows, GI high, reflections, refraction, AO, caustics.)
+The RT-off forest and cave FPS sit on 120 and 180 in nearly every Sodium run, so the test display seems to cap them there.
+Compare GPU ms there. Vanilla FPS varies between runs (overview 60–77) at the same GPU time.
+
+- Opaque pass on Sodium: cave −0.18 ms (RT off) and −0.56 ms (RTX), forest −0.14 / −0.20 ms, overview −0.07 / −0.14 ms.
+  Sodium's opaque pass is now at or below vanilla's in all six cases (cave RT off +0.05 ms).
+- What remains in the Sodium cave GPU frame is the shadow pass (Iris's larger section set, known, M8-S2).
+- Image: before vs after (RT off, three run pairs) MAE 0.14–0.46, SSIM ≥ 0.9946. Two runs of the same build differ by
+  0.25–0.55. RTX: 0.26–0.61 against 0.04–0.60 between same-build runs (temporal GI noise on the leaves, plus a falling-leaf particle).
+  No converter change (the RT-off golden `TargetPackRtTest` is unaffected).
+- Ruled out with the statistics: draw count and multi-draw batching, vertex decode (Sodium's vertex invocations are lower),
+  per-draw descriptor or push-constant updates, and state changes between regions (the cave draws 2.4 k triangles and still
+  costs more).
+
+### Follow-up: shadow pass order and section set (2026-11-15)
+
+**Order.** `SodiumShadow` now adds the opaque shadow casters near to far from the light (centre depth along the shadow
+view axis), in 64-block depth bands. It draws the regions once per band, nearest band first, and the regions in order of
+their nearest caster. Same commands, same section set and cutoffs. Translucent shadow draws keep their order.
+`-Demrion.perf.sodiumShadowBands=false` restores region order. Pipeline statistics, solid shadow casters per frame:
+fragment invocations overview 12.0 M → 3.85 M, cave 7.57 M → 3.51 M, forest 5.05 M → 3.60 M (triangles unchanged).
+Cutout casters barely change (8.6 M → 8.2 M), probably because alpha-test discard limits early depth rejection.
+
+Same setup as above, Sodium only, 3 interleaved runs, median, ms per frame:
+
+| | shadow_opaque before → after | GPU frame before → after |
+|---|---|---|
+| RT off overview | 0.88 → 0.75 | 11.51 → 11.59 |
+| RT off forest | 0.73 → 0.70 | 7.07 → 7.16 |
+| RT off cave | 0.30 → 0.24 | 4.68 → 4.60 |
+| RTX overview | 0.83 → 0.68 | 24.08 → 23.79 |
+| RTX forest | 0.70 → 0.67 | 18.48 → 18.57 |
+| RTX cave | 0.29 → 0.22 | 15.73 → 15.76 |
+
+The shadow pass is 0.03–0.15 ms faster in every case. The frame totals move by −0.29 to +0.09 ms, which is within run-to-run
+noise. Render-thread shadow recording: 0.62 → 0.68 ms (the sort; the frame is GPU-bound). Image, before vs after: RT off MAE
+0.23–0.43, RTX 0.26–0.56, against 0.23–0.49 and 0.26–0.61 between two runs of the same build.
+
+**FPS cap.** The gamescope test display caps FPS at about 120 and 180. Sodium's RT-off forest and cave runs sit on those
+values, so the comparisons here use GPU timestamps (frame and per-pass ms), not FPS.
+
+**Section set: not trimmed.** Our shadow caster set is already smaller than Iris's. Iris draws every renderable section in
+the shadow frustum. We keep only casters whose shadow can fall on a receiver. The cave's 391 k solid casters (vanilla path:
+68 k) come from the visible box receivers. Dropping all air receivers as an experiment leaves the cave set unchanged and saves
+0.1 ms in the overview. That experiment also drops visible air that volumetric light samples, so it is not a valid change.
+Trimming further would need one of these, and neither is provably Iris-equal:
+- Vanilla's frustum-free reachability. Sodium's equivalent is per-section search state that its async culler rewrites while
+  we would read it. Its `isBoxVisible` also treats empty sections as always visible, so air visibility is not tracked.
+- Dropping enclosed casters. They are never the nearest occluder from the light, but they are needed for the voxelisation
+  in the safe zone (coloured light, WSR).
+
+
+## Iris vs Emberlight vs Emberlight + Sodium at 1440p (2026-11-15, `test/all-current` 0fd022f)
+
+2560×1440, RD 16, pinned `frameTimeCounter=100`, the target pack (Unbound r5.9.3 + Euphoria Patches 1.10.5) with the
+settings of the reference test instance and its `sodium-options.json`. Emberlight uses that instance's
+`emberlight.properties` with upscaling and frame generation off. RTX = its RT settings (style rtx, full shadows, GI high,
+reflections, refraction, AO, caustics). Iris 1.11.7 + Sodium 0.9.3-beta.1 (Iris needs beta.1); Emberlight + Sodium uses
+beta.5. A warm-up scene first, then 20 s per scene. 3 rounds, interleaved (Iris, vanilla, Sodium, vanilla RTX, Sodium RTX),
+median. Spread between runs ≤ 1 % except vanilla cave/night (≈ 3 %).
+
+The test display no longer caps FPS: it now runs gamescope with `-r 1000 -o 1000 --immediate-flips`. The 120/180 caps
+in the sections above came from its default nested refresh. The Iris run now logs GPU ms too (`GlGpuTimer`: GL timestamp
+queries around `GameRenderer.render`, the same span as the Vulkan profiler's frame total, with `-Demrion.autotest.profile=true`).
+`runIrisReference` takes `-PwinWidth/-PwinHeight` like `runClient`.
+
+| Scene | Iris FPS / 1% low / GPU ms | Emberlight | Emberlight + Sodium | Emberlight RTX | Emberlight + Sodium RTX |
+|---|---|---|---|---|---|
+| overview | 61.4 / 58.6 / 16.20 | **97.2** / 80.7 / 10.23 | 89.9 / 81.1 / 11.07 | 43.5 / 39.1 / 22.91 | 42.9 / 39.9 / 23.26 |
+| forest | 110.2 / 100.0 / 9.01 | **150.3** / 123.9 / 6.60 | 147.9 / 127.8 / 6.71 | 53.0 / 47.6 / 18.79 | 55.8 / 52.2 / 17.87 |
+| cave | 138.1 / 126.6 / 7.17 | **248.5** / 194.2 / 3.97 | 223.9 / 173.9 / 4.41 | 65.3 / 58.3 / 15.26 | 65.8 / 60.8 / 15.15 |
+| water | 65.6 / 62.5 / 15.17 | **83.2** / 72.1 / 11.96 | 82.1 / 73.6 / 12.14 | 34.2 / 31.1 / 29.20 | 36.1 / 34.2 / 27.66 |
+| night | 168.0 / 154.7 / 5.87 | 219.7 / 175.5 / 4.50 | **227.9** / 185.8 / 4.34 | 170.7 / 141.2 / 5.80 | 179.8 / 156.5 / 5.50 |
+
+- Emberlight (RT off) is 1.27× (water) to 1.80× (cave) Iris's FPS, and 1.58× in the overview. Every frame is GPU-bound on
+  both renderers, so the GPU ms tell the same story: 16.2 → 10.2 ms in the overview.
+- Sodium vs vanilla path, RT off: equal within 1–3 % in forest, water and night. It is slower in overview (−7.5 %, +0.84 ms GPU)
+  and cave (−10 %, +0.44 ms), the shadow-pass section set (M8-S2). Sodium has the better 1% lows in 4 of 5 scenes.
+- With RTX the Sodium path is equal or faster: forest +5 %, water +6 %, night +5 %, cave and overview within 1.5 %.
+- Image check (run 1, RT off, against Iris): vanilla MAE 0.26–0.61 / SSIM ≥ 0.988, Sodium 0.24–0.70 / ≥ 0.991.
+
+Scripts: `fpsbench/run.sh`, `batch.sh`, `summ.py` in a scratch folder (not in the repo).

@@ -47,7 +47,29 @@ final class ShadowStats {
 		}
 		String[] names = {"safe/dark/below", "safe/dark/above", "safe/lit/below", "safe/lit/above", "band/dark/below", "band/dark/above", "band/lit/below", "band/lit/above"};
 		for (int i = 0; i < 8; i++) b.append(String.format("%s %d sec %d kTri %d kTriT; ", names[i], n[i][0], n[i][1] / 3000, n[i][2] / 3000));
+		long mainOpaque = 0, mainTranslucent = 0;
+		long[] perLayer = new long[ChunkSectionLayer.values().length];
+		for (var s : level.visibleSections()) {
+			var m = s.getSectionMesh();
+			for (var l : ChunkSectionLayer.values()) {
+				var draw = m.getSectionDraw(l);
+				if (draw == null) continue;
+				perLayer[l.ordinal()] += draw.indexCount() / 3000;
+				if (l.translucent()) mainTranslucent += draw.indexCount(); else mainOpaque += draw.indexCount();
+			}
+		}
+		b.append(String.format("main view: %d sections, opaque %d kTri, translucent %d kTri; per layer kTri %s %s", level.visibleSections().size(), mainOpaque / 3000,
+				mainTranslucent / 3000, java.util.Arrays.toString(ChunkSectionLayer.values()), java.util.Arrays.toString(perLayer)));
 		EmrionShadersClient.LOG.info(b.toString());
+	}
+
+	private static long lastSodium;
+
+	static void sodium(Vec3 cam) {
+		long now = System.nanoTime();
+		if (now - lastSodium < 5_000_000_000L) return;
+		lastSodium = now;
+		EmrionShadersClient.LOG.info(dev.emrion.shaders.mod.compat.sodium.SodiumShadow.stats(cam.x, cam.y, cam.z));
 	}
 
 	private static boolean darkAll(long node) {

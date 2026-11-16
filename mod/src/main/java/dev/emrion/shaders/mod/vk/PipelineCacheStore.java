@@ -15,13 +15,14 @@ import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VkPipelineCacheCreateInfo;
 
 /**
- * A VkPipelineCache persisted to {@code <gameDir>/emrionshaders/pipeline-<pipelineCacheUUID>.bin}. The file name is keyed by
+ * A VkPipelineCache persisted to {@code <gameDir>/emberlight/pipeline-<pipelineCacheUUID>.bin}. The file name is keyed by
  * the driver's cache UUID, so a driver update starts a fresh cache (the driver also validates the header itself).
  */
 public final class PipelineCacheStore {
 	private final VulkanContext ctx;
 	private final Path file;
 	public final long handle;
+	private static final long MAX_LOAD = 1L << 30;
 
 	public PipelineCacheStore(VulkanContext ctx, Path dir) {
 		this.ctx = ctx;
@@ -30,7 +31,10 @@ public final class PipelineCacheStore {
 		this.file = dir.resolve("pipeline-" + HexFormat.of().formatHex(uuid) + ".bin");
 		ByteBuffer initial = null;
 		try {
-			if (Files.isRegularFile(file)) {
+			if (Files.isRegularFile(file) && Files.size(file) > MAX_LOAD) {
+				// it only grows (every session saves what it loaded plus its own pipelines): start over
+				EmrionShadersClient.LOG.info("Pipeline cache {} is {} MiB, starting a new one", file, Files.size(file) >> 20);
+			} else if (Files.isRegularFile(file)) {
 				byte[] data = Files.readAllBytes(file);
 				initial = MemoryUtil.memAlloc(data.length).put(data).flip();
 			}
@@ -60,7 +64,7 @@ public final class PipelineCacheStore {
 				byte[] bytes = new byte[(int) size.get(0)];
 				data.get(0, bytes);
 				Files.createDirectories(file.getParent());
-				Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
+				Path tmp = file.resolveSibling(file.getFileName() + "." + ProcessHandle.current().pid() + ".tmp"); // a shared dir may have several writers
 				Files.write(tmp, bytes);
 				Files.move(tmp, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
 			} finally {

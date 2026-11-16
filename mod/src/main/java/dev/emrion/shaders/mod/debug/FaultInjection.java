@@ -1,13 +1,8 @@
 package dev.emrion.shaders.mod.debug;
 
 /**
- * Dev-only failure injection for the robustness tests (docs/BENCHMARK.md, M6):
- * <pre>
- * emrion.debug.throwIn=levelStart,phase,shadow,finish  throw once in each of these FrameExecutor entry points,
- * emrion.debug.throwAfter=200                           after this many level frames with a pack
- * emrion.debug.failAlloc=N                              the N-th raw image allocation (1 = first) fails with
- *                                                       VK_ERROR_OUT_OF_DEVICE_MEMORY (as a full GPU would)
- * </pre>
+ * Dev-only fault injection: {@code emrion.debug.throwIn=levelStart,phase,shadow,finish} throws once in those entry points,
+ * {@code throwAfter=N} after N level frames, {@code failAlloc=N} fails the N-th raw image allocation with OUT_OF_DEVICE_MEMORY.
  */
 public final class FaultInjection {
 	private FaultInjection() {}

@@ -1,0 +1,57 @@
+Emberlight DLSS bridge binaries: licence terms
+
+This file covers the compiled DLSS bridge ("shim") shipped inside the Emberlight jar:
+
+    natives/linux-x86_64/libemrion_ngx.so
+    natives/windows-x86_64/emrion_ngx.dll   (when present)
+
+and their copies that Emberlight extracts into <game dir>/emberlight/dlss/. These binaries are NOT covered by the GNU
+LGPL-3.0 that covers the rest of Emberlight, nor by the MIT licence of their source code (mod/native/LICENSE).
+
+1. What they contain
+
+   a. Emberlight's bridge code (mod/native/emrion_ngx.c, emrion_ngx_dlssg.cpp), MIT licensed.
+   b. NVIDIA's NGX SDK library (libnvsdk_ngx.a on Linux, nvsdk_ngx_d.lib on Windows) from the NVIDIA DLSS SDK
+      v310.9.16, Copyright (c) NVIDIA Corporation. All rights reserved. It is licensed to the Emberlight developers
+      under the NVIDIA RTX SDKs License (https://github.com/NVIDIA/DLSS/blob/v310.9.16/LICENSE.txt) and is
+      redistributed here only in object code form, incorporated into Emberlight.
+
+2. Terms for NVIDIA's portion (part 1b)
+
+   By using these binaries you agree to the following. They are at least as protective of NVIDIA as the NVIDIA RTX
+   SDKs License, which also applies.
+
+   a. Use. You may use them only as part of Emberlight, and only on systems with NVIDIA GPUs.
+   b. No stand-alone distribution. You may not copy, sell, rent, sublicense, transfer or distribute them separately
+      from Emberlight, or as a stand-alone product. You may pass them on only inside an Emberlight jar or the
+      Emberlight source repository, unmodified, together with this file.
+   c. No reverse engineering. You may not reverse engineer, decompile or disassemble them, or remove copyright or
+      other proprietary notices from them.
+   d. No circumvention. You may not bypass, disable or circumvent any technical limitation, encryption, security,
+      digital rights management or authentication mechanism in them.
+   e. No open-source licensing. No open-source licence, including the LGPL and MIT terms of the rest of Emberlight,
+      applies to NVIDIA's portion. You may not use or distribute it in any way that would subject it to such a
+      licence, e.g. one requiring its source code to be disclosed, derivative works of it to be allowed, or it to be
+      redistributable at no charge.
+   f. No critical use. You may not use them in any system where their use or failure could reasonably be expected to
+      threaten or result in personal injury, death or catastrophic loss (avionics, navigation, military, medical, life
+      support or other life-critical applications).
+   g. Ownership. NVIDIA and its suppliers keep all rights, title and interest, including intellectual property
+      rights, in NVIDIA's portion. No rights are granted except as stated here.
+   h. Export. You must comply with all applicable U.S. and international export laws and regulations.
+   i. Termination. Your rights end automatically if you break these terms; you must then stop using and delete them.
+   j. No warranty. They are provided "AS IS", without warranty of any kind. To the maximum extent permitted by law,
+      neither NVIDIA nor the Emberlight developers are liable for any damages arising from their use.
+
+3. NVIDIA's DLSS model files
+
+   The DLSS, DLSS Frame Generation and DLSS Ray Reconstruction model libraries (libnvidia-ngx-dlss.so.*,
+   libnvidia-ngx-dlssg.so.*, libnvidia-ngx-dlssd.so.*, nvngx_dlss.dll, nvngx_dlssg.dll, nvngx_dlssd.dll) are not part
+   of Emberlight. Emberlight downloads them, only after you agree, directly
+   from NVIDIA's GitHub repository (github.com/NVIDIA/DLSS). They are licensed to you by NVIDIA under the NVIDIA RTX SDKs
+   License, saved next to them as NVIDIA-RTX-SDK-LICENSE.txt.
+
+4. Trademarks
+
+   This product uses NVIDIA DLSS. NVIDIA, NVIDIA RTX and DLSS are trademarks and/or registered trademarks of NVIDIA
+   Corporation in the U.S. and other countries. Emberlight is not sponsored or endorsed by NVIDIA.

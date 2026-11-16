@@ -9,12 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.SequencedMap;
 
-/**
- * Builds one dimension's plan (FORMAT.md §7): program table with fallbacks and vertex variants, set-1 resource table,
- * targets (formats, clears, sizes, mipmaps), static flip schedule, frame/once command lists, shadow settings,
- * plus the per-program {@link Transpiler.EmitContext} the converter needs to emit GLSL.
- * Owner: agent (c2). Consumer: agent (c1).
- */
+/** Builds one dimension's plan: programs, resources, targets, flip schedule, command lists and shadow settings. */
 public interface DimensionPlanner {
 
 	DimensionPlan plan(
@@ -26,11 +21,7 @@ public interface DimensionPlanner {
 			Manifest.UniformLayout uniforms,
 			Diagnostics diagnostics);
 
-	/**
-	 * @param dimension plan with every Program's stage SPIR-V paths left null (the converter fills them in)
-	 * @param emits     program name → what to emit (context + vertex variants to compile; "fullscreen" for composite-like)
-	 * @param textures  custom textures this dimension needs (merged into the manifest's top-level list by the converter)
-	 */
+	/** {@code dimension} has its SPIR-V paths left null; the converter fills them in. */
 	record DimensionPlan(Manifest.Dimension dimension, Map<String, ProgramEmit> emits, List<Manifest.TextureDef> textures) {}
 
 	record ProgramEmit(Transpiler.EmitContext context, List<String> vertexVariants) {}

@@ -1,0 +1,102 @@
+#version 460
+// Opacity micromaps (RtOmm): the 4-state values of every micromap triangle, from the block atlas the RT alpha test samples
+// (mip 0, nearest). One invocation per micro-triangle slot (x: 2 per cell of the 2^L x 2^L grid, half of them outside the
+// triangle; y + z * groups y: the micromap triangle). Micromap triangles 0-2 are uniform (unknown, opaque, transparent); 3 + 24 k + c maps sprite list[k] with corner
+// order c (see cornerOrder) onto the triangle: vertex 0 at corner c0, u towards c1, v towards c2.
+// A micro-triangle is opaque (1) when every texel it may touch has alpha >= 0.1 (the cutoff of every RT ray loop for cutout
+// terrain), transparent (0) when none has, else unknown (2/3: the ray loops alpha-test it as before).
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+layout(local_size_x = 64) in;
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Sprites { uvec4 s[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer List { uint i[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer Data { uint w[]; };
+layout(set = 0, binding = 0) uniform sampler2D atlas;
+layout(push_constant) uniform Push { uvec2 sprites; uvec2 list; uvec2 data; uint level; uint count; float eps; };
+
+// Vulkan spec, VK_KHR_opacity_micromap reference code: barycentrics -> index on the micromap's space-filling curve.
+uint curveIndex(float u, float v, uint level) {
+    u = clamp(u, 0.0, 1.0);
+    v = clamp(v, 0.0, 1.0);
+    float fu = u * float(1u << level), fv = v * float(1u << level);
+    uint iu = uint(fu), iv = uint(fv);
+    float uf = fu - float(iu), vf = fv - float(iv);
+    if (iu >= (1u << level)) iu = (1u << level) - 1u;
+    if (iv >= (1u << level)) iv = (1u << level) - 1u;
+    uint iuv = iu + iv;
+    if (iuv >= (1u << level)) iu -= iuv - (1u << level) + 1u;
+    uint iw = ~(iu + iv);
+    if (uf + vf >= 1.0 && iuv < (1u << level) - 1u) --iw;
+    uint b0 = ~(iu ^ iw);
+    b0 &= ((1u << level) - 1u);
+    uint t = (iu ^ iv) & b0;
+    uint f = t;
+    f ^= f >> 1u;
+    f ^= f >> 2u;
+    f ^= f >> 4u;
+    f ^= f >> 8u;
+    uint b1 = ((f ^ iu) & ~b0) | t;
+    b0 = (b0 | (b0 << 8u)) & 0x00ff00ffu;
+    b0 = (b0 | (b0 << 4u)) & 0x0f0f0f0fu;
+    b0 = (b0 | (b0 << 2u)) & 0x33333333u;
+    b0 = (b0 | (b0 << 1u)) & 0x55555555u;
+    b1 = (b1 | (b1 << 8u)) & 0x00ff00ffu;
+    b1 = (b1 | (b1 << 4u)) & 0x0f0f0f0fu;
+    b1 = (b1 | (b1 << 2u)) & 0x33333333u;
+    b1 = (b1 | (b1 << 1u)) & 0x55555555u;
+    return b0 | (b1 << 1u);
+}
+
+// Corner order c (0-23) -> three distinct sprite corners (bit 0 = right, bit 1 = bottom); rt_omm_index.comp inverts it.
+uvec3 cornerOrder(uint c) {
+    uint c0 = c / 6u, j1 = (c % 6u) / 2u, j2 = c % 2u, c1 = 0u, c2 = 0u, n = 0u;
+    for (uint k = 0u; k < 4u; k++) {
+        if (k == c0) continue;
+        if (n == j1) c1 = k;
+        n++;
+    }
+    n = 0u;
+    for (uint k = 0u; k < 4u; k++) {
+        if (k == c0 || k == c1) continue;
+        if (n == j2) c2 = k;
+        n++;
+    }
+    return uvec3(c0, c1, c2);
+}
+
+void main() {
+    uint n = 1u << level, cell = gl_GlobalInvocationID.x, tri = gl_WorkGroupID.y + gl_WorkGroupID.z * gl_NumWorkGroups.y;
+    if (tri >= count) return;
+    uint iu = (cell >> 1u) % n, iv = (cell >> 1u) / n;
+    bool flip = (cell & 1u) != 0u;
+    if (iu + iv + (flip ? 1u : 0u) >= n) return; // outside the triangle
+    vec2 b0 = flip ? vec2(iu + 1u, iv) : vec2(iu, iv), b1 = flip ? vec2(iu, iv + 1u) : vec2(iu + 1u, iv);
+    vec2 b2 = flip ? vec2(iu + 1u, iv + 1u) : vec2(iu, iv + 1u);
+    vec2 c = (b0 + b1 + b2) / (3.0 * float(n));
+    uint state;
+    if (tri < 3u) state = tri == 0u ? 3u : tri == 1u ? 1u : 0u;
+    else {
+        uvec4 s = Sprites(sprites).s[List(list).i[(tri - 3u) / 24u]];
+        vec2 s0 = vec2(s.xy), size = vec2(s.z & 0xFFFFu, s.z >> 16u);
+        uvec3 k = cornerOrder((tri - 3u) % 24u);
+        vec2 p0 = s0 + vec2(k.x & 1u, k.x >> 1u) * size, p1 = s0 + vec2(k.y & 1u, k.y >> 1u) * size, p2 = s0 + vec2(k.z & 1u, k.z >> 1u) * size;
+        vec2 q0 = p0 + (p1 - p0) * b0.x / float(n) + (p2 - p0) * b0.y / float(n);
+        vec2 q1 = p0 + (p1 - p0) * b1.x / float(n) + (p2 - p0) * b1.y / float(n);
+        vec2 q2 = p0 + (p1 - p0) * b2.x / float(n) + (p2 - p0) * b2.y / float(n);
+        // texels the micro-triangle may touch: its box grown by the UV error of the vertices, inside the sprite
+        ivec2 lo = ivec2(floor(max(min(min(q0, q1), q2) - eps, s0)));
+        ivec2 hi = ivec2(floor(min(max(max(q0, q1), q2) + eps, s0 + size - 0.5)));
+        uint op = 0u, tr = 0u;
+        if ((hi.x - lo.x + 1) * (hi.y - lo.y + 1) > 256) op = tr = 1u; // a huge sprite at a low level: unknown
+        else
+            for (int y = lo.y; y <= hi.y; y++)
+                for (int x = lo.x; x <= hi.x; x++) {
+                    if (texelFetch(atlas, ivec2(x, y), 0).a >= 0.1) op++;
+                    else tr++;
+                }
+        state = tr == 0u ? 1u : op == 0u ? 0u : op >= tr ? 3u : 2u;
+    }
+    if (state == 0u) return;
+    uint idx = curveIndex(c.x, c.y, level);
+    atomicOr(Data(data).w[tri * (n * n / 16u) + idx / 16u], state << (2u * (idx % 16u)));
+}

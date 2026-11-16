@@ -8,7 +8,6 @@ import java.util.Optional;
 /**
  * Read-only view of a shaderpack (zip or folder). Paths are relative to the pack root and use '/',
  * e.g. "shaders/world0/composite.fsh". Implementations must be thread-safe for reads.
- * Owner: agent (a) "pack + options + preprocessor".
  */
 public interface PackSource extends AutoCloseable {
 	/** Pack display name (zip/folder name without extension). */

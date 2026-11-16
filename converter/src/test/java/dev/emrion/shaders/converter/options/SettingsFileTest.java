@@ -19,7 +19,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-/** The options GUI's save path against the user's real settings file. Skipped when testpacks/ is absent. */
+/** The options GUI's save path against the target pack's real settings file. Skipped when testpacks/ is absent. */
 class SettingsFileTest {
 	private static final Path TESTPACKS = testpacks();
 	private static final Path USER_FILE = TESTPACKS.resolve("ComplementaryUnbound_r5.9.3 + EuphoriaPatches_1.10.5.txt");
@@ -27,7 +27,7 @@ class SettingsFileTest {
 
 	private static Path testpacks() {
 		Path p = Path.of(System.getProperty("emrion.testpacks", "testpacks"));
-		return Files.isDirectory(p.resolve("unbound-euphoria")) ? p : Path.of("../testpacks"); // other checkouts
+		return Files.isDirectory(p.resolve("unbound-euphoria")) ? p : Path.of(System.getProperty("emrion.testpacks", "../testpacks")); // other checkouts
 	}
 
 	@TempDir

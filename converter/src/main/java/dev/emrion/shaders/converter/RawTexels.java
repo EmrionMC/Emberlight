@@ -3,9 +3,8 @@ package dev.emrion.shaders.converter;
 import java.util.Locale;
 
 /**
- * Raw custom texture data (iris-spec §2.5) to tightly packed texels of the promoted Vulkan format: GL uploads the file as
- * (pixel format, pixel type) into the internal format; we accept the layouts that need no value conversion (same channel
- * count, same component size and kind) and add the alpha channel that RGB-only formats get from promotion.
+ * Raw custom texture data to packed texels of the promoted Vulkan format. Only layouts that need no value conversion are
+ * accepted; RGB-only formats get an alpha channel.
  */
 final class RawTexels {
 	private RawTexels() {}

@@ -12,7 +12,7 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * State shared by all screens of one options-GUI visit: the applied values (from the manifest), the pending edits and
- * the pack's lang entries (game language, then en_us, then the raw name; iris-spec §4.2, Iris gui/element/widget).
+ * the pack's lang entries (game language, then en_us, then the raw name; as Iris gui/element/widget).
  */
 public final class OptionSession {
 	public final Manifest.Options options;

@@ -40,6 +40,19 @@ class DeferredClearsTest {
 	}
 
 	@Test
+	void neverSchedulesAClearAtAGeometryCommand() {
+		var clear = new Manifest.Command("clear", null, null, null, null, null, null, null, null, List.of(new Manifest.ClearOp("voxel", "main", null)));
+		var copy = new Manifest.Command("copy_depth", null, null, null, null, null, "depthtex0", "depthtex1", null, null);
+		var frame = List.of(clear, cmd("compute", "voxelize", null), copy, cmd("fullscreen", "deferred", null),
+				cmd("geometry", null, "translucent"), cmd("final", "final", null));
+		var dim = new Manifest.Dimension(Map.of("voxelize", program(0), "deferred", program(), "gbuffers_water", program(), "final", program()),
+				List.of(new Manifest.Resource(0, "storage_image", null, "voxel", null, null, null)), List.of(), List.of(), frame, List.of(), null);
+		var d = new DeferredClears(dim, n -> true);
+		assertNull(d.before()[4], "runRange skips geometry commands, so a clear there would never run");
+		assertEquals(1, d.before()[5].size(), "after the deferred pass behind the transfer and MC's translucent pass");
+	}
+
+	@Test
 	void keepsClearsOfImagesUsedBeforeTheClear() {
 		var clear = new Manifest.Command("clear", null, null, null, null, null, null, null, null, List.of(new Manifest.ClearOp("voxel", "main", null)));
 		var frame = List.of(cmd("compute", "begin", null), clear, cmd("fullscreen", "composite", null));

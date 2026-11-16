@@ -19,14 +19,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.Property;
 import org.jspecify.annotations.Nullable;
 
-/**
- * The pack's id maps (FORMAT.md §8) resolved once against the registries: block state → block.properties id (also used for
- * block entities and block items), entity type → entity.properties id, item model id → item.properties id. Immutable after
- * {@link #build}, so chunk-meshing worker threads read it without locks. Unmapped = −1, as in Iris.
- *
- * <p>Tag matchers ({@code #ns:tag}) resolve against the tags bound at build time; {@link EmrionVertexFormats} rebuilds the
- * table when the client receives tags.
- */
+/** The pack's id maps resolved against the registries; immutable after build, so meshing threads read it lock-free. Unmapped = -1 (Iris). */
 public final class BlockIdTable {
 	public static final Identifier CURRENT_PLAYER = Identifier.fromNamespaceAndPath("minecraft", "current_player");
 	/** Iris's special entity.properties names (entity_render_context mixins): converting zombie villagers, entity fire, name tags. */
@@ -115,10 +108,7 @@ public final class BlockIdTable {
 		@Nullable String property(S state, String key);
 	}
 
-	/**
-	 * Iris BlockMaterialMapping: for each matcher in list order, every state that satisfies its {@code k=v} predicates gets
-	 * the id unless an earlier matcher claimed it (first match wins). A predicate on a property the block lacks is ignored.
-	 */
+	/** Iris BlockMaterialMapping: first match wins; a predicate on a missing property is ignored. */
 	static <S> void assign(List<Manifest.IdEntry> entries, States<S> states, Map<S, Integer> out) {
 		for (Manifest.IdEntry e : entries) {
 			for (String m : e.match()) {

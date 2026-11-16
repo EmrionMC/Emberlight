@@ -6,13 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 
-/**
- * {@code profile.NAME} entries of shaders.properties (iris-spec §7.3, Iris ProfileSet). Profiles are never stored in
- * the settings file; the active one is detected from the current values.
- *
- * @param profiles name → option values, in file order
- * @param disabled name → program paths disabled by {@code !program.<path>}
- */
+/** {@code profile.NAME} entries of shaders.properties. Profiles are never saved; the active one is detected from the values. */
 public record Profiles(Map<String, Map<String, String>> profiles, Map<String, List<String>> disabled) {
 
 	/** @param tree raw "profile.NAME" lists (from the un-preprocessed shaders.properties), in file order */
@@ -60,18 +54,12 @@ public record Profiles(Map<String, Map<String, String>> profiles, Map<String, Li
 		}
 	}
 
-	/**
-	 * The active profile: the first, by number of constraints descending (stable), whose every known option equals
-	 * the current value. Null means "Custom".
-	 */
+	/** The first profile (most constraints first) whose every known option equals the current value; null = "Custom". */
 	public String detect(OptionValues values) {
 		return detect(profiles, values.resolved());
 	}
 
-	/**
-	 * Same as {@link #detect(OptionValues)} on resolved values (every option → its effective value, booleans as
-	 * "true"/"false", as in Manifest.Options.values). Constraints on names missing from {@code resolved} are ignored.
-	 */
+	/** {@link #detect(OptionValues)} on resolved values; constraints on unknown names are ignored. */
 	public static String detect(Map<String, Map<String, String>> profiles, Map<String, String> resolved) {
 		List<String> sorted = new ArrayList<>(profiles.keySet());
 		sorted.sort((a, b) -> Integer.compare(profiles.get(b).size(), profiles.get(a).size()));

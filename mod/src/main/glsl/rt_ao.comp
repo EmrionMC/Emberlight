@@ -1,0 +1,168 @@
+#version 460
+// RT AO, pass 1: cosine-weighted short rays per pixel from the depth buffer's surface, accumulated over frames with
+// reprojection (history rejected where the reprojected distance does not match: disocclusion, screen edges).
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_ray_query : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+#include "rt_ao_common.glsl"
+layout(set = 0, binding = 0) uniform accelerationStructureEXT tlas;
+layout(set = 0, binding = 1, std430) readonly buffer Sections { uvec4 sections[]; }; // xy vertex address, z layer, w format
+layout(set = 0, binding = 2) uniform sampler2D atlas;
+layout(set = 0, binding = 5, rgba16f) uniform writeonly image2D historyOut;
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Verts { uint d[]; };
+
+const float MAX_HISTORY = 32.0;
+const float CUTOUT_NEAR = 0.3;
+const float FAR_DIST = 48.0; // blocks; beyond it half the rays, the 32-frame history absorbs the noise (0 = off)
+
+// EMRION_BLOCK (56 B, UV0 at words 4-5) or, format 1, EmrionChunkVertex on the Sodium path (40 B, 2x15-bit UV0 at word 3)
+vec2 uv(Verts v, bool sod, uint i) {
+    if (sod) { uint t = v.d[i * 10u + 3u]; return vec2(uvec2(t, t >> 16u) & 0x7FFFu) / 32768.0; }
+    return uintBitsToFloat(uvec2(v.d[i * 14u + 4u], v.d[i * 14u + 5u]));
+}
+// mc_Entity (x, y = 1 for fluids): word 8 of EMRION_BLOCK, word 5 of EmrionChunkVertex
+bool fluid(Verts v, bool sod, uint i) { return (v.d[sod ? i * 10u + 5u : i * 14u + 8u] >> 16u) == 1u; }
+// at_midBlock.xyz = (block centre - vertex) * 64: word 9 of EmrionChunkVertex (signed bytes), words 12-13 of EMRION_BLOCK (halves)
+vec3 midBlock(Verts v, bool sod, uint i) {
+    if (sod) { int w = int(v.d[i * 10u + 9u]); return vec3(bitfieldExtract(w, 0, 8), bitfieldExtract(w, 8, 8), bitfieldExtract(w, 16, 8)); }
+    return vec3(unpackHalf2x16(v.d[i * 14u + 12u]), unpackHalf2x16(v.d[i * 14u + 13u]).x);
+}
+// Light level the block emits (at_midBlock.w): byte 3 of word 9 of EmrionChunkVertex, the high half of word 13 of EMRION_BLOCK
+float emission(Verts v, bool sod, uint i) { return sod ? float(v.d[i * 10u + 9u] >> 24u) : unpackHalf2x16(v.d[i * 14u + 13u]).y; }
+// Vertices of triangle prim: quad prim/2, triangles (0,1,2) and (2,3,0) like RtQuadIndices.
+uvec3 tri(uint prim) { return (prim >> 1u) * 4u + ((prim & 1u) == 0u ? uvec3(0u, 1u, 2u) : uvec3(2u, 3u, 0u)); }
+
+// Whether the hit is a small quad (both edges at most 0.2 blocks) of the block whose cell holds the ray origin: the lit
+// redstone torch and the powered repeater and comparator wrap each torch head in an inward-facing glow shell half a pixel
+// away, and every ray from the head hit it (black heads; RT off they glow). Big faces of the same block (a stair riser, a
+// cauldron wall) and every other cell keep occluding.
+bool ownGlowShell(Verts v, bool sod, uvec3 t, vec2 b, vec3 origin, vec3 hit) {
+    vec3 m0 = midBlock(v, sod, t.x), m1 = midBlock(v, sod, t.y), m2 = midBlock(v, sod, t.z);
+    // (t.x, t.y) and (t.y, t.z) are two edges of the quad in both of its triangles; midBlock differences are vertex offsets
+    if (max(dot(m1 - m0, m1 - m0), dot(m2 - m1, m2 - m1)) > 12.8 * 12.8) return false;
+    vec3 m = m0 * (1.0 - b.x - b.y) + m1 * b.x + m2 * b.y;
+    return all(lessThanEqual(abs(origin - (hit + m / 64.0)), vec3(0.5)));
+}
+
+// Distance to the first opaque or alpha-tested cutout hit (cutoff 0.1 at mip 0, like the shadow helper), or tMax.
+// Mask 0x01: solid + cutout terrain; translucent (water, glass) does not occlude ambient light. Fluid faces (lava) are passed
+// through: lava glows instead of occluding, the pack waves its surface below the BLAS copy (rays from it started under its
+// own static surface: black wedges), and its top face sits 1/9 below a ceiling above it (a whole underside turned black).
+float hitDistance(vec3 origin, vec3 dir, float tMax) {
+    float tMin = 0.0;
+    for (int pass = 0, near = 0; pass < 4; pass++) {
+        rayQueryEXT q;
+        rayQueryInitializeEXT(q, tlas, gl_RayFlagsNoneEXT, 0x01u, origin, tMin, dir, tMax);
+        for (int guard = 0; guard < 32 && rayQueryProceedEXT(q); guard++) {
+            // candidates are cutout only (solid BLAS are opaque). The pack waves foliage in its vertex shader, the BLAS holds
+            // the static blades: a ray leaving a rasterized blade would hit its own static copy, so near cutout hits do not count.
+            if (rayQueryGetIntersectionTEXT(q, false) < CUTOUT_NEAR) continue;
+            uvec4 s = sections[rayQueryGetIntersectionInstanceCustomIndexEXT(q, false)];
+            Verts v = Verts(s.xy);
+            bool sod = s.w == 1u;
+            uvec3 t = tri(uint(rayQueryGetIntersectionPrimitiveIndexEXT(q, false)));
+            vec2 b = rayQueryGetIntersectionBarycentricsEXT(q, false);
+            vec2 u = uv(v, sod, t.x) * (1.0 - b.x - b.y) + uv(v, sod, t.y) * b.x + uv(v, sod, t.z) * b.y;
+            if (textureLod(atlas, u, 0.0).a >= 0.1) rayQueryConfirmIntersectionEXT(q);
+        }
+        if (rayQueryGetIntersectionTypeEXT(q, true) == gl_RayQueryCommittedIntersectionNoneEXT) return tMax;
+        float t = rayQueryGetIntersectionTEXT(q, true);
+        uvec4 s = sections[rayQueryGetIntersectionInstanceCustomIndexEXT(q, true)];
+        // an opacity micromap commits opaque cutout texels without the candidate test above: skip near ones the same way
+        if (s.z == 1u && t < CUTOUT_NEAR && near++ < 4) {
+            tMin = t + 0.001;
+            pass--;
+            continue;
+        }
+        Verts v = Verts(s.xy);
+        bool sod = s.w == 1u;
+        uvec3 tr = tri(uint(rayQueryGetIntersectionPrimitiveIndexEXT(q, true)));
+        if (!fluid(v, sod, tr.x) && !ownGlowShell(v, sod, tr, rayQueryGetIntersectionBarycentricsEXT(q, true), origin, origin + dir * t)) return t;
+        tMin = t + 0.001;
+    }
+    return tMax;
+}
+
+// Whether the surface under origin (traced back along -n, alpha ignored) belongs to a block that emits light level 6 or more.
+// Ambient occlusion does not dim a light: the wall behind a wall-mounted redstone torch darkened its glowing head to a
+// dull red (RT off it glows; the pack's short SSAO barely reaches the wall).
+bool onLight(vec3 origin, vec3 n, float len) {
+    rayQueryEXT q;
+    rayQueryInitializeEXT(q, tlas, gl_RayFlagsOpaqueEXT, 0x01u, origin, 0.0, -n, len);
+    while (rayQueryProceedEXT(q)) {}
+    if (rayQueryGetIntersectionTypeEXT(q, true) == gl_RayQueryCommittedIntersectionNoneEXT) return false;
+    uvec4 s = sections[rayQueryGetIntersectionInstanceCustomIndexEXT(q, true)];
+    return emission(Verts(s.xy), s.w == 1u, tri(uint(rayQueryGetIntersectionPrimitiveIndexEXT(q, true))).x) >= 6.0;
+}
+
+float ign(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
+
+uint hash(uvec3 v) {
+    v = v * 1664525u + 1013904223u;
+    v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+    v ^= v >> 16u;
+    v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+    return v.x;
+}
+
+// Last frame's accumulated AO at p (bilinear over the 4 texels whose stored distance matches); count 0 = no history.
+vec2 history(vec3 p) {
+    if (pc.camDelta.w < 1.0) return vec2(1.0, 0.0);
+    vec3 prev = p + pc.camDelta.xyz;
+    vec4 clip = pc.prevViewProj * vec4(prev, 1.0);
+    if (clip.w <= 0.0) return vec2(1.0, 0.0);
+    vec2 coord = (clip.xy / clip.w * 0.5 + 0.5) * pc.params.xy - 0.5;
+    ivec2 base = ivec2(floor(coord));
+    vec2 f = coord - vec2(base);
+    float dist = length(prev), tol = 0.03 * dist + 0.05;
+    vec3 sum = vec3(0.0);
+    for (int i = 0; i < 4; i++) {
+        ivec2 o = ivec2(i & 1, i >> 1), q = base + o;
+        if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, ivec2(pc.params.xy)))) continue;
+        vec4 h = texelFetch(historyIn, q, 0);
+        if (abs(h.z - dist) > tol) continue;
+        float w = (o.x == 1 ? f.x : 1.0 - f.x) * (o.y == 1 ? f.y : 1.0 - f.y);
+        sum += w * vec3(h.x, h.y, 1.0);
+    }
+    return sum.z < 0.01 ? vec2(1.0, 0.0) : sum.xy / sum.z;
+}
+
+void main() {
+    ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(px, ivec2(pc.params.xy)))) return;
+    float depth = texelFetch(depthTex, px, 0).r;
+    if (noSurface(depth)) {
+        imageStore(historyOut, px, vec4(1.0, 0.0, -1.0, 0.0));
+        return;
+    }
+    vec3 p = playerPos(px, depth);
+    vec3 n = depthNormal(px, p);
+    float dist = length(p);
+    float lift = 0.004 + 0.002 * dist;
+    vec3 origin = p + n * lift; // above the face despite depth precision
+    vec3 t = normalize(cross(n, abs(n.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
+    vec3 b = cross(n, t);
+
+    int rays = int(abs(pc.params.w)); // negative: DLSS Ray Reconstruction denoises, no history and no filter
+
+    if (FAR_DIST > 0.0 && dist > FAR_DIST) rays = max(rays / 2, 1);
+    float radius = pc.params.z, frame = pc.camDelta.w;
+    float u0 = ign(vec2(px) + 5.588238 * mod(frame, 64.0));
+    float u1 = float(hash(uvec3(px, uint(frame))) >> 8u) / 16777216.0;
+    float open = 0.0;
+    for (int i = 0; i < rays; i++) {
+        vec2 u = fract(vec2(u0, u1) + float(i) * vec2(0.7548777, 0.5698403)); // R2 offsets between the rays
+        float r = sqrt(u.x), a = 6.2831853 * u.y; // cosine-weighted hemisphere
+        vec3 dir = normalize(t * (r * cos(a)) + b * (r * sin(a)) + n * sqrt(max(0.0, 1.0 - u.x)));
+        float s = hitDistance(origin, dir, radius) / radius;
+        open += s * s; // near hits occlude fully, hits towards the ray end fade out (no hard edge at the ray length)
+    }
+    open /= float(rays);
+    // after the AO rays: only occluded pixels pay for the ray back to their block (it cost 0.15 ms per frame first, DLSS Quality at 2560x1386)
+    if (open < 1.0 && onLight(origin, n, 2.0 * lift + 0.01)) open = 1.0;
+
+    vec2 h = pc.params.w < 0.0 ? vec2(1.0, 0.0) : history(p);
+    float count = min(h.y + 1.0, MAX_HISTORY);
+    imageStore(historyOut, px, vec4(mix(h.x, open, 1.0 / count), count, dist, 0.0));
+}

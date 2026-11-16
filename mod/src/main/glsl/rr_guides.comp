@@ -1,0 +1,163 @@
+#version 460
+// DLSS Ray Reconstruction guide buffers (docs/UPSCALING.md §11), render size, from the jittered depth of this frame:
+//   diffuse albedo  terrain: the atlas texel the view ray hits (TLAS, alpha-tested, mip by pixel footprint) x vertex tint;
+//                   everything else (sky, hand, entities, water, glass, waved foliage, particles): the input colour itself
+//   specular albedo NVIDIA's EnvBRDFApprox2 (F0 0.04) for the roughness and view angle; 0 for the sky
+//   normals.xyz     world-space shading normal (pack's colortex4 where the pack writes it, else from depth); w = roughness
+// Albedo stays in the display encoding like the input colour (both gamma-encoded), so colour / albedo is still the lighting.
+#extension GL_EXT_ray_query : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform accelerationStructureEXT tlas;
+layout(set = 0, binding = 1, std430) readonly buffer Sections { uvec4 sections[]; }; // xy vertex address, z layer, w format
+layout(set = 0, binding = 2) uniform sampler2D atlas;
+layout(set = 0, binding = 3) uniform sampler2D depthTex;  // depthtex0
+layout(set = 0, binding = 4) uniform sampler2D colorTex;  // the upscaler's input colour
+layout(set = 0, binding = 5) uniform sampler2D normalTex; // Complementary colortex4: xyz world normal (normal-mapped)
+layout(set = 0, binding = 6) uniform sampler2D materialTex; // Complementary colortex6: r smoothness
+layout(set = 0, binding = 7, rgba16f) uniform writeonly image2D diffuseOut;
+layout(set = 0, binding = 8, rgba16f) uniform writeonly image2D specularOut;
+layout(set = 0, binding = 9, rgba16f) uniform writeonly image2D normalOut;
+layout(set = 0, binding = 10, rgba16f) uniform writeonly image2D colorOut;
+layout(set = 0, binding = 11) uniform sampler2D compositionTex; // upscaler composition mask (r: 0.75 water), when params.w bit 2
+layout(set = 0, binding = 12) uniform sampler2D reactiveTex;    // upscaler reactive mask (r), when params.w bit 2
+layout(set = 0, binding = 13, rgba16f) uniform writeonly image2D biasOut; // RR's bias-current-colour mask (r)
+layout(set = 0, binding = 14, rgba16f) uniform writeonly image2D particleOut; // RR's particle mask (r): pack ids 254 and entities // RR's colour input: the input without NaN/Inf
+layout(push_constant) uniform Push {
+    mat4 invViewProj; // inverse(gbufferProjection * gbufferModelView), jittered like the depth
+    vec4 params;      // xy: render size, z: radians per pixel (vertical), w: bit 1 = colortex4/6 hold Complementary's normal/smoothness,
+                      // bit 2 = the upscaler masks are bound (else those bindings hold depth)
+} pc;
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Verts { uint d[]; };
+
+// vertex accessors as in rt_ao.comp: EMRION_BLOCK (14 words) or, format 1, EmrionChunkVertex on the Sodium path (10 words)
+vec2 uv(Verts v, bool sod, uint i) {
+    if (sod) { uint t = v.d[i * 10u + 3u]; return vec2(uvec2(t, t >> 16u) & 0x7FFFu) / 32768.0; }
+    return uintBitsToFloat(uvec2(v.d[i * 14u + 4u], v.d[i * 14u + 5u]));
+}
+vec3 tint(Verts v, bool sod, uint i) { return unpackUnorm4x8(v.d[sod ? i * 10u + 2u : i * 14u + 3u]).rgb; }
+vec3 midBlock(Verts v, bool sod, uint i) {
+    if (sod) { int w = int(v.d[i * 10u + 9u]); return vec3(bitfieldExtract(w, 0, 8), bitfieldExtract(w, 8, 8), bitfieldExtract(w, 16, 8)); }
+    return vec3(unpackHalf2x16(v.d[i * 14u + 12u]), unpackHalf2x16(v.d[i * 14u + 13u]).x);
+}
+uvec3 tri(uint prim) { return (prim >> 1u) * 4u + ((prim & 1u) == 0u ? uvec3(0u, 1u, 2u) : uvec3(2u, 3u, 0u)); }
+
+vec3 playerPos(ivec2 px, float depth) {
+    vec4 p = pc.invViewProj * vec4((vec2(px) + 0.5) / pc.params.xy * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+    return p.xyz / p.w;
+}
+vec3 playerPosAt(ivec2 px) {
+    px = clamp(px, ivec2(0), ivec2(pc.params.xy) - 1);
+    return playerPos(px, texelFetch(depthTex, px, 0).r);
+}
+vec3 depthNormal(ivec2 px, vec3 p) {
+    vec3 l = playerPosAt(px - ivec2(1, 0)), r = playerPosAt(px + ivec2(1, 0));
+    vec3 d = playerPosAt(px - ivec2(0, 1)), u = playerPosAt(px + ivec2(0, 1));
+    vec3 dx = dot(r - p, r - p) < dot(p - l, p - l) ? r - p : p - l;
+    vec3 dy = dot(u - p, u - p) < dot(p - d, p - d) ? u - p : p - d;
+    vec3 n = cross(dx, dy);
+    n = dot(n, n) > 1e-12 ? normalize(n) : -normalize(p);
+    return dot(n, p) > 0.0 ? -n : n;
+}
+
+// Ray Tracing Gems ch. 32 fit, as given in NVIDIA's DLSS-RR integration guide (appendix "Specular Albedo Calculation")
+vec3 envBrdfApprox2(vec3 f0, float alpha, float nov) {
+    nov = abs(nov);
+    vec4 x = vec4(1.0, nov, nov * nov, nov * nov * nov);
+    vec4 y = vec4(1.0, alpha, alpha * alpha, alpha * alpha * alpha);
+    // HLSL float2x2(a, b, c, d) has rows (a, b), (c, d); GLSL fills columns, so x * m here equals mul(M, x) there
+    mat2 m1 = mat2(0.99044, -1.28514, 1.29678, -0.755907);
+    mat3 m2 = mat3(1.0, 2.92338, 59.4188, 20.3225, -27.0302, 222.592, 121.563, 626.13, 316.627);
+    mat2 m3 = mat2(0.0365463, 3.32707, 9.0632, -9.04756);
+    mat3 m4 = mat3(1.0, 3.59685, -1.36772, 9.04401, -16.3174, 9.22949, 5.56589, 19.7886, -20.2123);
+    float bias = dot(x.xy * m1, y.xy) / dot(x.xyw * m2, y.xyw);
+    float scale = dot(x.xy * m3, y.xy) / dot(x.xzw * m4, y.xyw);
+    bias *= clamp(f0.g * 50.0, 0.0, 1.0);
+    return f0 * max(0.0, scale) + max(0.0, bias);
+}
+
+// The terrain texel under the pixel, or a < 0 when the view ray's first alpha-tested terrain hit is not the rasterised surface.
+vec4 terrainAlbedo(vec3 p, vec3 n) {
+    float dist = length(p);
+    vec3 dir = p / dist;
+    rayQueryEXT q;
+    rayQueryInitializeEXT(q, tlas, gl_RayFlagsNoneEXT, 0x01u, vec3(0.0), 0.0, dir, dist * 1.03 + 0.2);
+    for (int guard = 0; guard < 32 && rayQueryProceedEXT(q); guard++) {
+        uvec4 s = sections[rayQueryGetIntersectionInstanceCustomIndexEXT(q, false)];
+        Verts v = Verts(s.xy);
+        bool sod = s.w == 1u;
+        uvec3 t = tri(uint(rayQueryGetIntersectionPrimitiveIndexEXT(q, false)));
+        vec2 b = rayQueryGetIntersectionBarycentricsEXT(q, false);
+        vec2 u = uv(v, sod, t.x) * (1.0 - b.x - b.y) + uv(v, sod, t.y) * b.x + uv(v, sod, t.z) * b.y;
+        if (textureLod(atlas, u, 0.0).a >= 0.1) rayQueryConfirmIntersectionEXT(q);
+    }
+    if (rayQueryGetIntersectionTypeEXT(q, true) == gl_RayQueryCommittedIntersectionNoneEXT) return vec4(-1.0);
+    float t = rayQueryGetIntersectionTEXT(q, true);
+    if (abs(t - dist) > 0.01 * dist + 0.03) return vec4(-1.0); // waved foliage, entities, fluids, a surface the TLAS lacks
+    uvec4 s = sections[rayQueryGetIntersectionInstanceCustomIndexEXT(q, true)];
+    Verts v = Verts(s.xy);
+    bool sod = s.w == 1u;
+    uvec3 tr = tri(uint(rayQueryGetIntersectionPrimitiveIndexEXT(q, true)));
+    vec2 b = rayQueryGetIntersectionBarycentricsEXT(q, true);
+    vec3 w = vec3(1.0 - b.x - b.y, b.x, b.y);
+    vec2 u0 = uv(v, sod, tr.x), u1 = uv(v, sod, tr.y), u2 = uv(v, sod, tr.z);
+    vec2 u = u0 * w.x + u1 * w.y + u2 * w.z;
+    // mip from the pixel footprint: texels per block from the quad edge (atlas texels / blocks), so HD resource packs work too
+    vec2 atlasSize = vec2(textureSize(atlas, 0));
+    float edge = length(midBlock(v, sod, tr.y) - midBlock(v, sod, tr.x)) / 64.0;
+    float texelsPerBlock = edge > 1e-3 ? length((u1 - u0) * atlasSize) / edge : 16.0;
+    float footprint = dist * pc.params.z * texelsPerBlock / max(abs(dot(n, dir)), 0.2);
+    float lod = clamp(log2(max(footprint, 1.0)), 0.0, float(textureQueryLevels(atlas) - 1));
+    vec3 c = tint(v, sod, tr.x) * w.x + tint(v, sod, tr.y) * w.y + tint(v, sod, tr.z) * w.z;
+    return vec4(textureLod(atlas, u, lod).rgb * c, 1.0);
+}
+
+void main() {
+    ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(px, ivec2(pc.params.xy)))) return;
+    float depth = texelFetch(depthTex, px, 0).r;
+    vec3 raw = texelFetch(colorTex, px, 0).rgb;
+    // a single NaN pixel (raw RT noise through the pack's maths) turned into a black 16-32 px tile in RR's output
+    if (any(isnan(raw)) || any(isinf(raw))) raw = vec3(0.0);
+    imageStore(colorOut, px, vec4(raw, 1.0));
+    vec3 color = clamp(raw, 0.0, 1.0);
+    bool packIn = (int(pc.params.w) & 1) != 0, masks = (int(pc.params.w) & 2) != 0;
+    float bias = masks ? texelFetch(reactiveTex, px, 0).r : 0.0;
+    // Complementary's composition mask is 0.25 on particles and entities (upscale_masks.glsl): RR smeared the redstone and
+    // flame particles into a haze. Entities ride along; their albedo is their colour anyway, so RR does not denoise them.
+    float comp = masks ? texelFetch(compositionTex, px, 0).r : 0.0;
+    imageStore(particleOut, px, vec4(abs(comp - 0.25) < 0.05 ? 1.0 : 0.0));
+    if (depth >= 1.0) { // sky: NVIDIA's defaults, except the albedo (the colour keeps stars and clouds as detail)
+        imageStore(biasOut, px, vec4(bias));
+        imageStore(diffuseOut, px, vec4(color, 1.0));
+        imageStore(specularOut, px, vec4(0.0));
+        imageStore(normalOut, px, vec4(0.0));
+        return;
+    }
+    vec3 p = playerPos(px, depth);
+    vec3 n = depthNormal(px, p);
+    float rough = 1.0;
+    bool pack = packIn && depth >= 0.56;
+    if (pack) {
+        vec3 m = texelFetch(normalTex, px, 0).xyz;
+        if (dot(m, m) > 0.25) n = normalize(m); // NaN fails the test
+        float sm = texelFetch(materialTex, px, 0).r;
+        rough = isnan(sm) ? 1.0 : clamp(1.0 - sm, 0.0, 1.0);
+    }
+    // Water shows the refracted (or reflected) world with its waves, which our motion vectors track as the bottom: as a mirror
+    // (its wave normal, roughness 0) RR reprojected it as a reflection and drew a fine crosshatch over the seabed. NVIDIA's
+    // advice for noisy refraction: constant guides. So the flat surface, rough, and the colour as albedo (below).
+    if (pack && comp > 0.6) {
+        n = depthNormal(px, p);
+        rough = 1.0;
+    }
+    imageStore(biasOut, px, vec4(bias));
+    vec4 a = depth >= 0.56 ? terrainAlbedo(p, n) : vec4(-1.0); // depth < 0.56: the hand (not in the TLAS)
+    vec3 albedo = a.a > 0.0 && !any(isnan(a.rgb)) ? a.rgb : color;
+    float nov = dot(n, -normalize(p));
+    imageStore(diffuseOut, px, vec4(albedo, 1.0));
+    vec3 spec = envBrdfApprox2(vec3(0.04), rough * rough, nov);
+    imageStore(specularOut, px, vec4(any(isnan(spec)) || any(isinf(spec)) ? vec3(0.04) : spec, 1.0));
+    imageStore(normalOut, px, vec4(n, rough));
+}

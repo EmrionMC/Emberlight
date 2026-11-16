@@ -10,11 +10,7 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.ModifyArg;
 
-/**
- * Why: atlas directory sources would stitch a resource pack's labPBR maps ({@code x_n.png}/{@code x_s.png} next to
- * {@code x.png}) as sprites of their own; they are never drawn but grow the atlas and every PBR atlas built from it (Iris
- * filters them the same way).
- */
+/** Why: labPBR {@code _n}/{@code _s} maps would be stitched as sprites and grow every atlas (Iris filters them too). */
 @Mixin(DirectoryLister.class)
 public class DirectoryListerMixin {
 	@ModifyArg(method = "run", at = @At(value = "INVOKE", target = "Ljava/util/Map;forEach(Ljava/util/function/BiConsumer;)V"))

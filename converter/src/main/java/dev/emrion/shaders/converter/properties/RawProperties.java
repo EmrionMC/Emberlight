@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Keys Iris reads from the raw, un-preprocessed shaders.properties (iris-spec §4.1): feature flags, sliders, profiles,
+ * Keys Iris reads from the raw, un-preprocessed shaders.properties: feature flags, sliders, profiles,
  * screens and columns. Preprocessor branches are therefore ignored for these; the last definition of a key wins.
  * Screen maps use "" for the main screen.
  */

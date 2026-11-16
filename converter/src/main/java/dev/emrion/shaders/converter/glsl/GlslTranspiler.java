@@ -190,6 +190,7 @@ public final class GlslTranspiler implements Transpiler {
 		boolean declaresVariable(String name) {
 			for (int i = 1; i + 1 < t.size(); i++) {
 				if (!t.get(i).is(name) || !Set.of("int", "uint", "float").contains(t.get(i - 1).text)) continue;
+				if (i >= 2 && Set.of("in", "const", "inout").contains(t.get(i - 2).text) && Set.of(")", ",").contains(t.get(i + 1).text)) return true; // parameter
 				if (i >= 2 && Set.of("uniform", "in", "out", "varying", "attribute", "flat").contains(t.get(i - 2).text)) continue;
 				if (Set.of("=", ";", ",").contains(t.get(i + 1).text)) return true;
 			}
@@ -226,6 +227,8 @@ public final class GlslTranspiler implements Transpiler {
 								globals.add(d.name());
 							}
 						} else if (!"uniform".equals(s)) work.add(it);
+						// a used uniform keeps the constants of its default value and array size (it may become a const)
+						else for (Declarator d : it.decls) if (d.hasInit() || d.hasArray()) defs.computeIfAbsent(d.name(), k -> new ArrayList<>()).add(it);
 						classify(it, s);
 					}
 					default -> work.add(it);
@@ -317,6 +320,9 @@ public final class GlslTranspiler implements Transpiler {
 				for (Var v : s.outs.values()) size.merge(v.name(), slots(v, perVertex(s.type, v, false)), Math::max);
 				for (Var v : s.ins.values()) size.merge(v.name(), slots(v, perVertex(s.type, v, true)), Math::max);
 			}
+			// in/out blocks link by block name like Iris (GL); members take consecutive locations from the block's
+			for (Stage s : stages) for (Item it : s.items)
+				if (ioBlock(it)) size.merge(blockKey(it), memberLocations(s.t, it.bodyStart, it.bodyEnd), Math::max);
 			if (fogVarying) size.put("emr_FogFragCoord", 1);
 			if (entityColorVarying) size.put("emr_entityColor", 1);
 			if (entityIdVarying) size.put("emr_entityInfo", 1);
@@ -347,42 +353,78 @@ public final class GlslTranspiler implements Transpiler {
 
 	static final Set<String> MEMBER_QUALIFIERS = Set.of("lowp", "mediump", "highp", "flat", "smooth", "noperspective", "centroid");
 
+	static boolean ioBlock(Item it) {
+		return it.kind == ItemKind.BLOCK && Set.of("in", "out").contains(it.storage()) && !it.name.startsWith("gl_");
+	}
+
+	static String blockKey(Item it) {
+		return "block " + it.name;
+	}
+
 	/** Interface locations of a type; a struct declared in the stage takes the sum of its members (Photon's fog_params). */
 	static int typeLocations(List<Token> t, String type) {
 		for (int i = 0; i + 2 < t.size(); i++) {
 			if (!t.get(i).is("struct") || !t.get(i + 1).is(type) || !t.get(i + 2).is("{")) continue;
-			int close = GlslParser.match(t, i + 2), n = 0;
-			for (int j = i + 3; j < close; j++) {
-				while (MEMBER_QUALIFIERS.contains(t.get(j).text)) j++;
-				int per = typeLocations(t, t.get(j).text);
-				while (j < close && !t.get(j).is(";")) {
-					int name = ++j, end = name + 1;
-					while (end < close && t.get(end).is("[")) end = GlslParser.match(t, end) + 1;
-					int m = per;
-					for (int d : arrayDims(t, name + 1, end)) m *= Math.max(1, d);
-					n += m;
-					j = end;
-				}
-			}
-			return n;
+			return memberLocations(t, i + 2, GlslParser.match(t, i + 2));
 		}
 		return GlslTypes.locations(type);
 	}
 
-	/** Array dimensions in [from, to); unsized or non-literal dimensions are 0. */
+	/** Sum of the member locations between a struct's or block's braces. */
+	static int memberLocations(List<Token> t, int open, int close) {
+		int n = 0;
+		for (int j = open + 1; j < close; j++) {
+			while (MEMBER_QUALIFIERS.contains(t.get(j).text)) j++;
+			int per = typeLocations(t, t.get(j).text);
+			while (j < close && !t.get(j).is(";")) {
+				int name = ++j, end = name + 1;
+				while (end < close && t.get(end).is("[")) end = GlslParser.match(t, end) + 1;
+				int m = per;
+				for (int d : arrayDims(t, name + 1, end)) m *= Math.max(1, d);
+				n += m;
+				j = end;
+			}
+		}
+		return n;
+	}
+
+	/** Array dimensions in [from, to); unsized or non-constant dimensions are 0. */
 	static List<Integer> arrayDims(List<Token> t, int from, int to) {
 		List<Integer> dims = new ArrayList<>();
 		for (int i = from; i < to; i++) {
 			if (!t.get(i).is("[")) continue;
 			int close = GlslParser.match(t, i);
-			int v = 0;
-			if (close == i + 2) {
-				try { v = Integer.decode(t.get(i + 1).text.replaceAll("[uU]$", "")); } catch (NumberFormatException ignored) {}
-			}
-			dims.add(v);
+			dims.add(close > i + 1 ? (int) constInt(t, i + 1, close, 0) : 0);
 			i = close;
 		}
 		return dims;
+	}
+
+	/** Integer constant expression in [from, to) over literals and global {@code const int/uint} names; 0 if it is not one. */
+	static long constInt(List<Token> t, int from, int to, int depth) {
+		StringBuilder e = new StringBuilder();
+		for (int i = from; i < to; i++) {
+			Token k = t.get(i);
+			if (!k.ident()) { e.append(' ').append(k.text); continue; }
+			int def = constDef(t, k.text);
+			if (def < 0 || depth > 16) return 0;
+			int end = def;
+			while (end < t.size() && !t.get(end).is(";") && !t.get(end).is(",")) end++;
+			e.append(" (").append(constInt(t, def, end, depth + 1)).append(')');
+		}
+		try {
+			return PpExpression.evaluate(PpLexer.lexAll(e.toString()));
+		} catch (PpExpression.EvalException ex) {
+			return 0;
+		}
+	}
+
+	/** Index of the initializer of {@code const int|uint name = ...}, or -1. */
+	static int constDef(List<Token> t, String name) {
+		for (int i = 0; i + 3 < t.size(); i++)
+			if (t.get(i).is("const") && (t.get(i + 1).is("int") || t.get(i + 1).is("uint")) && t.get(i + 2).is(name) && t.get(i + 3).is("="))
+				return i + 4;
+		return -1;
 	}
 
 	// ---- analysis --------------------------------------------------------------------------------------------------
@@ -419,7 +461,11 @@ public final class GlslTranspiler implements Transpiler {
 			}
 			for (Item it : s.items) {
 				if (it.kind == ItemKind.BLOCK && "buffer".equals(it.storage()) && !bufferReference(it)) {
-					buffers.putIfAbsent(it.name, new BufferDecl(it.name, layoutInt(it, "binding", 0), it.has("readonly")));
+					// the block's own declarator counts once; more = referenced by kept code
+					boolean used = it.decls.isEmpty() || s.count(it.decls.getFirst().name()) > 1;
+					var prev = buffers.get(it.name);
+					buffers.put(it.name, prev == null ? new BufferDecl(it.name, layoutInt(it, "binding", 0), it.has("readonly"), used)
+							: new BufferDecl(prev.blockName(), prev.declaredBinding(), prev.readonly(), used || prev.used()));
 				}
 			}
 			boolean usesFog = s.used("gl_Fog");
@@ -457,6 +503,7 @@ public final class GlslTranspiler implements Transpiler {
 				boolean transforms = position || s.used("gl_ModelViewMatrix") || s.used("gl_Color") || s.used("gl_TextureMatrix")
 						|| s.used("gl_NormalMatrix") || s.used("modelViewMatrix") || s.used("vaColor") || p.entityColorVarying;
 				if (transforms) set0.addAll(List.of("DynamicTransforms", "TerrainUniform", "ChunkSection"));
+				if (List.of("gbuffers_clouds", "gbuffers_textured", "gbuffers_basic").contains(p.name)) set0.addAll(List.of("CloudInfo", "CloudFaces")); // the clouds variant pulls its vertices
 				if (p.entityColorVarying) set0.add("Sampler1");
 			}
 			if (p.geometry && s.type.intermediate()) {
@@ -533,11 +580,24 @@ public final class GlslTranspiler implements Transpiler {
 
 	@Override
 	public EmitResult emit(ProgramAnalysis analysis, EmitContext context, String vertexVariant) {
+		return emit(new Program(analysis.stages()), context, vertexVariant, true);
+	}
+
+	/** Parses the program once; variants after the first emit only the vertex and intermediate stages. */
+	@Override
+	public List<EmitResult> emitVariants(ProgramAnalysis analysis, EmitContext context, List<String> vertexVariants) {
 		Program p = new Program(analysis.stages());
+		List<EmitResult> out = new ArrayList<>();
+		for (int i = 0; i < vertexVariants.size(); i++) out.add(emit(p, context, vertexVariants.get(i), i == 0));
+		return out;
+	}
+
+	static EmitResult emit(Program p, EmitContext context, String vertexVariant, boolean allStages) {
 		List<Diagnostic> diags = new ArrayList<>(p.diagnostics);
 		Map<StageType, String> out = new LinkedHashMap<>();
 		for (Stage s : p.stages) {
-			StageEmitter e = new StageEmitter(this, p, s, context, s.type == StageType.VERTEX || s.type.intermediate() ? vertexVariant : null);
+			if (!allStages && s.type != StageType.VERTEX && !s.type.intermediate()) continue;
+			StageEmitter e = new StageEmitter(p, s, context, s.type == StageType.VERTEX || s.type.intermediate() ? vertexVariant : null);
 			out.put(s.type, e.emit());
 			for (Diagnostic d : e.diagnostics) diags.add(d.in(p.name, s.type.extension));
 		}
@@ -552,7 +612,7 @@ public final class GlslTranspiler implements Transpiler {
 		final EmitContext ctx;
 		final String variant;
 		final List<String> variantInputs;
-		final boolean terrain, fullscreen, lastVertexStage;
+		final boolean terrain, sodium, clouds, fullscreen, lastVertexStage;
 		final Map<String, String> repl = new HashMap<>();
 		final Map<String, String> callRepl = new HashMap<>();
 		final List<String> prologue = new ArrayList<>(), epilogue = new ArrayList<>();
@@ -561,7 +621,7 @@ public final class GlslTranspiler implements Transpiler {
 		final Set<Integer> fragData = new java.util.TreeSet<>();
 		final List<Diagnostic> diagnostics = new ArrayList<>();
 
-		StageEmitter(GlslTranspiler owner, Program p, Stage s, EmitContext ctx, String variant) {
+		StageEmitter(Program p, Stage s, EmitContext ctx, String variant) {
 			this.p = p;
 			this.s = s;
 			this.t = s.t;
@@ -572,6 +632,8 @@ public final class GlslTranspiler implements Transpiler {
 				diagnostics.add(Diagnostic.error(s.src.sourcePath(), 0, "unknown vertex variant " + variant));
 			}
 			this.terrain = variant != null && variant.startsWith("terrain");
+			this.sodium = "terrain_sodium".equals(variant);
+			this.clouds = "clouds".equals(variant);
 			this.fullscreen = !p.geometry;
 			// the depth fix (GL clip z → Vulkan) belongs in the last stage before the rasterizer
 			boolean gs = p.stage(StageType.GEOMETRY) != null, tes = p.stage(StageType.TESS_EVAL) != null;
@@ -580,7 +642,26 @@ public final class GlslTranspiler implements Transpiler {
 
 		boolean has(String input) { return variantInputs.contains(input); }
 
-		String in(String canon) { return "emr_in_" + canon; }
+		String in(String canon) {
+			if (clouds) { // vertex pulling as MC's clouds.vsh / Iris's VanillaTransformer
+				switch (canon) {
+					case "Position" -> { return "emr_cloudPos()"; }
+					case "Color" -> { return "emr_cloudCol()"; }
+					case "Normal" -> { return "emr_cloudNormal()"; }
+					default -> {}
+				}
+			}
+			if (sodium) { // decoded from Sodium's compact format (VertexLayouts.SODIUM_INPUTS), as Iris's SodiumTransformer does
+				switch (canon) {
+					case "Position" -> { return "emr_sodPosition()"; }
+					case "UV0" -> { return "emr_sodUV0()"; }
+					case "UV2" -> { return "ivec2(emr_sod_LightAndData.xy)"; }
+					case "at_midBlock" -> { return "vec4(emr_sod_MidBlock)"; } // RGBA8_SINT in the mod's extended Sodium format
+					default -> {}
+				}
+			}
+			return "emr_in_" + canon;
+		}
 
 		String kw(String name) {
 			// shared has always been the compute storage qualifier; only older stages may use it as a name
@@ -616,7 +697,7 @@ public final class GlslTranspiler implements Transpiler {
 			boolean vs = st == StageType.VERTEX;
 			for (var e : CALL_RENAMES.entrySet()) callRepl.put(e.getKey(), e.getValue());
 			if (st != StageType.COMPUTE) callRepl.put("main", "emr_main");
-			repl.put("gl_VertexID", "gl_VertexIndex");
+			repl.put("gl_VertexID", fullscreen ? "emr_fsVertexId()" : "gl_VertexIndex"); // composites: the ids of Iris's indexed quad
 			repl.put("gl_InstanceID", "gl_InstanceIndex");
 			repl.put("gl_Fog", "emr_FogParameters(emr_FogColor, emr_FogDensity, emr_FogStart, emr_FogEnd, 1.0 / (emr_FogEnd - emr_FogStart))");
 			if (st == StageType.FRAGMENT) {
@@ -635,10 +716,26 @@ public final class GlslTranspiler implements Transpiler {
 			else compositeTable(vs);
 			// Iris VanillaTransformer: gl_Color outside the vertex stage is the colour modulator
 			if (p.geometry && st.intermediate()) repl.put("gl_Color", terrain ? "vec4(1.0)" : "emr_dt.ColorModulator");
+			// fragment-only programs: the loader's legacy vertex shader (Iris's) produces irs_Color and irs_texCoords
+			Stage prev = st == StageType.FRAGMENT ? previous() : null;
+			for (String[] v : new String[][] {{"gl_Color", "irs_Color", ""}, {"gl_TexCoord", "irs_texCoords", "[3]"}}) {
+				if (prev == null || !prev.outs.containsKey(v[1]) || !s.used(v[0])) continue;
+				repl.put(v[0], v[1]);
+				extraDecls.add("layout(location = " + p.locations.get(v[1]) + ") in vec4 " + v[1] + v[2] + ";");
+			}
 			if (p.entityIdVarying && (st == StageType.FRAGMENT || vs)) {
 				for (var e : ENTITY_IDS.entrySet()) repl.put(e.getKey(), "emr_entityInfo." + e.getValue());
 				if (vs) prologue.add("emr_entityInfo = " + (has("iris_Entity") ? "ivec3(" + in("iris_Entity") + ")"
 						: "ivec3(emr_draw.entityId, emr_draw.blockEntityId, emr_draw.currentRenderedItemId)") + ";");
+			}
+			// Iris binds fogMode 0 / fogShape -1 where its ShaderKey has FogMode.OFF: composites and the sky and crumbling programs.
+			// Packs branch on fogShape == 1 (cylindrical fog); seeing 1 in a composite made Shrimple's fog hazier.
+			// Only the uniform: Bliss names its own function fogShape.
+			if (!p.geometry || Set.of("gbuffers_skybasic", "gbuffers_skytextured", "gbuffers_damagedblock").contains(p.name)) {
+				for (Var u : s.uniforms) {
+					if (u.name().equals("fogMode")) repl.put("fogMode", "0");
+					if (u.name().equals("fogShape")) repl.put("fogShape", "(-1)");
+				}
 			}
 			// pack-declared uniforms that map to push constants / phase block
 			for (Var u : s.uniforms) {
@@ -647,6 +744,8 @@ public final class GlslTranspiler implements Transpiler {
 				if (member(PUSH, n)) repl.put(n, "emr_draw." + n);
 				else if (member(PHASE, n)) repl.put(n, "emr_phase." + n);
 			}
+			// Iris's EntityPatcher replaces the ids even where the pack never declares them (Shrimple's hand with tessellation)
+			if (p.geometry) for (String n : ENTITY_IDS.keySet()) if (s.used(n) && !p.ownIds.contains(n)) repl.putIfAbsent(n, "emr_draw." + n);
 			// a textual replacement would also hit the pack's own declarator; a global copy lets GLSL scoping shadow it
 			for (String n : p.ownIds) {
 				String v = repl.remove(n);
@@ -674,7 +773,7 @@ public final class GlslTranspiler implements Transpiler {
 			if (s.used("mc_chunkFade") && !declaredAnywhere("mc_chunkFade")) {
 				String fade = "-1.0";
 				if (vs && terrain && p.group == ProgramGroup.GBUFFERS)
-					fade = has("ChunkVisibility") ? in("ChunkVisibility") : "emr_chunk.ChunkVisibility";
+					fade = sodium ? "emr_sodChunkFade()" : has("ChunkVisibility") ? in("ChunkVisibility") : "emr_chunk.ChunkVisibility";
 				repl.put("mc_chunkFade", fade);
 			}
 			if (lastVertexStage && st == StageType.GEOMETRY) callRepl.put("EmitVertex", "emr_EmitVertex");
@@ -694,12 +793,24 @@ public final class GlslTranspiler implements Transpiler {
 			return false;
 		}
 
+		/**
+		 * terrain_sodium's model-view: the pack's own gbufferModelView/shadowModelView member when the layout has it (Sodium
+		 * writes u_Globals once per frame, so it cannot serve the shadow pass and the main pass), else Sodium's.
+		 */
+		String sodiumModelView() {
+			String n = p.group == ProgramGroup.SHADOW ? "shadowModelView" : "gbufferModelView";
+			Manifest.UniformMember m = ctx.uniformMembers() == null ? null : ctx.uniformMembers().get(n);
+			if (m == null || !m.type().equals("mat4")) return "emr_sodGlobals.u_ModelViewMatrix";
+			providedUniforms.putIfAbsent(n, "mat4 " + n);
+			return n;
+		}
+
 		String chunkPosition() { return has("ChunkPosition") ? in("ChunkPosition") : "emr_chunk.ChunkPosition"; }
 
 		String chunkOffset() { return "(vec3(" + chunkPosition() + " - emr_CameraBlockPos) + emr_CameraOffset)"; }
 
 		void geometryTable(boolean vs) {
-			String mvRaw = terrain ? "emr_terrain.ModelViewMat" : "emr_dt.ModelViewMat";
+			String mvRaw = sodium ? sodiumModelView() : terrain ? "emr_terrain.ModelViewMat" : "emr_dt.ModelViewMat";
 			String mv = terrain || p.core ? mvRaw : "(emr_dt.ModelViewMat * emr_translate(emr_dt.ModelOffset))";
 			String proj = "emr_phase.emr_ProjMat";
 			repl.put("gl_ModelViewMatrix", mv);
@@ -713,14 +824,14 @@ public final class GlslTranspiler implements Transpiler {
 			// core-profile uniforms (VanillaCoreTransformer), only if the pack does not declare its own variables
 			Map<String, String> core = Map.of("modelViewMatrix", mvRaw, "modelViewMatrixInverse", "inverse(" + mvRaw + ")",
 					"projectionMatrix", proj, "projectionMatrixInverse", "emr_phase.emr_ProjMatInverse", "normalMatrix", normal,
-					"chunkOffset", terrain ? chunkOffset() : "emr_dt.ModelOffset", "alphaTestRef", "emr_draw.emr_alphaTestRef",
+					"chunkOffset", sodium ? "emr_sodChunkOffset()" : terrain ? chunkOffset() : "emr_dt.ModelOffset", "alphaTestRef", "emr_draw.emr_alphaTestRef",
 					"iris_currentAlphaTest", "emr_draw.emr_alphaTestRef");
 			for (var e : core.entrySet()) if (!s.globals.contains(e.getKey()) && !declaredAnywhere(e.getKey())) repl.put(e.getKey(), e.getValue());
 			if (!vs) return;
 			String pos = has("Position") ? in("Position") : "vec3(0.0)";
-			if (terrain) pos = "(" + pos + " + " + chunkOffset() + ")";
+			if (terrain && !sodium) pos = "(" + pos + " + " + chunkOffset() + ")"; // Sodium's decoded position is camera-relative already
 			repl.put("gl_Vertex", "vec4(" + pos + ", 1.0)");
-			if (has("Color")) repl.put("gl_Color", terrain ? in("Color") : "(" + in("Color") + " * emr_dt.ColorModulator)");
+			if (has("Color")) repl.put("gl_Color", terrain || clouds ? in("Color") : "(" + in("Color") + " * emr_dt.ColorModulator)");
 			else repl.put("gl_Color", terrain ? "vec4(1.0)" : "emr_dt.ColorModulator");
 			repl.put("gl_Normal", has("Normal") ? in("Normal") : "vec3(0.0, 0.0, 1.0)");
 			repl.put("gl_MultiTexCoord0", has("UV0") ? "vec4(" + in("UV0") + ", 0.0, 1.0)" : "vec4(0.5, 0.5, 0.0, 1.0)");
@@ -768,10 +879,27 @@ public final class GlslTranspiler implements Transpiler {
 
 		// -- items --
 
+		/**
+		 * Function {@code out} parameters become {@code inout}: GL drivers keep the caller's value in an out parameter the
+		 * function never writes (Insanity's GetMaterials leaves porosity unset), glslang's SPIR-V passes an undefined one.
+		 */
+		void emitFunction(Item it, StringBuilder out) {
+			int open = it.nameIdx + 1;
+			if (it.nameIdx < 0 || open >= it.end || !t.get(open).is("(")) { rw(it.start, it.end, out); return; }
+			int close = GlslParser.match(t, open), from = it.start;
+			for (int i = open + 1; i < close; i++) {
+				if (!t.get(i).is("out")) continue;
+				rw(from, i, out);
+				out.append(t.get(i).ws).append("inout");
+				from = i + 1;
+			}
+			rw(from, it.end, out);
+		}
+
 		void emitItem(Item it, StringBuilder out) {
 			switch (it.kind) {
 				case DIRECTIVE, EMPTY -> {}
-				case FUNCTION, PROTOTYPE -> { if (s.kept.contains(it)) rw(it.start, it.end, out); }
+				case FUNCTION, PROTOTYPE -> { if (s.kept.contains(it)) emitFunction(it, out); }
 				case BLOCK -> emitBlock(it, out);
 				case DECL -> emitDecl(it, out);
 				default -> rw(it.start, it.end, out);
@@ -946,11 +1074,18 @@ public final class GlslTranspiler implements Transpiler {
 			}
 			int b;
 			if ("buffer".equals(storage)) {
-				b = binding(it.name.equals("EmrRtSections") ? it.name : "bufferObject" + layoutInt(it, "binding", 0));
+				b = binding(it.name.equals("EmrRtSections") || it.name.equals("EmrRtLights") ? it.name : "bufferObject" + layoutInt(it, "binding", 0));
 				packing = "std140".equals(packing) ? "std140" : "std430";
 			} else if ("uniform".equals(storage)) {
 				b = binding(it.name);
 				packing = "std140";
+			} else if (ioBlock(it) && p.locations.containsKey(blockKey(it))) {
+				layout.addFirst("location = " + p.locations.get(blockKey(it)));
+				StringBuilder q = new StringBuilder();
+				for (String x : it.quals) q.append(x).append(' ');
+				out.append("\nlayout(").append(String.join(", ", layout)).append(") ").append(q).append(it.name).append(' ');
+				rw(it.bodyStart, it.end, out);
+				return;
 			} else {
 				diagnostics.add(Diagnostic.warning(s.src.sourcePath(), 0, "interface block " + it.name + " passed through unchanged"));
 				rw(it.start, it.end, out);
@@ -1023,7 +1158,9 @@ public final class GlslTranspiler implements Transpiler {
 					continue;
 				}
 				String r = repl.get(name);
-				out.append(r != null ? r : kw(name));
+				// a 4xx stage uses these as the keywords they are there ("writeonly image3D img" parameters in Photon)
+				boolean keyword = s.version >= 400 && i + 1 < to && t.get(i + 1).ident() && KEYWORDS_450.contains(name);
+				out.append(r != null ? r : keyword ? name : kw(name));
 			}
 		}
 
@@ -1063,10 +1200,32 @@ public final class GlslTranspiler implements Transpiler {
 
 		Map<String, String> helpers() {
 			Map<String, String> h = new LinkedHashMap<>();
+			// first (emr_ftransform may call them). terrain_sodium: Sodium's chunk_vertex.glsl decoding (positions 20-bit fixed point, draw id = section in its region)
+			h.put("emr_sodChunkOffset", "vec3 emr_sodChunkOffset() { return emr_draw.emr_sodRegionOffset"
+					+ " + vec3((uvec3(emr_sod_LightAndData.w) >> uvec3(5u, 0u, 2u)) & uvec3(7u, 3u, 7u)) * 16.0 - emr_sodGlobals.u_CameraOffset; }");
+			h.put("emr_sodPosition", "vec3 emr_sodPosition() { uvec3 hi = (uvec3(emr_sod_Position.x) >> uvec3(0u, 10u, 20u)) & 0x3FFu;"
+					+ " uvec3 lo = (uvec3(emr_sod_Position.y) >> uvec3(0u, 10u, 20u)) & 0x3FFu;"
+					+ " return vec3((hi << 10u) | lo) * (32.0 / 1048576.0) - 8.0 + emr_sodChunkOffset(); }");
+			h.put("emr_sodUV0", "vec2 emr_sodUV0() { return vec2(emr_sod_TexCoord & 0x7FFFu) / 32768.0"
+					+ " + mix(vec2(-1.0), vec2(1.0), bvec2(emr_sod_TexCoord >> 15u)) * emr_sodGlobals.u_TexCoordShrink; }");
+			// fade-in off (MC option 0 s: Sodium's period inverse is +inf): no per-vertex fetch from Sodium's host-visible time buffer
+			h.put("emr_sodChunkFade", "float emr_sodChunkFade() { if (isinf(emr_sodGlobals.u_FadePeriodInv)) return 1.0; int f = texelFetch(emr_sodSectionTimeInfo, int(emr_draw.emr_sodRegionID * 256u"
+					+ " + emr_sod_LightAndData.w)).r; return f < 0 ? 1.0 : clamp(float(emr_draw.emr_sodCurrentTime - f) * emr_sodGlobals.u_FadePeriodInv, 0.0, 1.0); }");
+			// clouds variant (MC 26.3 clouds.vsh): 3 bytes per face in CloudFaces (cell x/2, cell z/2, direction + flags); Iris's face colours (alpha 0.8)
+			h.put("emr_cloudPos", "vec3 emr_cloudPos() { int q = gl_VertexIndex % 4, i = (gl_VertexIndex / 4) * 3; int x = texelFetch(emr_CloudFaces, i).r,"
+					+ " z = texelFetch(emr_CloudFaces, i + 1).r, f = texelFetch(emr_CloudFaces, i + 2).r; x = (x << 1) | ((f & 128) >> 7); z = (z << 1) | ((f & 64) >> 6);"
+					+ " int v = (f & 7) * 4 + ((f & 16) != 0 ? 3 - q : q); vec3 c = vec3(float((0xF03CC3 >> v) & 1), float((0x6666F0 >> v) & 1), float((0xC3F066 >> v) & 1));"
+					+ " return c * emr_CloudInfo.CellSize + vec3(float(x), 0.0, float(z)) * emr_CloudInfo.CellSize + emr_CloudInfo.CloudOffset; }");
+			h.put("emr_cloudNormal", "vec3 emr_cloudNormal() { int d = texelFetch(emr_CloudFaces, (gl_VertexIndex / 4) * 3 + 2).r & 7;"
+					+ " return vec3[](vec3(0.0, -1.0, 0.0), vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, -1.0), vec3(0.0, 0.0, 1.0), vec3(-1.0, 0.0, 0.0), vec3(1.0, 0.0, 0.0))[d]; }");
+			h.put("emr_cloudCol", "vec4 emr_cloudCol() { int f = texelFetch(emr_CloudFaces, (gl_VertexIndex / 4) * 3 + 2).r; int d = (f & 32) != 0 ? 1 : f & 7;"
+					+ " return vec4(vec3[](vec3(0.7), vec3(1.0), vec3(0.8), vec3(0.8), vec3(0.9), vec3(0.9))[d], 0.8) * emr_CloudInfo.CloudColor; }");
 			h.put("emr_FogParameters", "struct emr_FogParameters { vec4 color; float density; float start; float end; float scale; };");
 			h.put("emr_translate", "mat4 emr_translate(vec3 o) { return mat4(1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, o.x, o.y, o.z, 1.0); }");
-			// fullscreen triangle: vertices 0,1,2 → UV (0,0), (2,0), (0,2); UV (0,0) is the bottom-left as in GL
-			h.put("emr_fsUV", "vec2 emr_fsUV() { return vec2(float((gl_VertexIndex << 1) & 2), float(gl_VertexIndex & 2)); }");
+			// composites draw Iris's quad: 6 vertices with MC's quad indices 0,1,2,2,3,0 over (0,0) (1,0) (1,1) (0,1), UV (0,0)
+			// bottom-left as in GL. Not one big triangle: packs move the corners by their UV (Shrimple's bloom tiles).
+			h.put("emr_fsVertexId", "int emr_fsVertexId() { return int[](0, 1, 2, 2, 3, 0)[gl_VertexIndex]; }");
+			h.put("emr_fsUV", "vec2 emr_fsUV() { int v = emr_fsVertexId(); return vec2(float(v == 1 || v == 2), float(v >= 2)); }");
 			h.put("emr_ftransform", "vec4 emr_ftransform() { return " + repl.getOrDefault("gl_ModelViewProjectionMatrix", "mat4(1.0)")
 					+ " * " + repl.getOrDefault("gl_Vertex", "vec4(0.0, 0.0, 0.0, 1.0)") + "; }");
 			h.put("emr_EmitVertex", "void emr_EmitVertex() { gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5; EmitVertex(); }");
@@ -1102,6 +1261,8 @@ public final class GlslTranspiler implements Transpiler {
 					h.append(d).append('\n');
 				} else if (d.startsWith("#pragma")) h.append(d).append('\n');
 			}
+			// separate draws of the same vertices (glint over its base, depth EQUAL) need bit-identical depth across programs
+			if (lastVertexStage && s.type != StageType.GEOMETRY && s.used("gl_Position")) h.append("invariant gl_Position;\n");
 			// EmrionUniforms: only members this stage references, at their fixed offsets
 			Map<String, Manifest.UniformMember> members = ctx.uniformMembers() == null ? Map.of() : ctx.uniformMembers();
 			TreeMap<Integer, String> block = new TreeMap<>();
@@ -1125,12 +1286,33 @@ public final class GlslTranspiler implements Transpiler {
 			}
 			if (ids.contains("emr_draw")) {
 				h.append("layout(push_constant) uniform EmrionDraw {");
-				h.append(declareMembers(PUSH)).append(" } emr_draw;\n");
+				h.append(declareMembers(PUSH));
+				if (sodium) { // Sodium's push constants, moved behind EmrionDraw by the mod
+					int o = VertexLayouts.SODIUM_PUSH_OFFSET;
+					h.append(" layout(offset = ").append(o).append(") vec3 emr_sodRegionOffset; layout(offset = ").append(o + 12)
+							.append(") int emr_sodCurrentTime; layout(offset = ").append(o + 16).append(") uint emr_sodRegionID;");
+				}
+				h.append(" } emr_draw;\n");
 			}
 			if (ids.contains("emr_dt")) h.append("layout(std140, set = 0, binding = 0) uniform DynamicTransforms { mat4 ModelViewMat; mat4 TextureMat; vec4 ColorModulator; vec3 ModelOffset; } emr_dt;\n");
 			if (ids.contains("emr_terrain")) h.append("layout(std140, set = 0, binding = 1) uniform TerrainUniform { mat4 ModelViewMat; ivec2 TextureSize; } emr_terrain;\n");
 			if (ids.contains("emr_chunk")) h.append("layout(std140, set = 0, binding = 2) uniform ChunkSection { ivec3 ChunkPosition; float ChunkVisibility; } emr_chunk;\n");
 			if (ids.contains("emr_Sampler1")) h.append("layout(set = 0, binding = 4) uniform sampler2D emr_Sampler1;\n");
+			if (ids.contains("emr_sodGlobals")) h.append("layout(std140, set = 0, binding = ").append(VertexLayouts.SET0_CANONICAL.indexOf("u_Globals"))
+					.append(") uniform SodiumGlobals { mat4 u_ProjectionMatrix; mat4 u_ModelViewMatrix; vec4 u_FogColor; vec3 u_CameraOffset; vec2 u_EnvironmentFog;"
+							+ " vec2 u_RenderFog; vec2 u_TexelSize; vec2 u_TexCoordShrink; float u_FadePeriodInv; uint u_UseRGSS; } emr_sodGlobals;\n");
+			if (ids.contains("emr_CloudInfo")) h.append("layout(std140, set = 0, binding = ").append(VertexLayouts.SET0_CANONICAL.indexOf("CloudInfo"))
+					.append(") uniform CloudInfo { vec4 CloudColor; vec3 CloudOffset; vec3 CellSize; } emr_CloudInfo;\n");
+			if (ids.contains("emr_CloudFaces")) h.append("layout(set = 0, binding = ").append(VertexLayouts.SET0_CANONICAL.indexOf("CloudFaces"))
+					.append(") uniform isamplerBuffer emr_CloudFaces;\n");
+			if (ids.contains("emr_sodSectionTimeInfo")) h.append("layout(set = 0, binding = ").append(VertexLayouts.SET0_CANONICAL.indexOf("u_SectionTimeInfo"))
+					.append(") uniform isamplerBuffer emr_sodSectionTimeInfo;\n");
+			if (sodium) {
+				String[][] raw = {{"emr_sod_Position", "uvec2", "0"}, {"emr_sod_Color", "vec4", "1"}, {"emr_sod_TexCoord", "uvec2", "2"},
+						{"emr_sod_LightAndData", "uvec4", "3"}, {"emr_sod_MidBlock", "ivec4", Integer.toString(VertexLayouts.location("at_midBlock"))}};
+				for (String[] r : raw)
+					if (ids.contains(r[0])) h.append("layout(location = ").append(r[2]).append(") in ").append(r[1]).append(' ').append(r[0]).append(";\n");
+			}
 			for (String c : VertexLayouts.INPUT_LOCATIONS) {
 				if (ids.contains(in(c))) h.append("layout(location = ").append(VertexLayouts.location(c)).append(") in ")
 						.append(CANON_TYPE.get(c)).append(' ').append(in(c)).append(";\n");

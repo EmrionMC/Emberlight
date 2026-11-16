@@ -8,7 +8,7 @@ import java.util.Arrays;
 
 /**
  * CPU frame times (start of one frame to the next) in a fixed ring buffer; no allocation per frame. {@link #frame()} is
- * called from the frame hook; {@link #stopAndDump} writes a CSV and logs avg FPS and 1% lows. Reused by the M5 benchmark.
+ * called from the frame hook; {@link #stopAndDump} writes a CSV and logs avg FPS and 1% lows.
  */
 public final class FrameTimeLogger {
 	public static final FrameTimeLogger INSTANCE = new FrameTimeLogger(1 << 16);
@@ -27,6 +27,10 @@ public final class FrameTimeLogger {
 		count = 0;
 		last = 0;
 		recording = true;
+	}
+
+	public boolean recording() {
+		return recording;
 	}
 
 	/** Call once per frame, at the same point every frame. */
@@ -73,6 +77,30 @@ public final class FrameTimeLogger {
 		}
 		EmrionShadersClient.LOG.info("Benchmark: {} frames, avg {} FPS, 1% low {} FPS, avg {} ms, max {} ms -> {}", s.frames(),
 				String.format("%.1f", s.avgFps()), String.format("%.1f", s.low1Fps()), String.format("%.2f", s.avgMs()), String.format("%.2f", s.maxMs()), csv);
+		double[] w = windowFps(start, n, 0.5);
+		if (w.length > 1) {
+			double mean = Arrays.stream(w).average().orElse(0), sd = Math.sqrt(Arrays.stream(w).map(f -> (f - mean) * (f - mean)).sum() / (w.length - 1));
+			EmrionShadersClient.LOG.info("Benchmark spread: {} windows of 0.5 s, FPS min {} max {} sd {} (avg +- {} at 95%)", w.length,
+					String.format("%.1f", Arrays.stream(w).min().orElse(0)), String.format("%.1f", Arrays.stream(w).max().orElse(0)),
+					String.format("%.1f", sd), String.format("%.1f", 1.96 * sd / Math.sqrt(w.length)));
+		}
 		return s;
+	}
+
+	/** FPS of consecutive windows of the given length (the incomplete last one dropped). */
+	private double[] windowFps(int start, int n, double seconds) {
+		java.util.List<Double> out = new java.util.ArrayList<>();
+		long acc = 0, limit = (long) (seconds * 1e9);
+		int frames = 0;
+		for (int i = 0; i < n; i++) {
+			acc += nanos[(start + i) % nanos.length];
+			frames++;
+			if (acc >= limit) {
+				out.add(frames / (acc / 1e9));
+				acc = 0;
+				frames = 0;
+			}
+		}
+		return out.stream().mapToDouble(Double::doubleValue).toArray();
 	}
 }

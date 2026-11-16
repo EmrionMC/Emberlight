@@ -37,14 +37,21 @@ public class EntityRenderDispatcherMixin {
 		BlockIdTable ids = EmrionVertexFormats.ids();
 		Entity cameraEntity = Minecraft.getInstance().getCameraEntity();
 		int previous = EntityIds.entity;
+		boolean previousLocal = EntityIds.localPlayer;
+		int ownerId = ((dev.emrion.shaders.mod.upscale.ObjectMotion.Owned) state).emrion$entityId();
+		EntityIds.localPlayer = cameraEntity != null && ownerId == cameraEntity.getId(); // body, held items, armour, cape, parrots
 		int converting = ids.entityName(BlockIdTable.CONVERTING_VILLAGER);
 		EntityIds.entity = state instanceof ZombieVillagerRenderState zombie && zombie.isConverting && converting != -1 ? converting
 				: state instanceof AvatarRenderState avatar && ids.currentPlayer() != -1 && cameraEntity != null
 				&& avatar.id == cameraEntity.getId() ? ids.currentPlayer() : state.entityType == null ? -1 : ids.entity(state.entityType);
+		long owner = dev.emrion.shaders.mod.upscale.ObjectMotion.setOwner(dev.emrion.shaders.mod.upscale.ObjectMotion.ENTITY,
+				ownerId);
 		try {
 			original.call(state, camera, x, y, z, poseStack, collector);
 		} finally {
 			EntityIds.entity = previous;
+			EntityIds.localPlayer = previousLocal;
+			dev.emrion.shaders.mod.upscale.ObjectMotion.restoreOwner(owner);
 		}
 	}
 

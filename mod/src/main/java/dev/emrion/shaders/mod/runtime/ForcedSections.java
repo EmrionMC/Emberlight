@@ -10,11 +10,8 @@ import net.minecraft.client.renderer.state.level.LevelRenderState;
 import net.minecraft.client.renderer.state.level.SectionUpdateRenderState;
 
 /**
- * Compiles sections MC's visibility graph has not reached (RAYTRACING.md §9.1 finding). MC 26.3 only meshes sections the
- * camera's occlusion graph visits, so the shadow pass (and RT) found no mesh behind the camera. Iris gets them because its
- * shadow pass runs Sodium's culling with the shadow frustum, which schedules rebuilds for every section that frustum sees.
- * Here the shadow pass (and RT) list the sections they want; the next extraction compiles the dirty ones exactly as MC
- * compiles its visible ones. Render thread only.
+ * Compiles sections MC's visibility graph has not reached: MC only meshes what the camera's occlusion graph visits, but the
+ * shadow pass and RT need sections behind the camera too (Iris gets them from Sodium's shadow-frustum culling). Render thread only.
  */
 public final class ForcedSections {
 	private ForcedSections() {}

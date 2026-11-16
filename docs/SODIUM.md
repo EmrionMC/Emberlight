@@ -1,9 +1,15 @@
-# Emrion Shaders on Sodium (spike, 2026-11-13)
+# Emberlight on Sodium
 
-Decision being prepared: make Sodium a hard dependency and render terrain through Sodium's chunk renderer instead of
-vanilla's, because Iris (the visual reference) always runs on Sodium. This page holds the spike's evidence and a step plan.
+**Decision (user, 2026-11-13): both chunk paths are supported.** With Sodium installed, terrain goes through Sodium's chunk
+renderer (as under Iris). Without Sodium, Minecraft's own chunk renderer is used. Both paths must be complete,
+Iris-equivalent and fast. Sodium replaces MC's chunk renderer when it loads and cannot be turned off at runtime, so the path is
+picked automatically from the installed mods (§9 covers forcing the vanilla path).
 Sodium is Polyform-Shield-1.0.0: we may depend on it and mixin into it, but we must not bundle or copy its code. Decompiled
-classes were read only as a spec (paths below are Sodium class names, not copies).
+classes were read only as a spec (paths below are Sodium class names, not copies). The build compiles against Sodium from
+Modrinth's maven (`compileOnly`, `sodium_version` in gradle.properties). The jar is never bundled. Everything that needs Sodium's types lives
+in `compat/sodium` and `mixin/sodium` (`emrionshaders.sodium.mixins.json`, applied only when Sodium is loaded).
+
+§1–§5 are the spike (2026-11-13). §6 is step 1, §7 steps 2–4, §8 the comparison of the two paths, §9 the vanilla-path question, §10 Sodium versions.
 
 Versions: Sodium `0.9.3-beta.1+mc26.3`, Iris `1.11.7+mc26.3` (a launcher instance), MC 26.3 dev env, RTX 4070 Ti.
 
@@ -115,7 +121,7 @@ set layout and push-constant relocation (see §3, about 2–3 days). So (b) is a
 
 The step-1 gate below makes this measurable before anything is deleted.
 
-### Plan (agent-days)
+### Plan (days)
 
 | Step | Content | Verifiable by | Effort |
 |---|---|---|---|
@@ -125,9 +131,9 @@ The step-1 gate below makes this measurable before anything is deleted.
 | 4 | Entities, particles and text: `VertexSerializerRegistry` serializers into our formats; check the entities and hand scenes. | entities scene MAE. | 1 |
 | 5 | RT BLAS from Sodium arenas (usage flags, ranges, defrag, position decode). | RT shadows scene, VRAM report. | 3–4 |
 | 6 | Optional: mesh shadow-only sections (the forced-meshing equivalent). | cave/sunset coverage. | 1–2 |
-| 7 | Sodium becomes `depends` in `fabric.mod.json`. Delete the vanilla chunk path (SectionCompiler/BufferBuilder terrain, Indigo AO, fluid, RT vanilla-heap mixins). Re-baseline BENCHMARK.md. | build, full scene compare. | 1–2 |
+| ~~7~~ | ~~Sodium becomes `depends`, delete the vanilla chunk path.~~ Dropped: both paths stay (decision above). | | |
 
-Total **≈ 12–18 agent-days**. Steps 1–3 (about a week) give a full visual switch. RT (step 5) can follow later.
+Total **≈ 12–18 days**. Steps 1–3 (about a week) give a full visual switch. RT (step 5) can follow later.
 
 ### Risks
 
@@ -141,6 +147,153 @@ Total **≈ 12–18 agent-days**. Steps 1–3 (about a week) give a full visual 
   (`renderOit`). This matches Iris, but water passes need re-checking.
 - **animate_only_visible_textures**: sprites seen only by the shadow pass or by pack effects may not animate (Iris has the same setting).
 - Performance is estimated only (above). Step 1's gate decides.
+
+## 6. Step 1 status (branch `sodium/s1-terrain`)
+
+Done:
+
+- **Converter:** new vertex variant `terrain_sodium` (`VertexLayouts`, `GlslTranspiler`). It decodes Sodium's compact format the same
+  way Iris's `SodiumTransformer` does: 20-bit positions plus the region offset and section translation, UV with Sodium's shrink
+  bias, light from `a_LightAndData`, and `mc_chunkFade` from `u_SectionTimeInfo`. Normal, mc_Entity, midTexCoord, tangent and
+  midBlock are missing from the stock format and get the existing constant defaults. The model-view comes from the pack's
+  `gbufferModelView`/`shadowModelView` member, because Sodium writes `u_Globals` only once per frame. The variant is emitted
+  only when `Converter.Request.sodium` is true (CLI `--sodium`; the mod sets it when Sodium is loaded). The cache key gets
+  `sodium=<SODIUM_VARIANT>` only in that case. Requests without Sodium produce byte-identical output: the RT-off golden hash
+  test passes and `VERSION` is unchanged.
+- **Bind groups: not a problem.** MC's Vulkan backend merges Sodium's two bind groups into one set-0 push-descriptor set,
+  ordered by name, so our set 1 is untouched. `Set0Patcher` gets the names `u_Globals` and `u_SectionTimeInfo`, and
+  `u_BlockTex`/`u_LightTex` serve as `Sampler0`/`Sampler2`.
+- **Push constants:** Sodium pushes 20 B at offset 0. `VulkanRenderPassMixin.pushConstants` moves them to offset 48 (behind
+  EmrionDraw) for our Sodium pipelines, so the fragment shaders shared with vanilla stay unchanged.
+- **Pipelines at pack load:** `SodiumTerrain.pipelines()` creates Sodium's 3 terrain pipelines (solid/cutout/translucent)
+  through a throwaway `DefaultChunkRenderer.compileProgram`. Sodium caches them in a static map, so its renderers later draw
+  with the same objects, and ours are built with the other 300 at pack load. If that fails, `GbufferPipelines.get` builds
+  them on first use and logs a WARN ("built in a frame"). The smoke run logged no such warning. The OIT pipeline set is not
+  covered: MC's OIT path is not used while a pack renders.
+- **Mapping:** `GbufferMapping.get` maps `sodium:pipeline/<x>` to the vanilla entry with the same path.
+- **Entities:** with Sodium loaded they stay in the vanilla formats (`EmrionVertexFormats.entitiesActive()` is false). Sodium's
+  `EntityRenderer.renderCuboid` fast path pushes ENTITY quads into our EMRION_ENTITY buffer, and no serializer exists for that
+  pair, so the game crashed ("Source format is missing element mc_midTexCoord"). Step 4 fixes this with serializers.
+- **Shadow pass (interim):** the terrain comes from a `SodiumChunkSection` built with the shadow matrices over Sodium's
+  **main-view** render lists. Terrain outside the camera frustum therefore casts no shadow, and block-face culling follows the
+  camera. Step 3 replaces this.
+
+Result: the overview with the user's pack renders, and terrain is drawn by Sodium through our gbuffers pipelines. MAE against
+Iris is 5.97 / SSIM 0.859 (today: 0.50 / 0.995). Visible causes are the default normal (every face lit as "up"), no
+mc_Entity ids (no waving foliage or water id), and the incomplete shadow map. All of these are steps 2–3.
+Gate (BENCHMARK.md M8-S1): Sodium measures 140–143 FPS against vanilla at 98 FPS, but the comparison is not like-for-like.
+The gap is the step-1 shadow pass, which covers less terrain. The comparable main-view passes are +0.18 ms *slower* on
+Sodium (opaque +0.36, translucent −0.18). The vanilla path itself dropped from 137 to 98 FPS on master (shadow_opaque 3.35 ms).
+That is a separate regression. Decide go/no-go after step 3.
+
+## 7. Steps 2–4 status (branch `sodium/s1-terrain`)
+
+**Step 2, vertex format and ids.** While a pack is active, `ChunkMeshFormatsMixin` makes Sodium mesh in
+`EmrionChunkVertex` (`EmrionVertexFormats.SODIUM_TERRAIN`, 40 B). It is Sodium's compact 20 B vertex plus the canonical extras,
+with the same element names and shader types as our vanilla `EMRION_BLOCK`:
+
+| offset | element | format | content |
+|---|---|---|---|
+| 0 | a_Position | RG32_UINT | 3×20-bit position in the section (Sodium's encoding) |
+| 8 | a_Color | RGBA8_UNORM | tint; with `separateAo` alpha = AO, else AO times rgb (Iris's XHFPTerrainVertex) |
+| 12 | a_TexCoord | RG16_UINT | UV with Sodium's centroid bias bit |
+| 16 | a_LightAndData | RGBA8_UINT | block/sky light **0–240 without Sodium's +8 bias** (Iris), material bits, section index |
+| 20 | mc_Entity | RG16_SINT | block.properties id (−1 unmapped), render type 0 block / 1 fluid |
+| 24 | Normal | RGBA8_SNORM | face normal (QuadMath, as vanilla) |
+| 28 | at_tangent | RGBA8_SNORM | tangent + handedness (QuadMath.quadTangent) |
+| 32 | mc_midTexCoord | RG16_UNORM | quad's mid UV (finer than Iris's 1/32768) |
+| 36 | at_midBlock | RGBA8_SINT | Iris's signed bytes (block centre − vertex)·64, w = light emission |
+
+Iris packs normal and tangent into 4 B (oct24 + diamond byte, 36 B in all). We keep 8-bit SNORM normal and tangent, which match the vanilla path's
+values exactly. The converter's `terrain_sodium` variant reads the extras through the canonical inputs. Only at_midBlock
+(ivec4) is decoded specially. `SODIUM_VARIANT` 3. The block comes from `ChunkBuilderMeshingTaskMixin`, which wraps
+`BlockRenderer.renderModel` and `FluidRenderer.render` and fills our per-thread `BlockContext` (the same one the vanilla path
+uses). `BlockRendererMixin`/`DefaultFluidRendererMixin` copy it into the four `ChunkVertexEncoder.Vertex` of each quad, and
+`ChunkVertexMixin` carries it through `copyVertexTo`, so translucent quads kept for sorting keep their ids. AO, quad
+splitting and fluid lighting are Sodium's own, as under Iris. With `oldLighting=false`, the fluid side faces get brightness 1, as
+in Iris's setBrightness. Sodium's own pipelines stay in the compact format (`ShaderChunkRendererMixin`), so they still fit after
+the pack is turned off. Ours are built with `SODIUM_TERRAIN` (`GbufferPipelines.extended`). Fog occlusion is off while a
+pack renders (`RenderSectionManagerMixin`, as Iris).
+
+**Step 3, shadow pass.** `compat.sodium.SodiumShadow` builds the shadow pass's own draw lists over Sodium's region
+buffers instead of swapping Sodium's lists as Iris does. Sodium's main-view render lists and per-region cached batches are
+never touched. Section set: every *built* section (Sodium builds exactly what its occlusion flood fill reaches, frustum or
+not, which is Iris's shadow set), tested with the same `ShadowCuller` and receiver grid (the *Shadow culling* option) as the
+vanilla path. Draws use all facings (no block-face culling, as Iris in shadow), one multi-draw per region and pass with a
+shared quad index buffer, or the region's index buffer for sorted translucent sections. Shadow block entities come from Sodium's
+per-section culled lists plus its global ones. The voxelization (coloured light, WSR) runs in the shadow vertex
+shaders and works unchanged, now with real mc_Entity ids (cave scene MAE 0.22).
+Difference from the vanilla path: Sodium's built set is larger than MC's occlusion graph (overview: 1560 against 951
+shadow sections after culling), because MC's graph also ray-tests beyond 60 blocks ("smart cull") and Sodium keeps sections
+built once they were reached. That is the set Iris uses.
+
+**Step 4, entities, particles, text.** The step-1 shortcut is gone: ENTITY/GLYPH draws use EMRION_ENTITY/GLYPH under Sodium
+too. Sodium's fast paths (model cubes, glyphs, quad particles) push finished vertices into any `BufferBuilder` that supports
+its intrinsics. `ExtendedBufferBuilderMixin` makes our builder report `canUseIntrinsics() = false`, so Sodium falls back to the
+`VertexConsumer` calls, and ids, normals, tangents and mid UVs come from exactly the vanilla path's code. shortcut: Sodium logs
+one WARN per class, and our extended formats get no fast path. A direct serializer (Iris's ModelToEntityVertexSerializer) is only
+worth it if entity-heavy scenes show CPU cost.
+
+**RT (step 5, done on `rt/sodium`):** every RT effect works on the Sodium path, with the BLAS built from Sodium's region
+arenas (RAYTRACING.md §17).
+
+## 8. The two paths compared
+
+Image: §7 and BENCHMARK.md (pinned MAE against Iris, Sodium equal to or closer than vanilla in 9 of 10 scenes).
+Speed (BENCHMARK.md M8-S2, 3× interleaved): the Sodium path is **slower on this GPU-bound machine**:
+- overview −8.3 % (118.0 against 128.7 FPS), sunset −5.0 %, forest −1.3 %, with better 1% lows in sunset and forest;
+- RD 32 overview −2 % (88.7 against 90.5);
+- it saves 1–1.5 ms of render-thread CPU per frame, which only shows on CPU-bound systems.
+
+The GPU costs more in the opaque pass (+0.47 ms at RD 16, partly per pixel) and in the shadow pass (Iris's larger section
+set). The decision stands (both paths supported, Iris-exact shadows on Sodium). The remaining opaque gap is open work (BENCHMARK.md M8-S2
+lists what was ruled out).
+
+## 9. Forcing the vanilla path while Sodium is installed
+
+Evaluated, not built.
+- Sodium has no option that turns its chunk renderer off. `sodium-options.json` only tunes it.
+- Sodium's mixin config (`SodiumMixinPlugin` + `MixinConfig`) reads `config/sodium-mixins.properties`. There
+  `mixin.core=false` (or finer keys such as `mixin.features.render.world=false`) disables whole mixin packages at startup.
+  Mods can set the same keys through a `sodium:options` custom value in their `fabric.mod.json`. This is a supported
+  compatibility switch, but it needs a restart, and `core` holds the `LevelRendererMixin` that installs Sodium's renderer together with
+  the interfaces the other packages rely on. Disabling it leaves a half-loaded Sodium (GUI and feature mixins against a missing
+  core), which is untested and fragile.
+- Vetoing Sodium's mixins from our side (MixinSquared-style cancellation) works only at startup too, and couples us to Sodium's
+  mixin class list.
+Recommendation: to use the vanilla path, remove the Sodium jar (README). Both paths are fully supported. Nothing gets
+hacked in.
+
+## 10. Sodium versions
+
+The Sodium integration targets **0.9.3-beta.5+mc26.3** exactly (branch `sodium/beta5`; before that, beta.1).
+`fabric.mod.json` declares `recommends: sodium 0.9.3-beta.5` and `breaks: sodium <0.9.3-beta.5 || >0.9.3-beta.5`. With any
+other Sodium, Fabric refuses to start and names the conflict ("Replace mod 'Emberlight' … compatible with sodium
+0.9.3-beta.1", checked in game), instead of crashing in a mixin or at the first frame. Without Sodium nothing changes.
+
+Changes between beta.1 and beta.5 that the port handles (`javap` of both jars, shader sources):
+
+| Change in beta.5 | Port |
+|---|---|
+| `VertexBufferWriter` methods renamed `sodium$push`/`sodium$canUseIntrinsics`/… | `ExtendedBufferBuilderMixin` overrides `sodium$canUseIntrinsics` |
+| `ModelQuadView` getters renamed `sodium$getSprite()` etc. | `DefaultFluidRendererMixin` targets `sodium$getSprite` |
+| `u_Globals` gains `vec3 u_CameraOffset` (after `u_FogColor`); the region push offset is integer (`getCameraTranslation(int, int)`) | terrain_sodium declares the member and subtracts it in `emr_sodChunkOffset` (`SODIUM_VARIANT` 5); `SodiumShadow` pushes integer offsets |
+| `UniformBufferManager.update(matrices, fog, CameraTransform)` | `SodiumShadow.draw` passes the camera |
+| `ShaderChunkRenderer.compileProgram(pass, stage, ShaderCompilationParameters)`; the pipeline cache is cleared when the parameters change | `SodiumTerrain.pipelines()` passes the same parameters as `DefaultChunkRenderer.begin` (spherical fog option); pipelines Sodium recreates later go through `GbufferPipelines.buildLate` |
+
+Verified on beta.5 (jar from Modrinth, sha1 33ea0f57…): all 10 pinned scenes render without errors, MAE against Iris
+cave 0.27, entities 0.91, forest 0.62, forest_back 0.37, night 0.51, overview 0.46, rain 0.95, sunset 0.58, sunset_back 0.46,
+water 0.56 (beta.1: 0.22–1.03, vanilla path 0.28–1.01). Overview 118.1 FPS (beta.1 118.0). Upgrading Sodium means
+re-checking this table.
+
+**Tested (BENCHMARK.md "Raster path at 1440p"):** 16-bit per-region quad indices, Sodium's indirect backend and block-face
+culling off all leave the opaque pass unchanged or slower. The vertex decode is about 30 extra ALU ops.
+**Opaque gap found (BENCHMARK.md "Sodium opaque gap"):** overdraw from Sodium's region-by-region draw order (cave: 24 % more
+fragment shader invocations than vanilla). `DefaultChunkRendererMixin` draws the opaque passes in distance bands across regions
+(only the bands some region uses, a region only in its bands; with no batch filled in bands, e.g. no pack or the OpenGL or
+indirect backend, Sodium's single render runs unchanged).
+Opaque cave 1.02 → 0.84 ms (RT off), 5.03 → 4.47 ms (RTX), now equal to vanilla.
+The shadow pass now uses only visible sections as receivers (cave +12 % FPS on Sodium).
 
 ## Recommendation
 

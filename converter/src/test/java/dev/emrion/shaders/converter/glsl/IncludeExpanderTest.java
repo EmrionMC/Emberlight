@@ -58,4 +58,21 @@ class IncludeExpanderTest {
 		assertEquals("shaders/lib/util/y.glsl", map.file(4));
 		assertEquals(4, map.line(7));
 	}
+
+	@Test
+	void includeBombAndDeepChainStopWithAnError() {
+		// 40 files, each including the next twice: 2^40 lines unbounded
+		java.util.Map<String, List<String>> bomb = new java.util.HashMap<>();
+		for (int i = 0; i < 40; i++) bomb.put("/b" + i + ".glsl", List.of("#include \"b" + (i + 1) + ".glsl\"", "#include \"b" + (i + 1) + ".glsl\""));
+		bomb.put("/b40.glsl", List.of("x"));
+		var e = IncludeExpander.expand("/b0.glsl", bomb::get);
+		assertTrue(e.lineCount() <= IncludeExpander.MAX_LINES);
+		assertEquals(1, e.errors().size(), e.errors().toString());
+		assertTrue(e.errors().getFirst().message().contains("include bomb"));
+
+		// an acyclic chain 100k files deep: a stack overflow without the depth limit
+		var e2 = IncludeExpander.expand("/c0.glsl", p -> List.of("#include \"c" + (Integer.parseInt(p.substring(2, p.length() - 5)) + 1) + ".glsl\""));
+		assertEquals(1, e2.errors().size(), e2.errors().toString());
+		assertTrue(e2.errors().getFirst().message().contains("nested deeper than " + IncludeExpander.MAX_DEPTH));
+	}
 }

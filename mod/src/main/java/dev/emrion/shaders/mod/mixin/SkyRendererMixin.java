@@ -24,9 +24,7 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Why: the sky phase (iris-spec §0 step 4): MC's "Sky" render pass becomes our gbuffers pass; each sky part sets Iris's
- * renderStage (the pack branches on SKY/SUNSET/SUN/MOON/STARS); shaders.properties sun/moon/stars can turn parts off; the
- * celestial bodies are tilted by sunPathRotation, as Iris does; Iris's horizon cone is drawn before the sky disc.
+ * Why: the sky phase: Iris's renderStage per sky part, sun/moon/stars toggles, sunPathRotation tilt and the horizon cone.
  */
 @Mixin(SkyRenderer.class)
 public class SkyRendererMixin {

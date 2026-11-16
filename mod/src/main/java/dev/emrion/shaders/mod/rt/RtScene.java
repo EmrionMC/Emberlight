@@ -42,47 +42,57 @@ import org.lwjgl.vulkan.VkAccelerationStructureCreateInfoKHR;
 import org.lwjgl.vulkan.VkAccelerationStructureDeviceAddressInfoKHR;
 import org.lwjgl.vulkan.VkAccelerationStructureGeometryKHR;
 import org.lwjgl.vulkan.VkAccelerationStructureInstanceKHR;
+import org.lwjgl.vulkan.VkAccelerationStructureTrianglesOpacityMicromapEXT;
+import org.lwjgl.vulkan.VkMicromapUsageEXT;
 import org.lwjgl.vulkan.VkBufferDeviceAddressInfo;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkPhysicalDeviceAccelerationStructurePropertiesKHR;
 import org.lwjgl.vulkan.VkPhysicalDeviceProperties2;
 
 /**
- * Acceleration structures over MC's terrain (RAYTRACING.md §2): one BLAS per (section mesh, layer), read in place from MC's
- * vertex heaps with our quad index buffer, built at {@code uploadTerrainBuffersToGpu} TAIL within a per-frame triangle budget;
- * one TLAS rebuilt every frame at {@code levelStart} with camera-relative instance transforms (TLAS space = the pack's playerPos).
- * <p>Threading: {@link #onMeshReleased} may run on section worker threads (always under MC's copyLock); everything else runs on
- * the render thread. BLAS read only at build time, so a freed or reused slice is only a problem for builds not yet recorded:
- * releases are applied before every build batch, and a slice can only be reused by an upload, which runs on the render thread
- * and is followed by the next batch in submission order.
+ * Acceleration structures over MC's terrain: one BLAS per (section mesh, layer), read in place from MC's vertex heaps, built
+ * within a per-frame triangle budget; one TLAS rebuilt every frame with camera-relative transforms (the pack's playerPos).
+ * <p>Threading: {@link #onMeshReleased} may run on worker threads (under MC's copyLock); everything else on the render thread.
+ * BLAS read their slice only at build time, and releases are applied before every build batch, so a reused slice is safe.
  */
 public final class RtScene {
 	private static final int STRIDE = 56; // EMRION_BLOCK
 	private static final int LAYERS = ChunkSectionLayer.values().length;
-	private static final long BUDGET = Long.getLong("emrion.rt.blasBudget", 2_000_000L); // triangles per frame
+	public static final long BUDGET = Long.getLong("emrion.rt.blasBudget", 2_000_000L); // triangles per frame
 	private static final long SCRATCH_SIZE = 64L << 20;
 	private static final int RING = UboRing.REGIONS;
-	/**
-	 * Fixed TLAS capacity: the TLAS and the section table never move, so the pack's descriptor sets (written once per runtime)
-	 * stay valid. 64 k instances cover RD 16 with every section forced (26 k sections x up to 3 layers, mostly empty).
-	 */
+	/** Fixed capacity: the TLAS and section table never move, so descriptor sets written once per runtime stay valid. */
 	private static final int CAPACITY = Integer.getInteger("emrion.rt.maxInstances", 65536);
+	/** The TLAS is rebuilt every frame, so fast build is the default. */
+	private static final int TLAS_FLAGS = Boolean.getBoolean("emrion.rt.tlasFastTrace") ? VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR
+			: VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR;
 	private static final long AS_BUILD = KHRSynchronization2.VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
 	private static final long AS_READ = KHRSynchronization2.VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
 	private static final long AS_WRITE = KHRSynchronization2.VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
 
 	private static @Nullable RtScene instance;
+	/** Entities in the TLAS (mask 0x04) while an applied effect asks for them; see {@link #setEntities}. */
+	@Nullable RtEntities entities;
 	private static final ConcurrentLinkedQueue<SectionMesh> released = new ConcurrentLinkedQueue<>();
 
-	private static final class Entry {
-		final SectionRenderDispatcher.RenderSection section;
-		final CompiledSectionMesh mesh;
+	/** One BLAS: a (section mesh, layer) in MC's heaps, or (section null) a Sodium section layer with decoded positions. */
+	public static final class Entry {
+		final SectionRenderDispatcher.@Nullable RenderSection section;
+		final @Nullable CompiledSectionMesh mesh;
 		final ChunkSectionLayer layer;
-		final int x, y, z;
-		int quads;
-		long vertexAddr, blas, blasAddr, blasSize, scratchAddr;
+		final int x, y, z, format;
+		public int quads;
+		/** Vertex attributes for hit shading (section table xy); on the Sodium path rewritten every frame (arenas defragment). */
+		public long vertexAddr;
+		/** BLAS build input: R32G32B32 positions at posAddr with posStride. */
+		public long posAddr;
+		public int posStride = STRIDE;
+		long blas, blasAddr, blasSize, scratchAddr;
 		@Nullable RawBuffer storage;
-		boolean removed;
+		/** Cutout layers with opacity micromaps (RtOmm): the micromap and this layer's per-triangle index into it. */
+		RtOmm.@Nullable Map omm;
+		@Nullable RawBuffer ommIndices;
+		public boolean removed;
 
 		Entry(SectionRenderDispatcher.RenderSection section, CompiledSectionMesh mesh, ChunkSectionLayer layer) {
 			this.section = section;
@@ -92,6 +102,23 @@ public final class RtScene {
 			x = o.getX();
 			y = o.getY();
 			z = o.getZ();
+			format = 0;
+		}
+
+		/** A Sodium section layer (EmrionChunkVertex) with its origin in world blocks. */
+		public Entry(ChunkSectionLayer layer, int x, int y, int z, int quads) {
+			section = null;
+			mesh = null;
+			this.layer = layer;
+			this.x = x;
+			this.y = y;
+			this.z = z;
+			this.quads = quads;
+			format = 1;
+		}
+
+		public boolean built() {
+			return blas != 0;
 		}
 	}
 
@@ -100,7 +127,15 @@ public final class RtScene {
 	private final List<Entry> uploaded = new ArrayList<>();
 	private final Map<SectionMesh, Entry[]> entries = new IdentityHashMap<>();
 	private final ArrayDeque<Entry> pending = new ArrayDeque<>();
+	/** Sodium path: this frame's built section layers, written into the TLAS after MC's (empty there) entries. */
+	public final List<Entry> external = new ArrayList<>();
+	private final dev.emrion.shaders.mod.compat.sodium.@Nullable SodiumRt sodium;
 	private final RawBuffer scratch;
+	private final RtLights lights = new RtLights();
+	/** Opacity micromaps where the device has them, else null. */
+	private final @Nullable RtOmm omm;
+	/** RtConfig.omm as the current BLAS were built; a change rebuilds all sections. */
+	private boolean ommOn = RtConfig.omm;
 	private @Nullable RawBuffer indices;
 	private int indexQuads;
 	// TLAS: fixed capacity; instance + section table rings (host-written per frame)
@@ -109,12 +144,14 @@ public final class RtScene {
 	private final RawBuffer[] instances = new RawBuffer[RING];
 	/** EmrionRtSections: RING regions of CAPACITY entries; instanceCustomIndex = region * CAPACITY + slot. */
 	private @Nullable RawBuffer sections;
-	private boolean overflowWarned;
+	private boolean overflowWarned, multiBatchLogged;
+	private int batchesSinceTlas;
 	private int frame;
 	private boolean tlasValid;
 	// stats
 	private long blasBytes, triangles, built, gpuBuildNs, maxFrameBuildNs, tlasBytes;
-	private int instanceCount;
+	private int instanceCount, sectionInstances;
+	private boolean deferEntities;
 	private final GpuTimer timer = new GpuTimer(2);
 	private final boolean[] timed = new boolean[RING];
 	private int timerSlot;
@@ -126,8 +163,11 @@ public final class RtScene {
 			vkGetPhysicalDeviceProperties2(ctx.vk.getPhysicalDevice(), VkPhysicalDeviceProperties2.calloc(stack).sType$Default().pNext(as));
 			scratchAlign = Math.max(1, as.minAccelerationStructureScratchOffsetAlignment());
 		}
-		scratch = new RawBuffer(ctx, SCRATCH_SIZE, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false, "rt blas scratch");
+		scratch = new RawBuffer(ctx, SCRATCH_SIZE + scratchAlign, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false, "rt blas scratch");
 		ensureCapacity();
+		omm = RtOmm.supported ? new RtOmm(this) : null;
+		sodium = dev.emrion.shaders.mod.compat.SodiumTerrain.LOADED ? new dev.emrion.shaders.mod.compat.sodium.SodiumRt(this) : null;
+		RtLights.collecting = true;
 		EmrionShadersClient.LOG.info("RT: scene created, TLAS capacity {} instances, BLAS budget {} triangles/frame, scratch alignment {}", CAPACITY, BUDGET, scratchAlign);
 	}
 
@@ -135,10 +175,7 @@ public final class RtScene {
 		return instance;
 	}
 
-	/**
-	 * An RT runtime is being installed (PackManager): creates the scene, then rebuilds all chunks so every section's mesh is
-	 * uploaded again and gets its BLAS (MC keeps no CPU copy to walk). Render thread.
-	 */
+	/** Creates the scene and rebuilds all chunks so every mesh is uploaded again and gets its BLAS (MC keeps no CPU copy). */
 	public static RtScene activate() {
 		if (instance != null) return instance;
 		instance = new RtScene();
@@ -153,7 +190,7 @@ public final class RtScene {
 	public static void onVertexUploaded(SectionRenderDispatcher.RenderSection section, CompiledSectionMesh mesh, ChunkSectionLayer layer) {
 		if (!RtCapability.enabled || !EmrionVertexFormats.active()) return;
 		if (instance == null) {
-			if (!RtCapability.DEBUG) return; // only an RT runtime (activate) or the RT-1 debug view create the scene
+			if (!RtCapability.DEBUG) return; // only an RT runtime or the debug view create the scene
 			instance = new RtScene();
 		}
 		instance.uploaded.add(new Entry(section, mesh, layer));
@@ -177,6 +214,7 @@ public final class RtScene {
 		instance.pending.clear();
 		instance.uploaded.clear();
 		released.clear();
+		RtLights.clear();
 	}
 
 	/** Client shutdown: everything through MC's destroy queue, which the device teardown drains. */
@@ -186,6 +224,8 @@ public final class RtScene {
 		onDispose();
 		s.scratch.destroyLater();
 		if (s.indices != null) s.indices.destroyLater();
+		if (s.entities != null) s.entities.destroy();
+		s.entities = null;
 		for (int r = 0; r < RING; r++) if (s.instances[r] != null) s.instances[r].destroyLater();
 		if (s.sections != null) s.sections.destroyLater();
 		if (s.tlas != 0) {
@@ -195,6 +235,10 @@ public final class RtScene {
 			s.tlasScratch.destroyLater();
 		}
 		s.timer.close();
+		if (s.sodium != null) s.sodium.destroy();
+		if (s.omm != null) s.omm.destroy();
+		RtLights.collecting = false;
+		s.lights.destroyLater();
 		instance = null;
 		EmrionShadersClient.LOG.info("RT: scene destroyed");
 	}
@@ -209,7 +253,7 @@ public final class RtScene {
 			e.quads = draw.indexCount() / 6;
 			// heap without our usage bits, or a slice too small for EMRION_BLOCK quads (a vanilla-format mesh): never read past it
 			if (e.quads == 0 || (heap.usage() & Formats.USAGE_RT_INPUT) == 0 || slice.vertexBufferOffset() + e.quads * 4L * STRIDE > heap.size()) continue;
-			e.vertexAddr = address(heap.vkBuffer()) + slice.vertexBufferOffset();
+			e.vertexAddr = e.posAddr = address(heap.vkBuffer()) + slice.vertexBufferOffset();
 			Entry[] arr = entries.computeIfAbsent(e.mesh, k -> new Entry[LAYERS]);
 			if (arr[e.layer.ordinal()] != null) drop(arr[e.layer.ordinal()]);
 			arr[e.layer.ordinal()] = e;
@@ -221,28 +265,43 @@ public final class RtScene {
 			if (arr != null) for (Entry e : arr) if (e != null) drop(e);
 		}
 
-		timerSlot = (timerSlot + 1) % RING;
-		timer.beginFrame();
-		if (timed[timerSlot] && timer.nanosSinceFirst(1) > 0) {
-			gpuBuildNs += timer.nanosSinceFirst(1);
-			maxFrameBuildNs = Math.max(maxFrameBuildNs, timer.nanosSinceFirst(1));
-		}
-		timed[timerSlot] = false;
 		if (!pending.isEmpty()) {
+			// only a frame's first batch is timed: the timer ring has one query pair per frame, a second batch would reuse queries in flight
+			boolean time = batchesSinceTlas == 0;
+			if (time) {
+				timerSlot = (timerSlot + 1) % RING;
+				timer.beginFrame();
+				if (timed[timerSlot] && timer.nanosSinceFirst(1) > 0) {
+					gpuBuildNs += timer.nanosSinceFirst(1);
+					maxFrameBuildNs = Math.max(maxFrameBuildNs, timer.nanosSinceFirst(1));
+				}
+			}
 			VkCommandBuffer cb = RawCommands.begin(ctx);
-			timer.mark(cb);
-			// MC's staging copies of this upload come first in the frame: make them visible to the builds
-			Barriers.memory(cb, Barriers.TRANSFER, Barriers.TRANSFER_WRITE, AS_BUILD, AS_READ | org.lwjgl.vulkan.VK13.VK_ACCESS_2_SHADER_READ_BIT);
-			buildPending(cb);
-			timer.mark(cb);
-			timed[timerSlot] = true;
+			if (time) timer.mark(cb);
+			// make MC's staging copies visible to the builds. AS_BUILD too: scratch restarts at 0 every batch and MC can upload
+			// several times per frame, so two batches would race on scratch and corrupt BLAS (GPU hang).
+			Barriers.memory(cb, Barriers.TRANSFER | AS_BUILD, Barriers.TRANSFER_WRITE | AS_WRITE | AS_READ, AS_BUILD,
+					AS_READ | AS_WRITE | org.lwjgl.vulkan.VK13.VK_ACCESS_2_SHADER_READ_BIT);
+			if (++batchesSinceTlas == 2 && !multiBatchLogged) {
+				multiBatchLogged = true;
+				EmrionShadersClient.LOG.info("RT: several BLAS batches in one frame (MC staging buffer full)");
+			}
+			buildPending(cb, pending, BUDGET);
+			// the builds read MC's vertex heaps: a later upload into a freed slice must wait for them (WAR)
+			Barriers.memory(cb, AS_BUILD, AS_READ, Barriers.TRANSFER, Barriers.TRANSFER_WRITE);
+			if (time) {
+				timer.mark(cb);
+				timed[timerSlot] = true;
+			}
 			Profiler.mark(cb, "RT: BLAS builds");
 			RawCommands.submit(ctx, cb);
 		}
 		log();
 	}
 
-	private void buildPending(VkCommandBuffer cb) {
+	/** Records BLAS builds for queued entries until {@code budget} triangles; the rest stays queued. */
+	public void buildPending(VkCommandBuffer cb, ArrayDeque<Entry> pending, long budget) {
+		long start = System.nanoTime(), builtBefore = built;
 		List<Entry> batch = new ArrayList<>();
 		long tris = 0, scratchOffset = 0;
 		try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -253,16 +312,21 @@ public final class RtScene {
 			var addrInfo = VkAccelerationStructureDeviceAddressInfoKHR.calloc(stack).sType$Default();
 			LongBuffer p = stack.mallocLong(1);
 			var maxPrims = stack.mallocInt(1);
-			while (!pending.isEmpty() && tris < BUDGET) {
+			var ommGeom = VkAccelerationStructureTrianglesOpacityMicromapEXT.calloc(stack);
+			var ommUsage = VkMicromapUsageEXT.calloc(1, stack);
+			RtOmm.Map micromap = omm != null && ommOn && !pending.isEmpty() ? omm.prepare(cb) : null;
+			while (!pending.isEmpty() && tris < budget) {
 				Entry e = pending.poll();
 				if (e.removed) continue;
 				ensureIndices(e.quads);
-				fillGeometry(geom.get(0), e);
+				if (micromap != null && e.layer == ChunkSectionLayer.CUTOUT) omm.attach(e, micromap);
+				fillGeometry(geom.get(0), e, ommGeom, ommUsage);
 				blasInfo(info, geom, 0, 0);
 				vkGetAccelerationStructureBuildSizesKHR(ctx.vk, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, info, maxPrims.put(0, e.quads * 2), sizes);
 				long scratchSize = align(sizes.buildScratchSize(), scratchAlign);
 				if (scratchSize > SCRATCH_SIZE) { // cannot happen for a 16³ section; keep it out rather than overflow
 					EmrionShadersClient.LOG.warn("RT: section BLAS needs {} B scratch, skipped", scratchSize);
+					if (omm != null) omm.release(e);
 					continue;
 				}
 				if (scratchOffset + scratchSize > SCRATCH_SIZE) { // scratch ring wraps: finish the batch, then reuse from 0
@@ -277,7 +341,7 @@ public final class RtScene {
 				check(vkCreateAccelerationStructureKHR(ctx.vk, create, null, p), "vkCreateAccelerationStructureKHR");
 				e.blas = p.get(0);
 				e.blasAddr = vkGetAccelerationStructureDeviceAddressKHR(ctx.vk, addrInfo.accelerationStructure(e.blas));
-				e.scratchAddr = address(scratch.handle) + scratchOffset;
+				e.scratchAddr = align(address(scratch.handle), scratchAlign) + scratchOffset; // the buffer base itself may be less aligned
 				scratchOffset += scratchSize;
 				batch.add(e);
 				tris += e.quads * 2L;
@@ -287,39 +351,50 @@ public final class RtScene {
 			}
 		}
 		record(cb, batch);
+		dev.emrion.shaders.mod.debug.HitchLog.add(dev.emrion.shaders.mod.debug.HitchLog.BLAS, start, built - builtBefore);
 	}
 
 	/** One vkCmdBuildAccelerationStructuresKHR over the batch (heap-allocated structs: a batch can hold thousands). */
 	private void record(VkCommandBuffer cb, List<Entry> batch) {
 		int n = batch.size();
 		if (n == 0) return;
+		dev.emrion.shaders.mod.debug.HitchLog.count(dev.emrion.shaders.mod.debug.HitchLog.BLAS_BATCH, 1);
 		var geoms = VkAccelerationStructureGeometryKHR.calloc(n);
 		var infos = VkAccelerationStructureBuildGeometryInfoKHR.calloc(n);
 		var ranges = VkAccelerationStructureBuildRangeInfoKHR.calloc(n);
+		var ommGeoms = VkAccelerationStructureTrianglesOpacityMicromapEXT.calloc(n);
+		var ommUsages = VkMicromapUsageEXT.calloc(n);
 		PointerBuffer pRanges = MemoryUtil.memAllocPointer(n);
 		try {
+			if (omm != null) omm.dispatchIndices(cb, batch);
 			for (int i = 0; i < n; i++) {
 				Entry e = batch.get(i);
-				fillGeometry(geoms.get(i), e);
+				fillGeometry(geoms.get(i), e, ommGeoms.get(i), VkMicromapUsageEXT.create(ommUsages.address(i), 1));
 				blasInfo(infos.get(i), VkAccelerationStructureGeometryKHR.create(geoms.address(i), 1), e.blas, e.scratchAddr);
 				ranges.get(i).primitiveCount(e.quads * 2);
 				pRanges.put(i, ranges.address(i));
 			}
 			vkCmdBuildAccelerationStructuresKHR(cb, infos, pRanges);
+			if (omm != null) for (Entry e : batch) omm.built(e);
 		} finally {
 			geoms.free();
 			infos.free();
 			ranges.free();
+			ommGeoms.free();
+			ommUsages.free();
 			MemoryUtil.memFree(pRanges);
 		}
 	}
 
-	private void fillGeometry(VkAccelerationStructureGeometryKHR g, Entry e) {
-		g.sType$Default().geometryType(VK_GEOMETRY_TYPE_TRIANGLES_KHR).flags(e.layer == ChunkSectionLayer.SOLID ? VK_GEOMETRY_OPAQUE_BIT_KHR : 0);
-		var t = g.geometry().triangles().sType$Default().vertexFormat(VK_FORMAT_R32G32B32_SFLOAT).vertexStride(STRIDE)
+	private void fillGeometry(VkAccelerationStructureGeometryKHR g, Entry e, VkAccelerationStructureTrianglesOpacityMicromapEXT ommGeom, VkMicromapUsageEXT.Buffer ommUsage) {
+		g.sType$Default().geometryType(VK_GEOMETRY_TYPE_TRIANGLES_KHR).flags(e.layer == ChunkSectionLayer.SOLID ? VK_GEOMETRY_OPAQUE_BIT_KHR
+				: e.layer == ChunkSectionLayer.TRANSLUCENT ? VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR : 0); // RTX tints once per glass face
+		var t = g.geometry().triangles().sType$Default().vertexFormat(VK_FORMAT_R32G32B32_SFLOAT).vertexStride(e.posStride)
 				.maxVertex(e.quads * 4 - 1).indexType(VK_INDEX_TYPE_UINT32);
-		t.vertexData().deviceAddress(e.vertexAddr);
+		t.vertexData().deviceAddress(e.posAddr);
 		t.indexData().deviceAddress(address(indices.handle));
+		t.pNext(0);
+		if (e.ommIndices != null) RtOmm.chain(t, e, ommGeom, ommUsage, address(e.ommIndices.handle));
 	}
 
 	private static void blasInfo(VkAccelerationStructureBuildGeometryInfoKHR info, VkAccelerationStructureGeometryKHR.Buffer geom, long dst, long scratchAddr) {
@@ -329,7 +404,7 @@ public final class RtScene {
 	}
 
 	/** RtQuadIndices: 0,1,2, 2,3,0 + 4k (MC's quad winding) for at least {@code quads} quads; grown by doubling. */
-	private void ensureIndices(int quads) {
+	void ensureIndices(int quads) {
 		if (quads <= indexQuads) return;
 		if (indices != null) indices.destroyLater(); // builds already recorded keep it alive through the destroy queue
 		int n = Math.max(65536, Integer.highestOneBit(quads - 1) << 1);
@@ -347,8 +422,9 @@ public final class RtScene {
 		indexQuads = n;
 	}
 
-	private void drop(Entry e) {
+	public void drop(Entry e) {
 		e.removed = true;
+		if (omm != null) omm.release(e);
 		if (e.blas == 0) return;
 		long blas = e.blas;
 		ctx.destroyLater(() -> vkDestroyAccelerationStructureKHR(ctx.vk, blas, null));
@@ -360,69 +436,102 @@ public final class RtScene {
 
 	// ---- TLAS ---------------------------------------------------------------------------------------------------------------
 
-	/**
-	 * FrameExecutor.levelStart, in its raw command buffer (no MC render pass open): rebuilds the TLAS over every built BLAS
-	 * whose mesh is its section's current one. Transforms are {@code origin - camera} in double, then float.
-	 */
+	/** levelStart, outside any MC render pass: rebuilds the TLAS over every BLAS whose mesh is its section's current one. */
 	public void buildTlas(VkCommandBuffer cb) {
 		Vec3 cam = Minecraft.getInstance().gameRenderer.mainCamera().position();
+		if (omm != null && RtConfig.omm != ommOn) {
+			ommOn = RtConfig.omm;
+			rebuildSections();
+		}
 		frame = (frame + 1) % RING;
-		if ((++wantCounter & 7) == 0) wantSections(cam);
+		batchesSinceTlas = 0;
+		if (sodium != null) {
+			sodium.update(cb, cam);
+			Profiler.mark(cb, "RT: BLAS builds");
+		} else if ((++wantCounter & 7) == 0) wantSections(cam);
 		long inst = instances[frame].mapped, sec = sections.mapped + (long) frame * CAPACITY * 16;
+		// entities captured in this frame's shadow pass are added after it (refreshEntities); here they would be a frame old
+		deferEntities = entities != null && entities.expectShadowCapture() && !deferEntities;
+		if (entities != null && !deferEntities) {
+			entities.prepare(cb, frame);
+			Profiler.mark(cb, "RT: entity BLAS");
+		}
+		long start = System.nanoTime();
 		double maxDist = RtConfig.distanceBlocks();
 		int i = 0;
-		for (Entry[] arr : entries.values()) {
-			for (Entry e : arr) {
-				if (e == null || e.blas == 0 || e.section.getSectionMesh() != e.mesh) continue; // a newer mesh is not complete yet
-				if (maxDist > 0 && Math.max(Math.abs(e.x + 8 - cam.x), Math.abs(e.z + 8 - cam.z)) > maxDist + 8) continue;
-				if (i == CAPACITY) {
-					if (!overflowWarned) EmrionShadersClient.LOG.warn("RT: more than {} instances, the rest is left out (-Demrion.rt.maxInstances)", CAPACITY);
-					overflowWarned = true;
-					break;
-				}
-				long a = inst + (long) i * VkAccelerationStructureInstanceKHR.SIZEOF;
-				// 3x4 row-major: identity rotation, camera-relative translation
-				MemoryUtil.memPutFloat(a, 1f); MemoryUtil.memPutFloat(a + 4, 0f); MemoryUtil.memPutFloat(a + 8, 0f);
-				MemoryUtil.memPutFloat(a + 12, (float) (e.x - cam.x));
-				MemoryUtil.memPutFloat(a + 16, 0f); MemoryUtil.memPutFloat(a + 20, 1f); MemoryUtil.memPutFloat(a + 24, 0f);
-				MemoryUtil.memPutFloat(a + 28, (float) (e.y - cam.y));
-				MemoryUtil.memPutFloat(a + 32, 0f); MemoryUtil.memPutFloat(a + 36, 0f); MemoryUtil.memPutFloat(a + 40, 1f);
-				MemoryUtil.memPutFloat(a + 44, (float) (e.z - cam.z));
-				int mask = e.layer == ChunkSectionLayer.TRANSLUCENT ? 0x02 : 0x01;
-				MemoryUtil.memPutInt(a + 48, (frame * CAPACITY + i) | mask << 24); // instanceCustomIndex = section table entry
-				MemoryUtil.memPutInt(a + 52, VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR << 24);
-				MemoryUtil.memPutLong(a + 56, e.blasAddr);
-				long s = sec + i * 16L; // EmrionRtSections: uvec2 vertexAddr, uint layer, uint pad
-				MemoryUtil.memPutLong(s, e.vertexAddr);
-				MemoryUtil.memPutInt(s + 8, e.layer.ordinal());
-				MemoryUtil.memPutInt(s + 12, 0);
-				i++;
-			}
-		}
+		for (Entry[] arr : entries.values())
+			for (Entry e : arr)
+				if (e != null && e.blas != 0 && e.section.getSectionMesh() == e.mesh) i = instance(inst, sec, i, e, cam, maxDist); // else a newer mesh is not complete yet
+		for (Entry e : external) i = instance(inst, sec, i, e, cam, maxDist);
+		sectionInstances = i;
+		if (entities != null && !deferEntities) i = entities.writeInstances(inst, sec, i, CAPACITY, frame * CAPACITY, cam);
+		recordTlasBuild(cb, i);
+		lights.upload(cb, cam, frame);
+		tlasValid = true;
+		dev.emrion.shaders.mod.debug.HitchLog.add(dev.emrion.shaders.mod.debug.HitchLog.TLAS, start);
+	}
+
+	/** After the shadow pass captured this frame's entities: their BLAS and the TLAS again (sections unchanged). */
+	public void refreshEntities(VkCommandBuffer cb) {
+		if (!deferEntities) return;
+		deferEntities = false;
+		Vec3 cam = Minecraft.getInstance().gameRenderer.mainCamera().position();
+		entities.prepare(cb, frame);
+		entities.keepShadowCapture();
+		Profiler.mark(cb, "RT: entity BLAS");
+		long inst = instances[frame].mapped, sec = sections.mapped + (long) frame * CAPACITY * 16;
+		recordTlasBuild(cb, entities.writeInstances(inst, sec, sectionInstances, CAPACITY, frame * CAPACITY, cam));
+		Profiler.mark(cb, "RT: TLAS build (entities)");
+	}
+
+	private void recordTlasBuild(VkCommandBuffer cb, int i) {
 		instanceCount = i;
-		// previous frame's ray queries and BLAS builds (WAR on the TLAS, RAW on BLAS) before this build
+		// previous ray queries and BLAS builds (WAR on the TLAS, RAW on BLAS) before this build
 		Barriers.memory(cb, AS_BUILD | Barriers.COMPUTE | Barriers.FRAGMENT, AS_WRITE | AS_READ, AS_BUILD, AS_WRITE | AS_READ);
 		try (MemoryStack stack = MemoryStack.stackPush()) {
 			var geom = VkAccelerationStructureGeometryKHR.calloc(1, stack);
 			geom.get(0).sType$Default().geometryType(VK_GEOMETRY_TYPE_INSTANCES_KHR).geometry().instances().sType$Default().arrayOfPointers(false)
 					.data().deviceAddress(address(instances[frame].handle));
 			var info = VkAccelerationStructureBuildGeometryInfoKHR.calloc(1, stack).sType$Default().type(VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR)
-					.flags(VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR).mode(VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR)
+					.flags(TLAS_FLAGS).mode(VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR)
 					.dstAccelerationStructure(tlas).pGeometries(geom).geometryCount(1);
 			info.scratchData().deviceAddress(align(address(tlasScratch.handle), scratchAlign));
 			var range = VkAccelerationStructureBuildRangeInfoKHR.calloc(1, stack).primitiveCount(i);
 			vkCmdBuildAccelerationStructuresKHR(cb, info, stack.pointers(range));
 		}
 		Barriers.memory(cb, AS_BUILD, AS_WRITE, Barriers.COMPUTE | Barriers.FRAGMENT, AS_READ | Barriers.STORAGE_READ);
-		tlasValid = true;
+	}
+
+	/** Writes e's TLAS instance and section-table entry at slot i unless it is beyond the RT distance or the TLAS is full; returns the next slot. */
+	private int instance(long inst, long sec, int i, Entry e, Vec3 cam, double maxDist) {
+		if (maxDist > 0 && Math.max(Math.abs(e.x + 8 - cam.x), Math.abs(e.z + 8 - cam.z)) > maxDist + 8) return i;
+		if (i == CAPACITY) {
+			if (!overflowWarned) EmrionShadersClient.LOG.warn("RT: more than {} instances, the rest is left out (-Demrion.rt.maxInstances)", CAPACITY);
+			overflowWarned = true;
+			return i;
+		}
+		long a = inst + (long) i * VkAccelerationStructureInstanceKHR.SIZEOF;
+		// 3x4 row-major: identity rotation, camera-relative translation
+		MemoryUtil.memPutFloat(a, 1f); MemoryUtil.memPutFloat(a + 4, 0f); MemoryUtil.memPutFloat(a + 8, 0f);
+		MemoryUtil.memPutFloat(a + 12, (float) (e.x - cam.x));
+		MemoryUtil.memPutFloat(a + 16, 0f); MemoryUtil.memPutFloat(a + 20, 1f); MemoryUtil.memPutFloat(a + 24, 0f);
+		MemoryUtil.memPutFloat(a + 28, (float) (e.y - cam.y));
+		MemoryUtil.memPutFloat(a + 32, 0f); MemoryUtil.memPutFloat(a + 36, 0f); MemoryUtil.memPutFloat(a + 40, 1f);
+		MemoryUtil.memPutFloat(a + 44, (float) (e.z - cam.z));
+		int mask = e.layer == ChunkSectionLayer.TRANSLUCENT ? 0x02 : 0x01;
+		MemoryUtil.memPutInt(a + 48, (frame * CAPACITY + i) | mask << 24); // instanceCustomIndex = section table entry
+		MemoryUtil.memPutInt(a + 52, VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR << 24);
+		MemoryUtil.memPutLong(a + 56, e.blasAddr);
+		long s = sec + i * 16L; // EmrionRtSections: uvec2 vertexAddr, uint layer, uint vertex format
+		MemoryUtil.memPutLong(s, e.vertexAddr);
+		MemoryUtil.memPutInt(s + 8, e.layer.ordinal());
+		MemoryUtil.memPutInt(s + 12, e.format);
+		return i + 1;
 	}
 
 	private int wantCounter;
 
-	/**
-	 * RT sees everything within the RT distance, not only what the camera's visibility graph reached: asks for those sections to
-	 * be compiled (ForcedSections; every 8th frame, a compile takes longer than that anyway).
-	 */
+	/** RT sees everything within the RT distance, not only what the visibility graph reached: forces those sections to compile. */
 	private static void wantSections(Vec3 cam) {
 		var area = Minecraft.getInstance().levelRenderer.viewArea();
 		if (area == null) return;
@@ -445,7 +554,7 @@ public final class RtScene {
 			var geom = VkAccelerationStructureGeometryKHR.calloc(1, stack);
 			geom.get(0).sType$Default().geometryType(VK_GEOMETRY_TYPE_INSTANCES_KHR).geometry().instances().sType$Default();
 			var info = VkAccelerationStructureBuildGeometryInfoKHR.calloc(stack).sType$Default().type(VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR)
-					.flags(VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR).mode(VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR).pGeometries(geom).geometryCount(1);
+					.flags(TLAS_FLAGS).mode(VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR).pGeometries(geom).geometryCount(1);
 			var sizes = VkAccelerationStructureBuildSizesInfoKHR.calloc(stack).sType$Default();
 			vkGetAccelerationStructureBuildSizesKHR(ctx.vk, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, info, stack.ints(cap), sizes);
 			tlasBytes = sizes.accelerationStructureSize();
@@ -458,6 +567,41 @@ public final class RtScene {
 			tlasAddr = vkGetAccelerationStructureDeviceAddressKHR(ctx.vk, VkAccelerationStructureDeviceAddressInfoKHR.calloc(stack).sType$Default().accelerationStructure(tlas));
 		}
 		EmrionShadersClient.LOG.info("RT: TLAS capacity {} instances ({} KiB)", cap, tlasBytes >> 10);
+	}
+
+	long indexAddress() {
+		return address(indices.handle);
+	}
+
+	long scratchAlign() {
+		return scratchAlign;
+	}
+
+	/** All sections are meshed and built again (BLAS inputs changed: the opacity micromap switch, the any-hit ids). */
+	private static void rebuildSections() {
+		Minecraft mc = Minecraft.getInstance();
+		mc.execute(() -> mc.levelExtractor.allChanged());
+	}
+
+	/** Block ids the applied shaders decide per id (Manifest.Rt.anyHitIds): never opaque in a micromap. */
+	public RtScene setAnyHitIds(List<Integer> ids) {
+		if (omm != null && omm.setAnyHitIds(ids) && ommOn) rebuildSections();
+		return this;
+	}
+
+	/** Entities go into the TLAS only if an applied effect asked for them ({@code <effect>:entities}). */
+	public RtScene setEntities(boolean on) {
+		if (on && entities == null) entities = new RtEntities(this);
+		else if (!on && entities != null) {
+			entities.destroy();
+			entities = null;
+		}
+		return this;
+	}
+
+	/** The entity texture atlas view (builtin emrion_rt_entity_atlas), 0 without entities. */
+	public long entityAtlasView() {
+		return entities == null ? 0 : entities.atlas.view;
 	}
 
 	/** The TLAS of this frame; 0 before the first {@link #buildTlas}. */
@@ -475,23 +619,28 @@ public final class RtScene {
 		return sections;
 	}
 
+	/** The block-light grid (EmrRtLights), refilled every frame at levelStart; fixed for the scene's lifetime. */
+	public RawBuffer lightBuffer() {
+		return lights.buffer;
+	}
+
 	// ---- helpers ------------------------------------------------------------------------------------------------------------
 
-	private long address(long buffer) {
+	public long address(long buffer) {
 		try (MemoryStack stack = MemoryStack.stackPush()) {
 			return vkGetBufferDeviceAddress(ctx.vk, VkBufferDeviceAddressInfo.calloc(stack).sType$Default().buffer(buffer));
 		}
 	}
 
-	private static long align(long v, long a) {
+	static long align(long v, long a) {
 		return (v + a - 1) / a * a;
 	}
 
-	private static void check(int result, String what) {
+	static void check(int result, String what) {
 		if (result != VK_SUCCESS) throw new IllegalStateException(what + " failed: VkResult " + result);
 	}
 
-	private void log() {
+	public void log() {
 		long now = System.nanoTime();
 		if (now - lastLog < 5_000_000_000L) return;
 		lastLog = now;
@@ -500,16 +649,20 @@ public final class RtScene {
 						+ "instance+table rings {} MiB; GPU BLAS build time so far {} ms for {} builds, worst frame {} us",
 				entriesBuilt(), pending.size(), triangles, blasBytes >> 20, triangles == 0 ? 0 : blasBytes / triangles, instanceCount, tlasBytes >> 10,
 				SCRATCH_SIZE >> 20, ring >> 20, gpuBuildNs / 1_000_000, built, maxFrameBuildNs / 1000);
+		if (entities != null) EmrionShadersClient.LOG.info("RT: {}", entities.summary());
+		if (omm != null && ommOn) EmrionShadersClient.LOG.info("RT: {}", omm.summary());
 	}
 
 	/** One line for the RT options page. */
 	public String summary() {
-		return String.format("BLAS: %d MiB, %d section layers, %.1f M triangles; TLAS %d instances", blasBytes >> 20, entriesBuilt(), triangles / 1e6, instanceCount);
+		String s = String.format("BLAS: %d MiB, %d section layers, %.1f M triangles; TLAS %d instances", blasBytes >> 20, entriesBuilt(), triangles / 1e6, instanceCount);
+		if (omm != null && ommOn) s += "; " + omm.summary();
+		return entities == null ? s : s + "; " + entities.summary();
 	}
 
 	private int entriesBuilt() {
 		int n = 0;
 		for (Entry[] arr : entries.values()) for (Entry e : arr) if (e != null && e.blas != 0) n++;
-		return n;
+		return n + (sodium == null ? 0 : sodium.built());
 	}
 }

@@ -1,0 +1,17 @@
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+// GUI composition after DLSS FG. Every pixel where the current frame with
+// GUI differs from its HUD-less copy is GUI; the interpolated frame takes the current GUI there (what FSR FG's inpainting
+// pass does), so changing HUD text is never blended between two frames.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0, rgba8) uniform readonly image2D hudless;
+// sampled, not storage: MC's main target has no storage usage (a storage read returned 0, every interpolated frame black)
+layout(set = 0, binding = 1) uniform texture2D backbuffer;
+layout(set = 0, binding = 2, rgba8) uniform image2D interpolated;
+
+void main() {
+	ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+	if (any(greaterThanEqual(p, imageSize(interpolated)))) return;
+	vec4 gui = texelFetch(backbuffer, p, 0);
+	if (any(notEqual(gui.rgb, imageLoad(hudless, p).rgb))) imageStore(interpolated, p, vec4(gui.rgb, 1.0));
+}

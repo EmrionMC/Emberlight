@@ -23,6 +23,13 @@ import java.util.zip.ZipInputStream;
  * {@link #contentHash()} cheap.
  */
 final class MemoryPackSource implements PackSource {
+	/**
+	 * Untrusted packs: zip bombs and huge trees fail instead of exhausting the heap. Real packs (2026-11, testpacks/): at most
+	 * 784 files, 16.6 MB unpacked, largest file 8.4 MB (Shrimple); Complementary Unbound + Euphoria 634 files, 9.7 MB.
+	 */
+	static final int MAX_FILES = 20_000;
+	static final long MAX_FILE_BYTES = 128L << 20, MAX_TOTAL_BYTES = 256L << 20;
+
 	private final String name;
 	private final SortedMap<String, byte[]> files;
 	private volatile String hash;
@@ -43,10 +50,25 @@ final class MemoryPackSource implements PackSource {
 
 	private static SortedMap<String, byte[]> readDirectory(Path dir) throws IOException {
 		SortedMap<String, byte[]> files = new TreeMap<>();
+		Budget budget = new Budget();
 		dir = dir.toRealPath(); // shaderpacks entries are often symlinks; Files.walk does not descend into a linked root
-		try (Stream<Path> walk = Files.walk(dir, java.nio.file.FileVisitOption.FOLLOW_LINKS)) {
-			for (Path p : (Iterable<Path>) walk.filter(Files::isRegularFile)::iterator) {
-				files.put(dir.relativize(p).toString().replace('\\', '/'), Files.readAllBytes(p));
+		// links inside the pack are not followed: a link pointing outside could pull any file of the user into the pack
+		try (Stream<Path> walk = Files.walk(dir)) {
+			for (Path p : (Iterable<Path>) walk::iterator) {
+				budget.count(p.toString());
+				Path real = p;
+				if (Files.isSymbolicLink(p)) {
+					try {
+						real = p.toRealPath();
+					} catch (IOException dangling) {
+						continue;
+					}
+					if (!real.startsWith(dir)) continue;
+				}
+				if (Files.isRegularFile(real, java.nio.file.LinkOption.NOFOLLOW_LINKS))
+					try (InputStream in = Files.newInputStream(real)) {
+						files.put(dir.relativize(p).toString().replace('\\', '/'), budget.read(in, p.toString()));
+					}
 			}
 		}
 		return files;
@@ -54,9 +76,11 @@ final class MemoryPackSource implements PackSource {
 
 	private static SortedMap<String, byte[]> readZip(Path zip) throws IOException {
 		SortedMap<String, byte[]> raw = new TreeMap<>();
+		Budget budget = new Budget();
 		try (InputStream in = Files.newInputStream(zip); ZipInputStream zin = new ZipInputStream(in)) {
 			for (ZipEntry e; (e = zin.getNextEntry()) != null; ) {
-				if (!e.isDirectory()) raw.put(e.getName().replace('\\', '/'), zin.readAllBytes());
+				budget.count(e.getName());
+				if (!e.isDirectory()) raw.put(e.getName().replace('\\', '/'), budget.read(zin, e.getName()));
 			}
 		}
 		String root = findRoot(raw.keySet());
@@ -65,6 +89,25 @@ final class MemoryPackSource implements PackSource {
 			if (path.startsWith(root)) files.put(path.substring(root.length()), bytes);
 		});
 		return files;
+	}
+
+	/** Counts files and bytes actually read (a zip's declared sizes can lie). */
+	private static final class Budget {
+		int files;
+		long total;
+
+		void count(String path) throws IOException {
+			if (++files > MAX_FILES) throw new IOException("pack has more than " + MAX_FILES + " files (at " + path + ")");
+		}
+
+		byte[] read(InputStream in, String path) throws IOException {
+			long limit = Math.min(MAX_FILE_BYTES, MAX_TOTAL_BYTES - total);
+			byte[] b = in.readNBytes((int) limit + 1);
+			if (b.length > limit) throw new IOException(b.length > MAX_FILE_BYTES ? path + " is larger than " + (MAX_FILE_BYTES >> 20) + " MB"
+					: "pack is larger than " + (MAX_TOTAL_BYTES >> 20) + " MB unpacked (at " + path + ")");
+			total += b.length;
+			return b;
+		}
 	}
 
 	/** The pack root is the zip root, or the single folder one level down that contains "shaders/". */
@@ -116,10 +159,11 @@ final class MemoryPackSource implements PackSource {
 		if (h == null) {
 			try {
 				MessageDigest md = MessageDigest.getInstance("SHA-256");
+				ByteBuffer len = ByteBuffer.allocate(8);
 				files.forEach((path, bytes) -> {
 					md.update(path.getBytes(StandardCharsets.UTF_8));
 					md.update((byte) 0);
-					md.update(ByteBuffer.allocate(8).putLong(bytes.length).flip());
+					md.update(len.clear().putLong(bytes.length).flip());
 					md.update(bytes);
 				});
 				hash = h = HexFormat.of().formatHex(md.digest());

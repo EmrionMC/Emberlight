@@ -1,0 +1,56 @@
+#version 450
+// Camera motion vectors from depth for the upscalers. Output: previous UV - current UV, render size.
+// Our images keep GL row order, so uv = (ndc + 1) / 2 in both axes and the depth is GL window depth (forward Z).
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D depthTex;
+layout(set = 0, binding = 1, rg16f) uniform writeonly image2D motion;
+layout(set = 0, binding = 2) uniform sampler2D behindTex; // depth behind translucents (depthtex1)
+layout(set = 0, binding = 3) uniform sampler2D compositionTex; // upscaler composition mask (r: 0.75 water, 0.45 other translucents)
+layout(std140, set = 0, binding = 4) uniform Reprojection { // a UBO: 160 bytes is over the 128 bytes of push constants Vulkan guarantees
+	mat4 toPrev;    // current NDC -> previous clip (unjittered), including the camera translation
+	mat4 toPrevSky; // the same without the translation, for the sky (depth 1 = at infinity)
+	vec4 proj;      // projection m00, m11, m22, m32
+	vec4 surface;   // xyz: unused; w: refraction eta at water (1/1.333 from above), 0 = RT refraction off, < 0 = glass not refracted
+} pc;
+
+float viewZ(float depth) { return -pc.proj.w / (depth * 2.0 - 1.0 + pc.proj.z); }
+float depthOf(float z) { return (-pc.proj.z - pc.proj.w / z) * 0.5 + 0.5; }
+vec3 viewAt(ivec2 q) {
+	q = clamp(q, ivec2(0), imageSize(motion) - 1);
+	float z = viewZ(texelFetch(depthTex, q, 0).r);
+	return vec3(((vec2(q) + 0.5) / vec2(imageSize(motion)) * 2.0 - 1.0) / pc.proj.xy * -z, z);
+}
+
+void main() {
+	ivec2 p = ivec2(gl_GlobalInvocationID.xy), size = imageSize(motion);
+	if (any(greaterThanEqual(p, size))) return;
+	float depth = texelFetch(depthTex, p, 0).r;
+	vec2 uv = (vec2(p) + 0.5) / vec2(size);
+	// With RT refraction a pixel through water or glass shows the traced hit behind it, which moves like its virtual image:
+	// glass (a slab) at the depth behind; water on the view ray at path-in-water * eta past the surface (refraction.glsl traces
+	// the apparent-depth image: the world behind scaled by eta along the surface normal; eta 1/1.333 from above, 1.333 below).
+	float behind = texelFetch(behindTex, p, 0).r;
+	if (pc.surface.w != 0.0 && depth >= 0.56 && behind > depth && behind < 1.0) {
+		float c = texelFetch(compositionTex, p, 0).r;
+		if (c > 0.6) {
+			float eta = abs(pc.surface.w), k = 1.0;
+			if (eta > 1.0) { // under water: total internal reflection at the face's real normal (waterfalls are vertical), from the depth
+				vec3 o = viewAt(p), l = viewAt(p - ivec2(1, 0)), r = viewAt(p + ivec2(1, 0)), b = viewAt(p - ivec2(0, 1)), t = viewAt(p + ivec2(0, 1));
+				// the flatter side: one side may step onto another surface
+				vec3 n = cross(abs(r.z - o.z) < abs(o.z - l.z) ? r - o : o - l, abs(t.z - o.z) < abs(o.z - b.z) ? t - o : o - b);
+				float cosI = abs(dot(normalize(o), n)) / max(length(n), 1e-20);
+				k = 1.0 - eta * eta * (1.0 - cosI * cosI);
+			}
+			if (k > 0.0) { // else total internal reflection: it moves with the surface
+				float z0 = viewZ(depth);
+				depth = depthOf(z0 + (viewZ(behind) - z0) * eta);
+			}
+		} else if (c > 0.4 && pc.surface.w > 0.0) depth = behind; // refraction:glass=0: the pack's unbent glass moves with its surface
+	}
+	vec2 mv = vec2(0.0);
+	if (depth >= 0.56) { // below: Iris's hand depth range, it moves with the camera
+		vec4 prev = (depth >= 1.0 ? pc.toPrevSky : pc.toPrev) * vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+		if (prev.w > 1e-6) mv = (prev.xy / prev.w * 0.5 + 0.5) - uv;
+	}
+	imageStore(motion, p, vec4(mv, 0.0, 0.0));
+}

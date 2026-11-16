@@ -11,32 +11,20 @@ import org.lwjgl.vulkan.KHRRayQuery;
 import org.lwjgl.vulkan.VkPhysicalDeviceAccelerationStructureFeaturesKHR;
 import org.lwjgl.vulkan.VkPhysicalDeviceRayQueryFeaturesKHR;
 
-/**
- * Device-level RT setup (RAYTRACING.md §0.4): the "Emrion RT" optional feature set, requested at boot unless
- * {@code -Demrion.rt.device=false}. MC enables it all-or-nothing when the GPU supports it; {@link #enabled} records the outcome.
- */
+/** Device-level RT setup: an optional feature set MC enables all-or-nothing at boot; {@link #enabled} records the outcome. */
 public final class RtCapability {
 	private RtCapability() {}
 
-	/**
-	 * Kill switch ({@code -Demrion.rt.device=false} or {@code rt.device=false} in config/emrionshaders.properties): false restores
-	 * today's device exactly (no extensions, no BDA flag, no extra usage bits). Read once, before the device exists.
-	 */
+	/** Kill switch ({@code rt.device=false}): the device is created exactly as without RT. Read once, before the device exists. */
 	public static final boolean REQUESTED = !"false".equals(System.getProperty("emrion.rt.device", configDevice()));
 
 	private static String configDevice() {
-		var p = new java.util.Properties();
-		try (var r = java.nio.file.Files.newBufferedReader(net.fabricmc.loader.api.FabricLoader.getInstance().getConfigDir().resolve("emrionshaders.properties"))) {
-			p.load(r);
-		} catch (java.io.IOException ignored) {
-			// no config yet
-		}
-		return p.getProperty("rt.device", "true").trim();
+		return dev.emrion.shaders.mod.EmrionShadersClient.readProperties(dev.emrion.shaders.mod.EmrionShadersClient.configFile()).getProperty("rt.device", "true").trim();
 	}
-	/** RT-1 debug view ({@code -Demrion.rt.debug=true}): the only thing that creates an {@link RtScene} in this step. */
+	/** Debug view ({@code -Demrion.rt.debug=true}). */
 	public static final boolean DEBUG = Boolean.getBoolean("emrion.rt.debug");
 
-	public static final FeatureSet FEATURE_SET = new FeatureSet("Emrion RT",
+	public static final FeatureSet FEATURE_SET = new FeatureSet("Emberlight RT",
 			Set.of(KHRAccelerationStructure.VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, KHRDeferredHostOperations.VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
 					KHRRayQuery.VK_KHR_RAY_QUERY_EXTENSION_NAME),
 			Set.of(new VulkanFeature(new VulkanPNextStruct(VkPhysicalDeviceAccelerationStructureFeaturesKHR.class), "accelerationStructure"),

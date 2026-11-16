@@ -23,12 +23,16 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class FeatureBuildGroupMixin {
 	@ModifyExpressionValue(method = "buildGroup", at = @At(value = "INVOKE", target = "Ljava/util/Iterator;next()Ljava/lang/Object;"))
 	private Object emrion$restoreIds(Object submit) {
-		if (submit instanceof EntityIds.Holder h) EntityIds.restore(h.emrion$ids());
+		if (submit instanceof EntityIds.Holder h) {
+			EntityIds.restore(h.emrion$ids());
+			dev.emrion.shaders.mod.upscale.ObjectMotion.beginSubmit(h.emrion$motion());
+		}
 		return submit;
 	}
 
 	@Inject(method = "buildGroup", at = @At("RETURN"))
 	private void emrion$clearIds(CallbackInfo ci) {
 		EntityIds.restore(0L);
+		dev.emrion.shaders.mod.upscale.ObjectMotion.beginSubmit(0L);
 	}
 }

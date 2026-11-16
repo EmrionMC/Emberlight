@@ -3,8 +3,8 @@ package net.irisshaders.iris.api.v0;
 import org.jetbrains.annotations.ApiStatus;
 
 /*
- * Modified by Emrion Shaders (2026): this copy of the Iris API (LGPL-3.0-only, https://github.com/IrisShaders/Iris) is
- * put on the class path only when Iris is NOT installed, so the implementation is Emrion Shaders' instead of
+ * Modified by Emberlight (2026): this copy of the Iris API (LGPL-3.0-only, https://github.com/IrisShaders/Iris) is
+ * put on the class path only when Iris is NOT installed, so the implementation is Emberlight' instead of
  * net.irisshaders.iris.apiimpl.IrisApiV0Impl. All other files of this package are unmodified apart from the 26.3
  * class names of RenderPipeline and VertexFormat.
  */

@@ -3,14 +3,7 @@ package dev.emrion.shaders.converter.options;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Options discovered in a pack (iris-spec §3.3).
- *
- * @param booleans boolean options by name (merged across files), in discovery order
- * @param strings  string (value) options by name
- * @param lines    absolute pack path → 0-based line index → option declared on that line. Contains every parsed option
- *                 line, also ambiguous or unreferenced ones: Iris edits all of them when applying values.
- */
+/** Options discovered in a pack. {@code lines} holds every parsed option line, even ambiguous ones: Iris edits all of them. */
 public record OptionSet(Map<String, Option> booleans, Map<String, Option> strings,
                         Map<String, Map<Integer, OptionLine>> lines) {
 

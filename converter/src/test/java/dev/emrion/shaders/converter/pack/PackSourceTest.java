@@ -63,4 +63,59 @@ class PackSourceTest {
 			assertNotEquals(z.contentHash(), s2.contentHash());
 		}
 	}
+
+	@Test
+	void folderPackIgnoresLinksPointingOutside(@TempDir Path tmp) throws Exception {
+		Path secret = Files.writeString(tmp.resolve("secret.txt"), "private");
+		Path pack = Files.createDirectories(tmp.resolve("pack/shaders"));
+		Files.writeString(pack.resolve("final.fsh"), "x");
+		Files.createSymbolicLink(pack.resolve("leak.glsl"), secret);
+		Files.createSymbolicLink(pack.resolve("same.fsh"), pack.resolve("final.fsh"));
+		Files.createSymbolicLink(pack.resolve("dangling.glsl"), tmp.resolve("nope"));
+		Files.createSymbolicLink(pack.resolve("outdir"), tmp);
+		try (PackSource s = PackSource.open(tmp.resolve("pack"))) {
+			assertFalse(s.exists("shaders/leak.glsl"), "link to a file outside the pack is ignored");
+			assertTrue(s.list().stream().noneMatch(f -> f.startsWith("shaders/outdir")), "link to a folder outside is not followed");
+			assertEquals("x", s.readString("shaders/same.fsh").orElseThrow(), "link inside the pack still works");
+			assertFalse(s.exists("shaders/dangling.glsl"));
+		}
+	}
+
+	/** A zip whose entries each inflate to {@code mb} MB of zeros (a few hundred KB on disk). */
+	private Path bomb(String name, int entries, int mb) throws Exception {
+		Path z = tmp.resolve(name);
+		byte[] zeros = new byte[1 << 20];
+		try (OutputStream o = Files.newOutputStream(z); ZipOutputStream zo = new ZipOutputStream(o)) {
+			for (int e = 0; e < entries; e++) {
+				zo.putNextEntry(new ZipEntry("shaders/f" + e + ".glsl"));
+				for (int i = 0; i < mb; i++) zo.write(zeros);
+			}
+		}
+		return z;
+	}
+
+	@Test
+	void zipBombsAreRejected() throws Exception {
+		var big = assertThrows(java.io.IOException.class, () -> PackSource.open(bomb("one.zip", 1, 129)));
+		assertTrue(big.getMessage().contains("larger than 128 MB"), big.getMessage());
+		var total = assertThrows(java.io.IOException.class, () -> PackSource.open(bomb("total.zip", 3, 100)));
+		assertTrue(total.getMessage().contains("pack is larger than 256 MB"), total.getMessage());
+		Path many = tmp.resolve("many.zip");
+		try (OutputStream o = Files.newOutputStream(many); ZipOutputStream zo = new ZipOutputStream(o)) {
+			for (int i = 0; i <= MemoryPackSource.MAX_FILES; i++) zo.putNextEntry(new ZipEntry("shaders/" + i));
+		}
+		assertThrows(java.io.IOException.class, () -> PackSource.open(many));
+		try (PackSource ok = PackSource.open(bomb("ok.zip", 1, 20))) {
+			assertEquals(20 << 20, ok.read("shaders/f0.glsl").orElseThrow().length, "packs below the limits still load");
+		}
+	}
+
+	@Test
+	void hugeFolderFilesAreRejected() throws Exception {
+		Path pack = Files.createDirectories(tmp.resolve("hugepack/shaders"));
+		try (var ch = java.nio.channels.FileChannel.open(pack.resolve("big.bin"), java.nio.file.StandardOpenOption.CREATE_NEW, java.nio.file.StandardOpenOption.WRITE)) {
+			ch.write(java.nio.ByteBuffer.wrap(new byte[1]), MemoryPackSource.MAX_FILE_BYTES); // sparse: no real disk use
+		}
+		assertThrows(java.io.IOException.class, () -> PackSource.open(tmp.resolve("hugepack")));
+	}
 }

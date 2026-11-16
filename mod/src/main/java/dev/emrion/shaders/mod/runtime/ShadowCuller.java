@@ -5,7 +5,7 @@ import org.joml.Vector3f;
 import org.joml.Vector4f;
 
 /**
- * Iris's shadow-pass culling (ShadowRenderer.createShadowFrustum, iris-spec §2.4), on camera-relative boxes:
+ * Iris's shadow-pass culling (ShadowRenderer.createShadowFrustum), on camera-relative boxes:
  * <ul>
  *   <li>{@code max}: boxes outside the cube of half size {@code max} around the camera are culled (Iris BoxCuller);</li>
  *   <li>{@code safe}: boxes touching the cube of half size {@code safe} are always kept (Iris SAFE_ZONE, the pack's

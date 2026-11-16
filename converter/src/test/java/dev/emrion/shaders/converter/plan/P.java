@@ -12,7 +12,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/** Hand-written program fixture: builds a ProgramSource and a ProgramAnalysis (producers are agents a/b). */
+/** Hand-written program fixture: builds a ProgramSource and a ProgramAnalysis. */
 final class P {
 	final String name;
 	final ProgramGroup group;
@@ -47,7 +47,7 @@ final class P {
 
 	P image(String n, String t, String access) { images.add(new Transpiler.ImageDecl(n, t, null, access)); return this; }
 
-	P buffer(String block, int binding, boolean readonly) { buffers.add(new Transpiler.BufferDecl(block, binding, readonly)); return this; }
+	P buffer(String block, int binding, boolean readonly) { buffers.add(new Transpiler.BufferDecl(block, binding, readonly, true)); return this; }
 
 	P uniform(String n, String t) { uniforms.add(new Transpiler.UniformDecl(n, t, 0, null)); return this; }
 

@@ -1,10 +1,8 @@
 package dev.emrion.shaders.converter.expr;
 
 /**
- * Value types of the Iris expression language (kroppeb stareval + Iris VectorType/MatrixType).
- * Note Iris has two distinct int-vector families: the JOML ones ({@code ivec2..4}, only produced by built-ins such as
- * eyeBrightness and only usable with {@code .x}-style access) and the array ones ({@code __ivecN}/{@code __bvecN},
- * produced by the {@code ivecN()/bvecN()} constructors and the vectorised int/bool functions). They never mix.
+ * Value types of the Iris expression language. The JOML int vectors ({@code ivecN}, from built-ins) and the array ones
+ * ({@code __ivecN}/{@code __bvecN}, from constructors) are separate families, as in Iris.
  */
 public enum Type {
 	BOOL("bool", 1), INT("int", 1), FLOAT("float", 1),

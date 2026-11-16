@@ -1,0 +1,25 @@
+#version 450
+// Upscaling / frame generation without a shader pack (upscale/VanillaUpscale): MC's level depth is reverse Z, our upscalers and
+// frame generation take forward GL window depth. Writes it into a buffer that is then copied into a D32 image.
+// mode 0: forward = 1 - MC depth (render size). mode 1 (after the hand): pixels where the display-size depth shows the hand get
+// depth 0.5 (inside the hand range the motion pass zeroes, below 0.56) and zero motion (mode 2: no motion image).
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D srcDepth;
+layout(set = 0, binding = 1, std430) buffer Out { float depth[]; };
+layout(set = 0, binding = 2, rg16f) uniform writeonly image2D motion;
+layout(push_constant) uniform P { ivec2 size; int mode; } pc;
+
+void main() {
+	ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+	if (any(greaterThanEqual(p, pc.size))) return;
+	int i = p.y * pc.size.x + p.x;
+	if (pc.mode == 0) {
+		depth[i] = 1.0 - texelFetch(srcDepth, p, 0).r;
+		return;
+	}
+	// the hand is nearer than the level (reverse Z: larger); in front of a very close wall it is missed
+	if (textureLod(srcDepth, (vec2(p) + 0.5) / vec2(pc.size), 0.0).r > 1.0 - depth[i] + 1e-6) {
+		depth[i] = 0.5;
+		if (pc.mode == 1) imageStore(motion, p, vec4(0.0));
+	}
+}

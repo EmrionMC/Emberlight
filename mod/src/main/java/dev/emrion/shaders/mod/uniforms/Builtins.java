@@ -2,6 +2,7 @@ package dev.emrion.shaders.mod.uniforms;
 
 import dev.emrion.shaders.converter.expr.UniformCatalog;
 import dev.emrion.shaders.format.Manifest;
+import dev.emrion.shaders.mod.upscale.Upscaling;
 import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
 import it.unimi.dsi.fastutil.objects.Reference2FloatOpenHashMap;
 import it.unimi.dsi.fastutil.objects.Reference2IntOpenHashMap;
@@ -61,12 +62,7 @@ import org.joml.Vector3f;
 import org.joml.Vector3fc;
 import org.joml.Vector4f;
 
-/**
- * Every Iris built-in uniform (UniformCatalog) as a provider over per-frame captured state. Semantics follow Iris
- * {@code net.irisshaders.iris.uniforms.*} (iris-spec §5), with MC 26.3 APIs. {@link #capture} runs once per frame and
- * advances all stateful values (timer, camera shift, smoothing, previous matrices); providers only read.
- * Render thread only.
- */
+/** Every Iris built-in uniform as a provider over per-frame captured state; {@link #capture} advances it. Render thread only. */
 final class Builtins {
 	/** Writes one value in std140 word form into out[at..]. */
 	interface Provider { void write(int[] out, int at); }
@@ -150,7 +146,7 @@ final class Builtins {
 		register();
 	}
 
-	// shortcut: item/entity tags (#ns:tag) and block-state matchers are ignored for held items and vehicles; resolve them when a pack needs it.
+	// shortcut: tag and block-state matchers are ignored for held items and vehicles, resolve them when a pack needs it
 	private static void fill(Object2IntOpenHashMap<Identifier> map, List<Manifest.IdEntry> entries) {
 		if (entries == null) return;
 		for (var e : entries)
@@ -214,6 +210,10 @@ final class Builtins {
 		modelViewInv.transpose3x3(normalMat);
 		IrisMath.handProjection(cs.hudFov, gr.gameRenderState().windowRenderState.width, gr.gameRenderState().windowRenderState.height,
 				cs.depthFar, CapturedProjection.BOB, handProjection).invert(handProjectionInv);
+		if (Upscaling.jitter(projection, handProjection)) { // sub-pixel jitter while an upscaler runs
+			projection.invert(projectionInv);
+			handProjection.invert(handProjectionInv);
+		}
 
 		// Celestial (CelestialUniforms / ShadowRenderer.getShadowAngle)
 		sunRaw = camera.attributeProbe().getValue(EnvironmentAttributes.SUN_ANGLE, pt);
@@ -393,7 +393,7 @@ final class Builtins {
 	}
 
 	private boolean blockOutline() {
-		// shortcut: GameRenderer.shouldRenderBlockOutline without the adventure-mode canBreak/canPlace and spectator branches.
+		// shortcut: no adventure-mode canBreak/canPlace or spectator branches of shouldRenderBlockOutline, add if a pack needs them
 		return camEntity instanceof Player p && !mc.gui.hud.isHidden() && p.getAbilities().mayBuild;
 	}
 
@@ -459,8 +459,9 @@ final class Builtins {
 		vec3("cameraPositionFract", (o, i) -> fract3(o, i, tracker.currentUnshifted));
 		put("previousCameraPositionInt", "ivec3", (o, i) -> floor3(o, i, tracker.previousUnshifted));
 		vec3("previousCameraPositionFract", (o, i) -> fract3(o, i, tracker.previousUnshifted));
-		f("viewHeight", () -> mc.gameRenderer.mainRenderTarget().height);
-		f("viewWidth", () -> mc.gameRenderer.mainRenderTarget().width);
+		// the render size while an upscaler runs
+		f("viewHeight", () -> Upscaling.viewHeight(mc.gameRenderer.mainRenderTarget().height));
+		f("viewWidth", () -> Upscaling.viewWidth(mc.gameRenderer.mainRenderTarget().width));
 		f("aspectRatio", () -> (float) mc.gameRenderer.mainRenderTarget().width / (float) mc.gameRenderer.mainRenderTarget().height);
 		i("worldTime", this::worldTime);
 		i("worldDay", () -> (int) (level.getDefaultClockTime() / 24000L));
@@ -553,7 +554,7 @@ final class Builtins {
 			put3(o, i, (float) (p.getX() + 0.5 - cam.x), (float) (p.getY() + 0.5 - cam.y), (float) (p.getZ() + 0.5 - cam.z));
 		});
 		vec3("eyePosition", (o, i) -> put3(o, i, camEntity.getEyePosition(pt)));
-		// shortcut: CloudRenderer's texture is private; vanilla clouds.png is 256 wide (Iris: width * 400 ticks period).
+		// shortcut: assumes vanilla clouds.png (256 wide, Iris: width * 400 ticks), read the real texture if a pack needs it
 		f("cloudTime", () -> ((level.getGameTime() % (256 * 400)) + pt) * 0.03f);
 		vec3("relativeEyePosition", (o, i) -> {
 			Vec3 e = camEntity.getEyePosition(pt);
@@ -629,7 +630,7 @@ final class Builtins {
 		i("anisotropicFiltering", () -> mc.options.textureFiltering().get() == TextureFilteringMethod.ANISOTROPIC ? mc.options.maxAnisotropyValue() : 0);
 		f("pi", () -> (float) Math.PI);
 		f("playerMood", () -> camEntity instanceof LocalPlayer lp ? Mth.clamp(lp.getCurrentMood(), 0.0f, 1.0f) : 0.0f);
-		// shortcut: Iris tracks constantMood with a BiomeAmbientSoundsHandler mixin; 0 until a pack needs it.
+		// shortcut: constantMood stays 0 (Iris tracks it with a sound-handler mixin), add when a pack needs it
 		f("constantMood", () -> 0.0f);
 		put("eyeBrightness", "ivec2", (o, i) -> { o[i] = eyeBlock; o[i + 1] = eyeSky; });
 		put("eyeBrightnessSmooth", "ivec2", (o, i) -> { o[i] = (int) eyeSmoothX.get(); o[i + 1] = (int) eyeSmoothY.get(); });
@@ -638,11 +639,11 @@ final class Builtins {
 		vec3("skyColor", (o, i) -> put3(o, i, camera.attributeProbe().getValue(EnvironmentAttributes.SKY_COLOR, pt)));
 
 		// Dynamic / composite-only built-ins that end up in the per-frame block: gbuffers semantics, draw-independent defaults
-		// shortcut: centerDepthSmooth is read from a texture by composite programs; the block copy stays 0.
+		// centerDepthSmooth: composites read it from a texture, the block copy stays 0
 		f("centerDepthSmooth", () -> 0.0f);
 		put("iris_ScreenSize", "vec2", (o, i) -> {
-			o[i] = Float.floatToRawIntBits(mc.gameRenderer.mainRenderTarget().width);
-			o[i + 1] = Float.floatToRawIntBits(mc.gameRenderer.mainRenderTarget().height);
+			o[i] = Float.floatToRawIntBits(Upscaling.viewWidth(mc.gameRenderer.mainRenderTarget().width));
+			o[i + 1] = Float.floatToRawIntBits(Upscaling.viewHeight(mc.gameRenderer.mainRenderTarget().height));
 		});
 		vec3("fogColor", (o, i) -> put3(o, i, fogColor.x, fogColor.y, fogColor.z));
 		i("entityId", () -> -1);

@@ -12,7 +12,8 @@ import java.nio.file.Path;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-/** M1 acceptance: the user's pack with the user's settings converts with 0 errors (skipped when testpacks/ is absent). */
+/** The target pack with its settings converts with 0 errors (skipped when testpacks/ is absent). */
+
 class TargetPackConversionTest {
 	static final Path ROOT = Path.of(System.getProperty("emrion.testpacks", "../testpacks"));
 

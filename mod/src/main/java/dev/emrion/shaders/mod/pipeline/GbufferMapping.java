@@ -9,11 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/**
- * Vanilla pipeline → Iris gbuffers program (iris-spec §1.3, Iris's IrisPipelines/ShaderKey). {@code alphaRef} is the
- * ShaderKey default alpha test ("greater", -1 = off), used when the pack sets no {@code alphaTest.<program>}.
- * {@code translucent} splits hand draws between gbuffers_hand (HAND_SOLID) and gbuffers_hand_water (HAND_TRANSLUCENT).
- */
+/** Vanilla pipeline to Iris gbuffers program, as Iris's IrisPipelines/ShaderKey, with its default alpha test. */
 public final class GbufferMapping {
 	private GbufferMapping() {}
 
@@ -55,7 +51,7 @@ public final class GbufferMapping {
 		put("gbuffers_weather", ONE_TENTH, true, WEATHER);
 		put("gbuffers_clouds", ONE_TENTH, true, CLOUDS, FLAT_CLOUDS);
 		put("gbuffers_damagedblock", ONE_TENTH, true, CRUMBLING);
-		put("gbuffers_armor_glint", NON_ZERO, true, GLINT);
+		put("gbuffers_armor_glint", NON_ZERO, true, GLINT, GlintPass.PIPELINE);
 		put("gbuffers_textured", OFF, true, WORLD_BORDER);
 	}
 
@@ -79,15 +75,20 @@ public final class GbufferMapping {
 				throw new IllegalStateException(e);
 			}
 		}
+		out.add(GlintPass.PIPELINE);
 		return out;
 	}
 
 	/** null for a pipeline the table does not know (it falls back to gbuffers_textured/basic by vertex format, logged once). */
 	public static Entry get(RenderPipeline p) {
-		return MAP.get(p);
+		Entry e = MAP.get(p);
+		if (e != null || !p.getLocation().getNamespace().equals("sodium")) return e;
+		// Sodium names its terrain pipelines after the vanilla ones (sodium:pipeline/solid_terrain → minecraft:pipeline/solid_terrain)
+		for (var v : MAP.entrySet()) if (v.getKey().getLocation().getPath().equals(p.getLocation().getPath())) return v.getValue();
+		return null;
 	}
 
-	/** In the hand phases, entity-like programs become gbuffers_hand / gbuffers_hand_water (iris-spec §1.3 "Hand"). */
+	/** In the hand phases, entity-like programs become gbuffers_hand / gbuffers_hand_water. */
 	public static String handProgram(Entry e) {
 		return switch (e.program()) {
 			case "gbuffers_entities", "gbuffers_entities_translucent", "gbuffers_block", "gbuffers_spidereyes", "gbuffers_terrain_solid",
@@ -97,8 +98,8 @@ public final class GbufferMapping {
 	}
 
 	/**
-	 * The shadow pass ShaderKey of a main-pass entry (iris-spec §1.3 "Shadow pass program"): program and default alpha test.
-	 * Terrain and entity-like draws test alpha > 0.1, also solid terrain (Iris SHADOW_TERRAIN_CUTOUT).
+	 * Shadow-pass entry: entity-like draws test alpha > 0.1; chunk terrain as Iris with Sodium (SHADOW_SODIUM_TERRAIN_*: cutout > 0.5,
+	 * solid untested), which is what Iris renders terrain with. The 0.1 of Iris's vanilla path let mipped foliage cast extra shadow.
 	 */
 	public static Entry shadow(Entry e) {
 		String program = switch (e.program()) {
@@ -113,6 +114,7 @@ public final class GbufferMapping {
 		float alpha = switch (program) {
 			case "shadow_lightning" -> OFF;
 			case "shadow" -> e.program().equals("gbuffers_line") || e.program().equals("gbuffers_basic") ? OFF : NON_ZERO;
+			case "shadow_cutout" -> e.program().equals("gbuffers_terrain_cutout") ? HALF : OFF;
 			default -> e.program().equals("gbuffers_beaconbeam") ? OFF : ONE_TENTH;
 		};
 		return new Entry(program, alpha, e.translucent());
@@ -127,7 +129,7 @@ public final class GbufferMapping {
 		};
 	}
 
-	/** Iris's gbuffers fallback chain (iris-spec §1.2), starting at {@code program} itself. */
+	/** Iris's gbuffers fallback chain, starting at {@code program} itself. */
 	public static List<String> chain(String program) {
 		List<String> out = new ArrayList<>();
 		for (String p = program; p != null; p = FALLBACK.get(p)) out.add(p);

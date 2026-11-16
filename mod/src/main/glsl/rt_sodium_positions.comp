@@ -1,0 +1,20 @@
+#version 460
+// RT on the Sodium path (SodiumRt): decodes one section's EmrionChunkVertex positions (Sodium's 3x20-bit encoding, relative to
+// the section origin, words 0-1 of 10) into floats for its BLAS build. Same decode as the terrain_sodium vertex variant.
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+layout(local_size_x = 64) in;
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Src { uint d[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) writeonly buffer Dst { float f[]; };
+layout(push_constant) uniform Push { uvec2 src; uvec2 dst; uint count; };
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= count) return;
+    Src s = Src(src);
+    Dst o = Dst(dst);
+    uvec3 hi = (uvec3(s.d[i * 10u]) >> uvec3(0u, 10u, 20u)) & 0x3FFu, lo = (uvec3(s.d[i * 10u + 1u]) >> uvec3(0u, 10u, 20u)) & 0x3FFu;
+    vec3 p = vec3((hi << 10u) | lo) * (32.0 / 1048576.0) - 8.0;
+    o.f[i * 3u] = p.x;
+    o.f[i * 3u + 1u] = p.y;
+    o.f[i * 3u + 2u] = p.z;
+}

@@ -5,7 +5,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.SequencedMap;
 
-/** Typed pack-wide flags for {@code Manifest.properties} (FORMAT.md §5) with Iris defaults (iris-spec §4.2). */
+/** Typed pack-wide flags for {@code Manifest.properties} with Iris defaults. */
 public final class PackProperties {
 	private PackProperties() {}
 
@@ -62,7 +62,7 @@ public final class PackProperties {
 		m.put(name, b == null ? def : b);
 	}
 
-	/** Iris booleans: true/1, false/0 (iris-spec §4.1). */
+	/** Iris booleans: true/1, false/0. */
 	private static Boolean parse(String v) {
 		if (v == null) return null;
 		return switch (v.trim()) {

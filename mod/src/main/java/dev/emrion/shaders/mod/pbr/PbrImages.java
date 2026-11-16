@@ -2,12 +2,7 @@ package dev.emrion.shaders.mod.pbr;
 
 import com.mojang.blaze3d.platform.NativeImage;
 
-/**
- * Pixel work for the PBR atlases, following Iris's rules: resize a map to its sprite's size (nearest for integer upscales,
- * bilinear otherwise) and build mip levels with Iris's per-channel blend functions (normals: plain average of all four
- * channels; labPBR specular: averages within the majority "type" per channel so metal ids, porosity/SSS and emission
- * do not blend into each other). Pixels are ARGB ints as {@link NativeImage#getPixel} returns them.
- */
+/** Resize and mip generation for PBR maps with Iris's per-channel blend rules, so specular ids never blend. */
 final class PbrImages {
 	private PbrImages() {}
 

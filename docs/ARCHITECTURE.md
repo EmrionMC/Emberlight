@@ -1,4 +1,4 @@
-# Emrion Shaders — Architecture
+# Emberlight — Architecture
 
 Status: M0 (design). Research notes this design relies on are in `docs/research/`:
 `mojang-render-api.md` (MC 26.3 "renderpearl"), `iris-spec.md` (Iris semantics) and
@@ -139,7 +139,7 @@ that implements `CompiledRenderPipeline`. So:
 Set-0 bindings in our SPIR-V are **patched at load time** to the binding order of the vanilla pipeline we replace (its
 **backend** `VulkanRenderPipeline.uniforms()` list, which equals the frontend's `uniformIndices()`: only the uniforms the
 vanilla shaders really use, in first-use order. The frontend `uniforms()` list includes unused declarations and gives the wrong
-order; agent (d) found this through a crash. That is exactly the set MC pushes for that draw, so **a pack stage may only use set-0
+order (found through a crash). That is exactly the set MC pushes for that draw, so **a pack stage may only use set-0
 resources the vanilla pipeline also uses**. Example: terrain on the multidraw-indirect path pushes `Globals, Projection,
 TerrainUniform, Fog, Sampler2, Sampler0` and has no `DynamicTransforms` and no `ChunkSection`.
 Our pipeline layout uses a push-constant range with stage `VK_SHADER_STAGE_ALL`, because MC pushes with all stage bits.
@@ -225,7 +225,9 @@ Planned set; each mixin class carries a comment explaining why it is needed.
 | `GameRenderer.useImprovedTransparency` | HEAD | Force the classic transparency path while a pack is active (OIT changes the pass structure). |
 | `VulkanRenderPass.setPipeline` TAIL | inject | Bind descriptor set 1 and push the extra set-0 samplers for our pipelines. |
 | `FrontendRenderPass.setUniform` HEAD | inject | `Sampler0` changed: atlasSize and the per-draw PBR maps follow it. |
+| `FrontendRenderPass.setPipeline` HEAD | inject, field swap | Only when the gbuffers programs together write more colortex than `maxColorAttachments` (Bliss: 9 > 8): `GbufferPipelines` splits the programs into attachment groups (first fit, most outputs first) and builds each pipeline against its group; setting a pipeline of another group ends the dynamic rendering, puts a colour/depth memory barrier, resumes with that group's attachments (LOAD, same depth) and swaps the pass's attachment list. With one group nothing happens (a static boolean check). |
 | `TextureAtlas.upload` RETURN / `cycleAnimationFrames` TAIL / `createTexture` TAIL | inject | PBR atlases mirror each atlas's layout and animation; a reload drops the per-texture PBR cache. |
+| `PipelineCache.get` (`compilePipeline` executor) | modify arg | With a pack selected, MC's blocking pipeline compiles run on our own thread instead of the chunk worker pool: after a resource reload every chunk worker can wait on the render thread, so a compile queued behind them never finishes. `PackManager.prepare` also never blocks: it starts the missing vanilla compiles and builds the pack pipelines a few frames later (the old pack keeps rendering). |
 | `VulkanConst.textureUsageToVk` | return | Add the STORAGE usage bit for our custom usage flag. |
 | `VulkanFeatureSets.optionalFeatureSets` | return | Enable `fragmentStoresAndAtomics`, `vertexPipelineStoresAndAtomics`, `geometryShader`, `shaderStorageImageWriteWithoutFormat` (only those the pack needs). |
 | `SectionCompiler` / `BufferBuilder` | wrap | Extended terrain vertex format plus per-quad attributes. |

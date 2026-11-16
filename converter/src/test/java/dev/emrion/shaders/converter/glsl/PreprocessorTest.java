@@ -26,6 +26,22 @@ class PreprocessorTest {
 	}
 
 	@Test
+	void expansionsDoNotMergeWithNeighbouringTokens() {
+		assertEquals("float b = 1.0- -0.1;", pp("#define BIAS -0.1\nfloat b = 1.0-BIAS;\n"));
+		assertEquals("x = - -1;", pp("#define NEG(v) -v\nx = NEG(-1);\n"));
+		assertEquals("i--; texCoord.y; ++i", pp("#define DEC(v) v--\n#define TC texCoord\n#define INC ++i\nDEC(i); TC.y; INC\n"));
+	}
+
+	@Test
+	void exponentialMacroChainStopsAtTheBudget() {
+		StringBuilder src = new StringBuilder("#define M0 x\n");
+		for (int i = 1; i <= 40; i++) src.append("#define M").append(i).append(" M").append(i - 1).append(" M").append(i - 1).append('\n');
+		var r = run(src.append("M40\n").toString(), Map.of());
+		assertTrue(r.warnings().stream().anyMatch(w -> w.text().startsWith("Macro expansion exceeds")), r.warnings().toString());
+		assertTrue(r.text().length() < 50_000_000, "output stays bounded");
+	}
+
+	@Test
 	void nestedArgumentsAndParens() {
 		assertEquals("f((a, b), c)", pp("#define F(x, y) f(x, y)\nF((a, b), c)\n"));
 	}

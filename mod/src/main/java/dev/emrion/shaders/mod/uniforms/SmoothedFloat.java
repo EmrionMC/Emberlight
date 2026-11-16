@@ -2,7 +2,7 @@ package dev.emrion.shaders.mod.uniforms;
 
 /**
  * Iris uniforms/transforms/SmoothedFloat: exponential smoothing with separate up/down half lives in deciseconds
- * (wetness, eyeBrightnessSmooth). The first sample is taken as is. Pure, unit-tested.
+ * (wetness, eyeBrightnessSmooth). The first sample is taken as is. Pure.
  */
 public final class SmoothedFloat {
 	private static final double LN_OF_2 = Math.log(2.0);

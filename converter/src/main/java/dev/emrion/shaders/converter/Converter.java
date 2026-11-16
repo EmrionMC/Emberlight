@@ -7,23 +7,27 @@ import java.nio.file.Path;
 import java.util.List;
 
 /**
- * Facade used by the CLI and the mod. Owner: agent (c) (orchestration), wiring stages of (a) and (b).
+ * Facade used by the CLI and the mod.
  */
 public interface Converter {
-	String VERSION = "0.2.0"; // bump on every change to converter output: it is part of the cache key
+	String VERSION = "0.1.0-alpha.1.9"; // bump on every change to converter output: it is part of the cache key
+	/** Bump on every change to the terrain_sodium output only (cache key of Sodium requests; VERSION would change every output). */
+	String SODIUM_VARIANT = "5";
 
 	/**
-	 * @param pack     zip or folder
 	 * @param settings Iris settings .txt, may be null (= all defaults)
-	 * @param cacheRoot output root; result goes to cacheRoot/&lt;cacheKey&gt;/
-	 * @param dimensions dimension folders to convert, null or empty = all
-	 * @param useCache  false = convert even if a valid cache directory exists (and replace it)
-	 * @param rt        RT effects to patch in (RAYTRACING.md §3.2), e.g. "shadows" or "shadows:full"; empty = today's output exactly
+	 * @param rt       RT effects to patch in, e.g. "shadows:full"; empty = plain Iris-equivalent output
+	 * @param sodium   also emit the terrain_sodium vertex variant
 	 */
 	record Request(Path pack, Path settings, Path cacheRoot, List<String> dimensions, ProgressListener progress, boolean useCache,
-	               java.util.Set<String> rt) {
+	               java.util.Set<String> rt, boolean sodium) {
 		public Request {
 			rt = rt == null ? java.util.Set.of() : java.util.Set.copyOf(rt);
+		}
+
+		public Request(Path pack, Path settings, Path cacheRoot, List<String> dimensions, ProgressListener progress, boolean useCache,
+		               java.util.Set<String> rt) {
+			this(pack, settings, cacheRoot, dimensions, progress, useCache, rt, false);
 		}
 
 		public Request(Path pack, Path settings, Path cacheRoot, List<String> dimensions, ProgressListener progress, boolean useCache) {

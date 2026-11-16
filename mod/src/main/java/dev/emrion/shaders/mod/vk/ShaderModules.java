@@ -31,7 +31,7 @@ public final class ShaderModules {
 		}
 	}
 
-	/** Loads a SPIR-V file from the mod jar, e.g. {@code /assets/emrionshaders/spv/debug_post.frag.spv}. */
+	/** Loads a SPIR-V file from the mod jar, e.g. {@code /assets/emberlight/spv/debug_post.frag.spv}. */
 	public static byte[] resource(String path) {
 		try (InputStream in = ShaderModules.class.getResourceAsStream(path)) {
 			if (in == null) throw new IllegalArgumentException("missing resource " + path);

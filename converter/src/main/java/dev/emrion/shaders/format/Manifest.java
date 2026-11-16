@@ -6,9 +6,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Emrion Pack Format (EPF) manifest. Mirrors docs/FORMAT.md 1:1 (field name = JSON key).
- * This file is the converter/mod contract: change FORMAT.md first, then bump {@link #FORMAT_VERSION}.
- * Nullable fields are absent in JSON when not applicable.
+ * Pack manifest, the converter/mod contract (docs/FORMAT.md; field name = JSON key, nullable fields are omitted).
+ * Change FORMAT.md first, then bump {@link #FORMAT_VERSION}.
  */
 public record Manifest(
 		int formatVersion,
@@ -27,7 +26,7 @@ public record Manifest(
 ) {
 	public static final int FORMAT_VERSION = 2;
 
-	/** Without the optional {@code rt} section (every conversion without RT effects). */
+	/** Without the optional {@code rt} section. */
 	public Manifest(int formatVersion, String converterVersion, String cacheKey, PackInfo pack, Environment environment, Options options,
 	                Map<String, Object> properties, UniformLayout uniforms, IdMaps idMaps, List<TextureDef> textures,
 	                List<DimensionMapping> dimensionMap, Map<String, Dimension> dimensions) {
@@ -36,16 +35,22 @@ public record Manifest(
 	}
 
 	/**
-	 * §9 RT variant (absent = no RT requested). effects: applied effects with their mode ("shadows" or "shadows:full");
-	 * unavailable: requested effect → reason; patched: effect → "dim/program.stage" list where a function was replaced.
+	 * RT variant (absent = no RT requested). effects: applied effects with options ("shadows:full");
+	 * unavailable: effect → reason; patched: effect → patched "dim/program.stage" list; anyHitIds: block ids (mc_Entity) whose
+	 * cutout hits a patched shader decides per id (an active skip list), so the mod's opacity micromaps never make them opaque
+	 * (absent in older caches = none).
 	 */
-	public record Rt(List<String> effects, Map<String, String> unavailable, Map<String, List<String>> patched) {}
+	public record Rt(List<String> effects, Map<String, String> unavailable, Map<String, List<String>> patched, List<Integer> anyHitIds) {
+		public Rt {
+			anyHitIds = anyHitIds == null ? List.of() : anyHitIds;
+		}
+	}
 
 	public record PackInfo(String name, String sha256) {}
 
 	public record Environment(String mcVersion, Map<String, String> macros) {}
 
-	// ---- §4 options -------------------------------------------------------------------------------------------------
+	// ---- options ----
 
 	public record Options(
 			String settingsFile,
@@ -62,7 +67,7 @@ public record Manifest(
 	public record OptionDecl(String name, String kind, String type, String defaultValue, List<String> allowed,
 	                         String file, int line, String comment) {}
 
-	// ---- §6 uniforms -------------------------------------------------------------------------------------------------
+	// ---- uniforms ----
 
 	public record UniformLayout(String blockName, int size, List<UniformMember> members, List<CustomUniform> custom,
 	                            Block phase, Block pushConstants) {}
@@ -72,16 +77,16 @@ public record Manifest(
 	/** source: builtin | custom. arraySize/arrayStride are 0 for non-arrays. */
 	public record UniformMember(String name, String type, int offset, int arraySize, int arrayStride, String source) {}
 
-	/** expr is the serialised AST of FORMAT.md §6.1 (kept as JSON; the expr package owns its schema). */
+	/** expr: serialised AST, kept as JSON (the expr package owns its schema). */
 	public record CustomUniform(String name, String type, boolean uniform, JsonObject expr) {}
 
-	// ---- §8 id maps --------------------------------------------------------------------------------------------------
+	// ---- id maps ----
 
 	public record IdMaps(List<IdEntry> blocks, List<IdEntry> items, List<IdEntry> entities, Map<String, List<String>> layers) {}
 
 	public record IdEntry(int id, List<String> match) {}
 
-	// ---- §7 dimension plan -------------------------------------------------------------------------------------------
+	// ---- dimension plan ----
 
 	public record DimensionMapping(String match, String folder) {}
 
@@ -148,7 +153,7 @@ public record Manifest(
 
 	/**
 	 * kind: uniform_buffer_dynamic | sampled_image | storage_image | storage_buffer | acceleration_structure.
-	 * RT variants only: builtin emrion_tlas (acceleration_structure) and emrion_rt_sections (storage_buffer).
+	 * RT variants add builtins such as emrion_tlas, emrion_rt_sections, emrion_rt_lights and emrion_rtao.
 	 * Exactly one of target (a {@link Target#name()}), texture (a {@link TextureDef#name()}) or builtin is set for images.
 	 * builtin: block_atlas | white | white_depth. sampler null = the texture's own sampling (custom textures:
 	 * TextureDef filter/wrap; atlases: MC's atlas sampler).
@@ -180,7 +185,8 @@ public record Manifest(
 	}
 
 	/**
-	 * One frame command (FORMAT.md §7.4). cmd: clear | compute | fullscreen | mipmaps | geometry | copy_depth | copy | final.
+	 * One frame command. cmd: clear | compute | fullscreen | mipmaps | geometry | copy_depth | copy | final.
+
 	 * Unused fields are null.
 	 */
 	public record Command(String cmd, String program, Integer flipState, String phase, String target, String side,

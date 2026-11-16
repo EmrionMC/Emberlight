@@ -1,0 +1,22 @@
+# RT refraction + caustics scenes (M7, RAYTRACING.md §11): run with -Demrion.rt.enabled=true -Demrion.rt.refraction=true
+# -Demrion.rt.caustics=true (and once with RT off); same format as emrion-scenes.txt. "pool" is built in the air: a clear,
+# shallow basin of sand (2 blocks of water, a 4-deep pit), submerged stairs, coloured glass panes and glass blocks in and at
+# the water, gold and lapis blocks behind the glass.
+warm     | 64.5 68 -260.5 180 15 | 6000 | clear |
+water    | 64.5 68 -260.5 180 15 | 6000 | clear |
+pool_build | 202.5 147 184.5 0 32 | 6000 | clear | fill 189 135 189 215 142 215 minecraft:smooth_stone; fill 190 138 190 214 142 214 minecraft:air; fill 190 138 190 214 140 214 minecraft:sand; fill 205 136 194 211 140 200 minecraft:water; fill 190 141 190 214 142 214 minecraft:water; fill 195 141 197 203 141 197 minecraft:stone_brick_stairs[facing=south,waterlogged=true]; fill 196 141 200 202 141 200 minecraft:sandstone_stairs[facing=north,waterlogged=true]; fill 193 141 205 201 143 205 minecraft:light_blue_stained_glass_pane[east=true,west=true,waterlogged=true]; fill 193 143 205 201 143 205 minecraft:light_blue_stained_glass_pane[east=true,west=true]; fill 193 141 208 201 142 208 minecraft:gold_block; fill 204 141 203 206 143 203 minecraft:glass; fill 204 141 206 206 142 206 minecraft:lapis_block; setblock 209 141 203 minecraft:red_stained_glass; setblock 209 141 205 minecraft:emerald_block; fill 191 141 192 191 142 194 minecraft:lime_stained_glass_pane[north=true,south=true,waterlogged=true]; setblock 198 139 193 minecraft:sea_lantern
+pool_low | 202.5 143.2 186.5 10 12 | 6000 | clear |
+pool     | 202.5 147 184.5 0 32 | 6000 | clear |
+# Edge scenes (fix/refraction-edges): a basin in the air east of the pool. 1-deep water with a quartz pillar, a white concrete
+# block and a cow and villager standing in it; underwater steps to a 3-deep pit (with a second pillar); a sand shore with two
+# steps. "edge_build" builds it, the other three shoot it from the shore, close up and at the mobs.
+edge_build | 228.5 142 211.5 180 30 | 6000 | clear | kill @e[tag=emrion]; fill 219 134 189 237 140 207 minecraft:smooth_stone; fill 220 135 190 236 140 206 minecraft:air; fill 220 135 190 236 137 206 minecraft:sand; fill 220 136 190 236 137 196 minecraft:air; fill 220 137 197 236 137 199 minecraft:air; fill 220 138 205 236 138 206 minecraft:sand; fill 220 139 206 236 139 206 minecraft:sand; fill 220 136 190 236 138 204 minecraft:water replace minecraft:air; fill 226 138 201 226 139 201 minecraft:quartz_block; setblock 230 138 202 minecraft:white_concrete; fill 228 136 193 228 140 193 minecraft:quartz_block; summon minecraft:cow 233.5 138 201.5 {NoAI:1b,PersistenceRequired:1b,Tags:["emrion"],Rotation:[60f,0f]}; summon minecraft:villager 222.5 138 202.5 {NoAI:1b,PersistenceRequired:1b,Tags:["emrion"],Rotation:[150f,0f]}
+edge_shore | 228.5 142 211.5 180 30 | 6000 | clear |
+edge_block | 228.5 140.5 205.5 180 35 | 6000 | clear |
+edge_mobs  | 228.5 141 207.5 180 40 | 6000 | clear |
+# Shimmer scenes (fix/refraction-shimmer): a 9x9 white concrete platform 20 blocks above a large shallow basin (water surface
+# y 140, 1-3 deep: sand, a stone patch, stone-brick steps, gold and lapis markers, seagrass, a sand shore in the north).
+# "shim_build" builds it, "shim" stands at the platform's north edge looking down at 55 degrees. The motion script (walk
+# forward/back 0.15 blocks per tick with shots during it) is in RAYTRACING.md §12.
+shim_build | 262.5 161 238.2 180 55 | 6000 | clear | fill 244 136 169 281 140 251 minecraft:smooth_stone; fill 245 137 170 280 140 250 minecraft:air; fill 245 137 170 280 137 250 minecraft:sand; fill 245 138 170 280 140 250 minecraft:water; fill 250 138 205 258 138 215 minecraft:stone; fill 262 138 195 272 138 230 minecraft:stone_bricks; fill 266 139 195 272 139 230 minecraft:stone_bricks; fill 255 137 222 256 137 228 minecraft:gold_block; fill 250 137 185 252 137 190 minecraft:lapis_block; setblock 248 138 225 minecraft:seagrass; setblock 249 138 226 minecraft:seagrass; setblock 258 138 230 minecraft:seagrass; setblock 247 138 200 minecraft:seagrass; setblock 260 138 190 minecraft:seagrass; setblock 254 138 219 minecraft:seagrass; setblock 260 138 224 minecraft:seagrass; fill 245 138 170 280 140 176 minecraft:sand; fill 245 138 177 280 139 179 minecraft:sand; fill 245 138 180 280 138 182 minecraft:sand; fill 258 160 236 266 160 244 minecraft:white_concrete
+shim       | 262.5 161 238.2 180 55 | 6000 | clear |

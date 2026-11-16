@@ -8,14 +8,9 @@ import java.util.Map;
 import java.util.SequencedMap;
 
 /**
- * Result of {@link PackLoader}. Producer: agent (a).
- *
- * @param options      resolved options (FORMAT.md §4)
- * @param properties   shaders.properties after preprocessing (option values + environment macros applied), keys in file
- *                     order, values trimmed, line continuations joined. Typed interpretation happens in the consumer.
- * @param idMaps       block/item/entity.properties, expanded (FORMAT.md §8)
- * @param dimensionMap dimension.properties (or Iris defaults world0/world-1/world1)
- * @param dimensions   folder name → programs available in that dimension (after program.X.enabled, fallbacks NOT applied)
+ * Result of {@link PackLoader}.
+ * @param properties   shaders.properties after preprocessing, keys in file order
+ * @param dimensions   folder name → programs available in that dimension (fallbacks not applied)
  */
 public record ResolvedPack(
 		PackSource source,

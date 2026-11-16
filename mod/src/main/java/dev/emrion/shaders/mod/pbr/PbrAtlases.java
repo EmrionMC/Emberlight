@@ -35,18 +35,8 @@ import org.joml.Vector4f;
 import org.jspecify.annotations.Nullable;
 
 /**
- * labPBR {@code normals}/{@code specular} atlases for one MC texture atlas, with exactly its size, mip count and sprite
- * placement (Iris's AtlasPBRLoader). Every sprite {@code ns:path} takes {@code ns:textures/path_n.png} / {@code _s.png} from the
- * active resource packs (by sprite id, so CTM sprites work if Continuity stitches them into the atlas). Sprites without a map
- * keep Iris's default fill (normals (127,127,255,255), specular 0).
- *
- * <p>One instance per atlas upload (every atlas's layout is recorded then). Built only while a shader pack is selected: the
- * block atlas's at its upload and by every {@code PackRuntime}; every other atlas (items, chests, particles, …) lazily when a
- * draw first binds it ({@link PbrTextures}), and released again when the pack turns off. Decoding, resizing and mip
- * generation run in parallel on MC's background executor; the GPU part reuses MC's own atlas upload
- * ({@link TextureAtlas#upload}: sprite blits with padding, animation states) on the render thread. Animated PBR sprites tick
- * with their atlas and are fast-forwarded to its tick count when they arrive late. {@link #generation()} changes whenever the
- * block atlas changes; descriptor sets that bind it must be rebuilt then.
+ * labPBR normals/specular atlases matching one MC atlas (Iris AtlasPBRLoader); sprites without maps keep Iris's defaults.
+ * Decoding runs on MC's background executor, the upload reuses TextureAtlas.upload; rebuild descriptor sets when {@link #generation()} changes.
  */
 public final class PbrAtlases {
 	private static final boolean DUMP = Boolean.getBoolean("emrion.debug.pbrDump");
@@ -161,6 +151,7 @@ public final class PbrAtlases {
 		if (old != null) old.release();
 		if (!atlas.location().equals(TextureAtlas.LOCATION_BLOCKS)) return; // the others are built on first use
 		generation++;
+		dev.emrion.shaders.mod.rt.RtOmm.onAtlasUpload(prep);
 		if (PackManager.selected() != null) fresh.build();
 	}
 
@@ -263,7 +254,7 @@ public final class PbrAtlases {
 			var properties = new Properties();
 			properties.load(in);
 			return properties.getProperty("format", "").split("/")[0].equals("lab-pbr");
-		} catch (IOException e) {
+		} catch (IOException | IllegalArgumentException e) {
 			return false;
 		}
 	}

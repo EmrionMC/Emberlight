@@ -7,14 +7,8 @@ import java.util.Map;
 import java.util.function.Function;
 
 /**
- * Old/compat GLSL → Vulkan GLSL 450 (ARCHITECTURE §4.1). Two phases, because the shared uniform block and the
- * resource table are the union over all programs:
- * <ol>
- *   <li>{@link #analyze} every program (all stages together, so varyings can be linked by name);</li>
- *   <li>the converter builds the {@code EmrionUniforms} layout and set-1 resource table from all analyses;</li>
- *   <li>{@link #emit} each program once per vertex variant.</li>
- * </ol>
- * Owner: agent (b). Implementations must be stateless / thread-safe.
+ * Compat GLSL to Vulkan GLSL 450: analyze all programs first (shared uniform block and resources), then emit per vertex variant.
+ * Implementations must be thread-safe.
  */
 public interface Transpiler {
 
@@ -22,6 +16,11 @@ public interface Transpiler {
 
 	/** Emits one GLSL 450 source per stage for the given vertex variant ("fullscreen" for composite-like programs). */
 	EmitResult emit(ProgramAnalysis analysis, EmitContext context, String vertexVariant);
+
+	/** Emits every vertex variant (entries may be null); only the first result needs the variant-independent stages. */
+	default List<EmitResult> emitVariants(ProgramAnalysis analysis, EmitContext context, List<String> vertexVariants) {
+		return vertexVariants.stream().map(v -> emit(analysis, context, v)).toList();
+	}
 
 	/** Everything the converter needs to know about a program's interface. */
 	record ProgramAnalysis(
@@ -47,15 +46,10 @@ public interface Transpiler {
 	/** format = layout qualifier e.g. "r16ui", null if none; access: readonly | writeonly | readwrite. */
 	record ImageDecl(String name, String glslType, String format, String access) {}
 
-	/** declaredBinding = the pack's "binding = N" (Iris bufferObject index). */
-	record BufferDecl(String blockName, int declaredBinding, boolean readonly) {}
+	/** declaredBinding = the pack's "binding = N" (Iris bufferObject index); used = live code reads or writes it (anonymous: always). */
+	record BufferDecl(String blockName, int declaredBinding, boolean readonly, boolean used) {}
 
-	/**
-	 * Inputs for code generation.
-	 * uniformMembers: name → member of the shared block (absent = uniform not provided → const default).
-	 * resourceBinding: (pack sampler/image/buffer name) → set-1 binding for this program, or null if unbound (→ error/dummy).
-	 * outputTargets: fragment output index (DRAWBUFFERS position) → attachment location.
-	 */
+	/** Codegen inputs; a uniform missing from {@code uniformMembers} becomes a const default. */
 	record EmitContext(
 			Map<String, dev.emrion.shaders.format.Manifest.UniformMember> uniformMembers,
 			Function<String, Integer> resourceBinding,

@@ -17,13 +17,13 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * What the geometry mixins do while a pack renders a level: open our gbuffers passes in place of MC's, split MC's main pass
- * into opaque and translucent with the hand and the deferred passes in between (iris-spec §0 steps 4-7), and set Iris's
+ * into opaque and translucent with the hand and the deferred passes in between (as Iris), and set Iris's
  * renderStage per draw group. Every method is a no-op (returns null/false) when no pack is rendering the level.
  */
 public final class GeometryHooks {
 	private GeometryHooks() {}
 
-	/** Iris WorldRenderingPhase ordinals (iris-spec §1.4); the pack hard-codes some of them. */
+	/** Iris WorldRenderingPhase ordinals; packs hard-code some of them. */
 	public static final int SKY = 1, SUNSET = 2, CUSTOM_SKY = 3, SUN = 4, MOON = 5, STARS = 6, VOID = 7, TERRAIN_SOLID = 8, ENTITIES = 11, BLOCK_ENTITIES = 12,
 			HAND_SOLID = 16, TERRAIN_TRANSLUCENT = 17, PARTICLES = 19, RAIN_SNOW = 21, WORLD_BORDER = 22, HAND_TRANSLUCENT = 23;
 
@@ -43,6 +43,7 @@ public final class GeometryHooks {
 
 	/** RenderSystem.getCompiledPipelineNullable: our pipeline while a phase pass is open, else null (vanilla). */
 	public static @Nullable CompiledRenderPipeline swap(RenderPipeline p) {
+		if (dev.emrion.shaders.mod.pipeline.GbufferPipelines.compilingOriginal) return null;
 		FrameExecutor e = exec();
 		Context c = e == null ? null : e.context();
 		if (c == null) return null;
@@ -50,6 +51,16 @@ public final class GeometryHooks {
 		CompiledRenderPipeline ours = e.pipelines().gbuffers.get(c, p);
 		if (ours == null && LOGGED.add(p)) EmrionShadersClient.LOG.warn("Pipeline {} draws in a gbuffers phase but has no pack pipeline; it renders vanilla", p.getLocation());
 		return ours;
+	}
+
+	/** True while the open gbuffers pass has more than one attachment group (FrontendRenderPassMixin then asks {@link #switchGroup}). */
+	public static boolean attachmentGroups;
+
+	/** FrontendRenderPass.setPipeline HEAD in a grouped pass: the pass's new colour attachments, or null if they stay. */
+	public static java.util.@Nullable List<com.mojang.renderpearl.api.commands.RenderPassDescriptor.Attachment<java.util.Optional<org.joml.Vector4fc>>> switchGroup(
+			org.lwjgl.vulkan.VkCommandBuffer cb, CompiledRenderPipeline p) {
+		FrameExecutor e = exec();
+		return e == null ? null : e.switchGroup(cb, p);
 	}
 
 	/** Opens the pass of {@code phaseName} (after running the raw commands before it); null if no pack phase applies. */
@@ -102,7 +113,7 @@ public final class GeometryHooks {
 		return e != null && e.context() != null;
 	}
 
-	/** shaders.properties sun/moon/stars/clouds (FORMAT §5): false if the pack turns this vanilla sky part off. */
+	/** shaders.properties sun/moon/stars/clouds: false if the pack turns this vanilla sky part off. */
 	public static boolean draws(String property) {
 		FrameExecutor e = exec();
 		if (e == null) return true;
@@ -165,10 +176,12 @@ public final class GeometryHooks {
 		// inside LevelRenderer.render the model-view stack still holds the camera rotation; renderItemInHand adds its own
 		var modelView = RenderSystem.getModelViewStack();
 		modelView.pushMatrix().identity();
+		long owner = dev.emrion.shaders.mod.upscale.ObjectMotion.setOwner(dev.emrion.shaders.mod.upscale.ObjectMotion.HAND, stage);
 		try {
 			((GameRendererAccessor) mc.gameRenderer).emrion$renderItemInHand(level.cameraRenderState, level.playerRenderState,
 					mc.gameRenderer.mainRenderTarget().getDepthTextureView());
 		} finally {
+			dev.emrion.shaders.mod.upscale.ObjectMotion.restoreOwner(owner);
 			modelView.popMatrix();
 			hand = null;
 			e.endPhase();
@@ -215,7 +228,7 @@ public final class GeometryHooks {
 	// ---- block entities (Iris BLOCK_ENTITIES phase) ----
 
 	/** Name prefix of the block-entity copies of entity render types. */
-	private static final String BLOCK_ENTITY_PREFIX = "emrion_block_entity:";
+	public static final String BLOCK_ENTITY_PREFIX = "emrion_block_entity:";
 	private static final java.util.Map<net.minecraft.client.renderer.rendertype.RenderType, net.minecraft.client.renderer.rendertype.RenderType> BLOCK_ENTITY_TYPES =
 			new IdentityHashMap<>();
 	/** True while BlockEntityRenderDispatcher.submit runs with a pack active. */

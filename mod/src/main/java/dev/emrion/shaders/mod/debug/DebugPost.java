@@ -23,11 +23,7 @@ import org.jspecify.annotations.Nullable;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkCommandBuffer;
 
-/**
- * Raw-interop proof (dev only, {@code -Demrion.debug.post=true}): a compute dispatch writes a storage image, pass 1
- * copies MC's main color into an RGBA16F image, pass 2 writes it back desaturated and blue-tinted, with the compute
- * result in the bottom-left corner. All in one of our command buffers, ordered into MC's frame.
- */
+/** Dev-only raw-interop proof ({@code -Demrion.debug.post=true}): compute and raw passes recorded into MC's frame. */
 public final class DebugPost {
 	public static final boolean ENABLED = Boolean.getBoolean("emrion.debug.post");
 	private static final int PATTERN_SIZE = 256;
@@ -60,7 +56,7 @@ public final class DebugPost {
 	}
 
 	private long module(String name) {
-		return ShaderModules.create(ctx, ShaderModules.resource("/assets/emrionshaders/spv/" + name + ".spv"));
+		return ShaderModules.create(ctx, ShaderModules.resource("/assets/emberlight/spv/" + name + ".spv"));
 	}
 
 	/** Called at {@code GameRenderer.renderLevel} TAIL (world and hand done, GUI not yet drawn). */

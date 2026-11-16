@@ -2,11 +2,7 @@ package dev.emrion.shaders.mod.uniforms;
 
 import java.nio.ByteBuffer;
 
-/**
- * Precompiled copy plan for one std140 block: entry k copies {@code len[k]} 32-bit words from the value store at
- * {@code src[k]} to byte offset {@code dst[k]}. Values are kept in the store already in std140 form (floats as raw
- * bits, bools as 0/1, mat3 as three vec4 columns), so writing is a plain word copy with no conversion. Pure.
- */
+/** Copy plan for one std140 block: values are stored in std140 form already, so writing is a plain word copy. */
 public final class BlockPlan {
 	private final int[] src, dst, len;
 

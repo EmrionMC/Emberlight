@@ -1,12 +1,8 @@
 package dev.emrion.shaders.mod.vertex;
 
 /**
- * Per-draw identity for iris_Entity (Iris CapturedRenderingState). MC 26.3 submits features first and builds their vertices
- * later, sorted by render type, so the ids are captured into each submit record when it is created ({@link Holder}) and
- * restored from it while the feature renderers write its vertices. Render thread only.
- *
- * <p>Packed as three unsigned 16-bit values (entity | blockEntity &lt;&lt; 16 | item &lt;&lt; 32), the in-memory layout of the
- * RGBA16_UINT attribute; −1 (unmapped) becomes 65535 as with Iris's USHORT attribute, 0 = none.
+ * Per-draw iris_Entity ids, captured per submit record because MC 26.3 builds vertices later, sorted by render type. Render thread only.
+ * Packed as three u16 (RGBA16_UINT layout); -1 becomes 65535 as in Iris.
  */
 public final class EntityIds {
 	private EntityIds() {}
@@ -19,6 +15,11 @@ public final class EntityIds {
 	public static boolean fromBlockEntity;
 	/** Holder-only flag above the three ids: the submit was made by a block entity. */
 	public static final long BLOCK_ENTITY_SUBMIT = 1L << 48;
+	/** True while the camera entity (the local player) or what it carries is submitted or its vertices are written (bit 49 of a Holder's ids). */
+	public static boolean localPlayer;
+	public static final long LOCAL_PLAYER_SUBMIT = 1L << 49;
+	/** Flag in the vertex's iris_Entity w (above the ObjectMotion slot): written by the local player (RtEntities tags its instances). */
+	public static final int LOCAL_PLAYER_W = 0x8000;
 
 	public static long packed() {
 		return (entity & 0xFFFFL) | (blockEntity & 0xFFFFL) << 16 | (item & 0xFFFFL) << 32;
@@ -29,11 +30,15 @@ public final class EntityIds {
 		blockEntity = (short) (packed >>> 16);
 		item = (short) (packed >>> 32);
 		fromBlockEntity = (packed & BLOCK_ENTITY_SUBMIT) != 0;
+		localPlayer = (packed & LOCAL_PLAYER_SUBMIT) != 0;
 	}
 
 	/** Implemented (via mixin) by the submit records whose vertices may use the entity format. */
 	public interface Holder {
 		long emrion$ids();
+
+		/** Object motion key of the submit (ObjectMotion), 0 = untracked. */
+		long emrion$motion();
 	}
 
 	/** Implemented (via mixin) by ItemStackRenderState: the item id resolved when the stack's layers were built. */
