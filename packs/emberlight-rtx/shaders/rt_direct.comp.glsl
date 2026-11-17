@@ -54,7 +54,8 @@ void main() {
 		vec3 thr = vec3(1.0);
 		float path = 0.0;
 		for (int b = 0; b < MIRROR_BOUNCES; b++) {
-			ElHit h = el_traceClosest(p, rd, 256.0, MASK_SOLID);
+			// the first-person body too: a mirror shows the player (shadows already trace it)
+			ElHit h = el_traceClosest(p, rd, 256.0, MASK_SOLID | EL_MASK_PLAYER);
 			if (!h.hit) { refl.rgb += thr * missRadiance(rd, g.light.y); refl.a = 256.0; break; }
 			path += h.t;
 			vec4 ha = el_hitAlbedo(h);

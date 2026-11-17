@@ -411,8 +411,21 @@ public abstract class EmberScreen extends Screen {
 		}
 
 		public Tile tooltip(@Nullable String text) {
-			if (text != null && !text.isBlank()) setTooltip(Tooltip.create(Component.literal(text)));
+			tip = text != null && !text.isBlank() ? text : null;
+			shownHint = null;
+			setTooltip(tip == null ? null : Tooltip.create(Component.literal(tip)));
 			return this;
+		}
+
+		private @Nullable String tip, shownHint;
+
+		/** A status line cut to the tile also leads the tooltip, so long reasons stay readable. */
+		private void hintTooltip(Font font, @Nullable Component h) {
+			String cut = h != null && font.width(h) > width - 14 ? h.getString() : null;
+			if (java.util.Objects.equals(cut, shownHint)) return;
+			shownHint = cut;
+			String text = cut == null ? tip : tip == null ? cut : cut + "\n\n" + tip;
+			setTooltip(text == null ? null : Tooltip.create(Component.literal(text)));
 		}
 
 		public Tile active(boolean a) {
@@ -465,7 +478,9 @@ public abstract class EmberScreen extends Screen {
 				return;
 			}
 			tileFrame(g, this, lit.getAsBoolean());
-			tileText(g, font, this, label.get(), value.get(), toggle == null ? null : toggle.getAsBoolean(), hint.get(), labelColor.get());
+			Component h = hint.get();
+			hintTooltip(font, h);
+			tileText(g, font, this, label.get(), value.get(), toggle == null ? null : toggle.getAsBoolean(), h, labelColor.get());
 		}
 	}
 

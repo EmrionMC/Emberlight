@@ -8,7 +8,11 @@
 layout(location = EL_OUT_lit) out vec4 outLit;
 
 vec3 reflection(vec3 p, vec3 rd, float skyLight) {
-	ElHit h = el_traceClosest(p, rd, 256.0, MASK_SOLID);
+	// the first-person body shows in water and glass too, except from a surface it stands in (swimming: the rays would
+	// start inside it)
+	vec3 eye = el_eyePosition - el_cameraPosition;
+	bool inBody = all(lessThan(abs(p.xz - eye.xz), vec2(0.6))) && p.y > eye.y - 2.0 && p.y < eye.y + 0.4;
+	ElHit h = el_traceClosest(p, rd, 256.0, inBody ? MASK_SOLID : MASK_SOLID | EL_MASK_PLAYER);
 	if (h.hit) return shadeHit(h, rd, true, true);
 	return skyRadiance(rd) * smoothstep(0.05, 0.6, skyLight);
 }
@@ -36,9 +40,12 @@ void main() {
 		vec3 p = surf + n * 0.03;
 		float nv = abs(dot(n, -v));
 		if (kind == ID_WATER) {
-			// refraction: bend the lookup by the wave normal, but only onto things behind the surface
-			vec3 nView = mat3(el_view) * n;
-			vec2 ruv = el_uv + nView.xy * 0.045 / (1.0 + length(surf) * 0.02);
+			// refraction: bend the lookup by the waves' tilt (normal minus the flat face normal), but only onto things
+			// behind the surface. The whole normal shifted everything below a flat surface by a constant (a displaced
+			// copy of the submerged half of a boat when looking down at it)
+			vec3 face = abs(n.y) > 0.5 ? vec3(0.0, sign(n.y), 0.0) : abs(n.x) > abs(n.z) ? vec3(sign(n.x), 0.0, 0.0) : vec3(0.0, 0.0, sign(n.z));
+			vec3 nView = mat3(el_view) * (n - face);
+			vec2 ruv = el_uv + nView.xy * 0.12 / (1.0 + length(surf) * 0.02);
 			float rd = texture(el_depthOpaque, ruv).r;
 			if (rd <= sd || any(lessThan(ruv, vec2(0.0))) || any(greaterThan(ruv, vec2(1.0)))) { ruv = el_uv; rd = texelFetch(el_depthOpaque, px, 0).r; }
 			vec3 behind = texture(lit, ruv).rgb;

@@ -204,6 +204,10 @@ public final class Snapshot {
 		c.addProperty("framebufferWidth", win.getWidth());
 		c.addProperty("framebufferHeight", win.getHeight());
 		c.addProperty("fullscreen", o.fullscreen().get());
+		// loaded resource packs: PBR packs change materials (mirror-like concrete etc.)
+		var packs = new com.google.gson.JsonArray();
+		mc.getResourcePackRepository().getSelectedIds().forEach(packs::add);
+		c.add("resourcePacks", packs);
 		j.add("options", c);
 
 		JsonObject pack = new JsonObject();
