@@ -71,14 +71,14 @@ final class Fsr3Upscaler extends Upscaler {
 		}
 	}
 
-	private final Pass prepareInputs, lumaPyramid, shadingChangePyramid, shadingChange, prepareReactivity, lumaInstability, accumulate,
+	private Pass prepareInputs, lumaPyramid, shadingChangePyramid, shadingChange, prepareReactivity, lumaInstability, accumulate,
 			accumulateSharpen, rcas;
 	private final List<Pass> passes = new ArrayList<>();
-	private final long pointSampler, linearSampler;
-	private final UboRing ubo;
+	private long pointSampler, linearSampler;
+	private UboRing ubo;
 	// internal resources (ffx_fsr3upscaler.cpp fsr3upscalerCreate)
 	private final RawImage[] accumulation = new RawImage[2], luma = new RawImage[2], upscaled = new RawImage[2], lumaHistory = new RawImage[2];
-	private final RawImage intermediate, shadingChangeImg, newLocks, spdMips, farthestDepthMip1, spdAtomic, dilatedReactive, lanczosLut,
+	private RawImage intermediate, shadingChangeImg, newLocks, spdMips, farthestDepthMip1, spdAtomic, dilatedReactive, lanczosLut,
 			defaultReactivity, defaultExposure, frameInfo, dilatedDepth, dilatedMotion, reconstructedPrevDepth;
 	private final long[] spdMipViews = new long[6];
 	private final List<RawImage> all = new ArrayList<>();
@@ -90,6 +90,15 @@ final class Fsr3Upscaler extends Upscaler {
 
 	Fsr3Upscaler(VulkanContext ctx, int rw, int rh, int dw, int dh) {
 		super(ctx, rw, rh, dw, dh);
+		try {
+			init(rw, rh, dw, dh);
+		} catch (RuntimeException | Error failed) { // e.g. out of GPU memory half-way: release what was created
+			destroyLater();
+			throw failed;
+		}
+	}
+
+	private void init(int rw, int rh, int dw, int dh) {
 		prepareInputs = pass("prepare_inputs");
 		lumaPyramid = pass("luma_pyramid");
 		shadingChangePyramid = pass("shading_change_pyramid");
@@ -203,7 +212,7 @@ final class Fsr3Upscaler extends Upscaler {
 		try (MemoryStack stack = MemoryStack.stackPush()) {
 			if (first) for (RawImage i : new RawImage[] {accumulation[0], accumulation[1], luma[0], luma[1]}) clear(cb, stack, i, 0f);
 			if (resetAccumulation) {
-				clear(cb, stack, accumSrv, 0f);
+				if (!first) clear(cb, stack, accumSrv, 0f); // first: cleared just above (a second clear would race it)
 				clearFloat(cb, stack, frameInfo, -1f, 1f, 0f, 0f);
 			}
 			clearUint(cb, stack, reconstructedPrevDepth, Float.floatToRawIntBits(1f)); // forward depth: "far" is 1.0 (float bits in a uint)
@@ -377,7 +386,7 @@ final class Fsr3Upscaler extends Upscaler {
 	public void destroyLater() {
 		super.destroyLater();
 		all.forEach(RawImage::destroyLater);
-		ubo.destroyLater();
+		if (ubo != null) ubo.destroyLater(); // null after a failed construction
 		long[] views = spdMipViews.clone();
 		List<Pass> ps = List.copyOf(passes);
 		ctx.destroyLater(() -> {

@@ -1,0 +1,91 @@
+// Emberlight template pack: a small, commented starting point for the native format (docs/NATIVE_FORMAT.md).
+// Deferred lighting, ray-traced sun shadows (one compute pass with ray queries), forward translucents, an option page.
+{
+  "format": 1,
+  "id": "emberlight-template",
+  "name": "Emberlight Template",
+  "version": "0.1.0",
+  "authors": ["Emberlight"],
+  "description": "Minimal deferred pipeline with ray-traced shadows. Copy it and make it yours.",
+  "license": "CC0-1.0",
+  "requires": ["ray_query"],
+
+  "settings": { "clouds": "off", "separateAo": true },
+
+  // The gbuffer: everything the deferred lighting pass needs to light a pixel.
+  "images": {
+    "gAlbedo":  { "format": "RGBA8" },                          // base colour (sRGB)
+    "gNormal":  { "format": "RG16" },                           // world normal, octahedral (el_encodeNormal)
+    "gLight":   { "format": "RGBA8" },                          // lightmap block/sky, emission, vertex AO
+    "rtShadow": { "format": "R8", "clear": [1, 1, 1, 1] },      // sun visibility from the ray-query pass
+    "lit":      { "format": "RGBA16F" },                        // HDR scene colour
+    "ldr":      { "format": "RGBA8" }                           // tonemapped colour (the upscaler's input)
+  },
+
+  "uniforms": {
+    // smoothed 0 (night) .. 1 (day), evaluated on the CPU every frame
+    "daylight": { "type": "float", "expr": "smooth(if(sunAngle < 0.5, 1.0, 0.0), 4.0, 4.0)" }
+  },
+
+  "passes": [
+    { "name": "gbuffer", "kind": "geometry",
+      "classes": ["terrain_solid", "terrain_cutout", "entities", "block_entities", "particles", "hand"],
+      "vertex": "shaders/gbuffer.vert.glsl", "fragment": "shaders/gbuffer.frag.glsl",
+      "writes": ["gAlbedo", "gNormal", "gLight"] },
+
+    // untextured geometry (block outline, leashes) and everything that falls back to it
+    { "name": "basic", "kind": "geometry", "classes": ["basic"],
+      "vertex": "shaders/basic.vert.glsl", "fragment": "shaders/basic.frag.glsl",
+      "writes": ["gAlbedo", "gNormal", "gLight"] },
+
+    { "name": "rtshadow", "kind": "compute", "phase": "deferred", "raytracing": true, "enabled": "RT_SHADOWS",
+      "compute": "shaders/rtshadow.comp.glsl", "workgroups": { "size": [8, 8, 1], "scale": [1, 1] },
+      "writes": ["rtShadow"] },
+
+    { "name": "lighting", "kind": "fullscreen", "phase": "deferred",
+      "fragment": "shaders/lighting.frag.glsl", "writes": ["lit"] },
+
+    // drawn after the deferred phase, blended over the lit image (the opaque hand is drawn before it: gbuffer)
+    { "name": "translucent", "kind": "geometry",
+      "classes": ["terrain_translucent", "entities_translucent", "block_entities_translucent", "particles_translucent",
+                  "weather", "hand_translucent"],
+      "vertex": "shaders/forward.vert.glsl", "fragment": "shaders/forward.frag.glsl",
+      "writes": ["lit"], "blend": "alpha" },
+
+    { "name": "tonemap", "kind": "fullscreen", "phase": "composite",
+      "fragment": "shaders/tonemap.frag.glsl", "writes": ["ldr"] },
+
+    { "name": "output", "kind": "final", "fragment": "shaders/final.frag.glsl" }
+  ],
+
+  "options": [
+    { "name": "RT_SHADOWS", "type": "bool", "default": true, "label": "Ray-traced shadows" },
+    { "name": "SHADOW_RAYS", "type": "int", "default": 1, "min": 1, "max": 8, "label": "Shadow rays per pixel" },
+    { "name": "SHADOW_SOFTNESS", "type": "float", "default": 1.0, "min": 0.0, "max": 4.0, "step": 0.25, "slider": true,
+      "label": "Shadow softness", "comment": "Size of the sun disc the shadow rays sample. 0 = hard shadows." },
+    { "name": "EXPOSURE", "type": "float", "default": 1.0, "min": 0.25, "max": 4.0, "step": 0.25, "slider": true },
+    { "name": "TONEMAP", "type": "enum", "default": "aces", "values": ["aces", "reinhard", "none"] },
+    { "name": "SUN_COLOR", "type": "color", "default": [1.0, 0.9, 0.75], "label": "Sun colour" },
+    { "name": "FOG", "type": "bool", "default": true }
+  ],
+  "pages": [
+    { "name": "main", "columns": 2,
+      "items": ["<profile>", "<empty>", "RT_SHADOWS", "SHADOW_RAYS", "SHADOW_SOFTNESS", "<empty>", "[image]"] },
+    { "name": "image", "items": ["EXPOSURE", "TONEMAP", "FOG", "SUN_COLOR"] }
+  ],
+  "profiles": {
+    "low":    { "RT_SHADOWS": false },
+    "medium": { "RT_SHADOWS": true, "SHADOW_RAYS": 1 },
+    "high":   { "inherit": "medium", "SHADOW_RAYS": 4, "SHADOW_SOFTNESS": 1.5 }
+  },
+
+  "materials": {
+    "blocks": { "1": ["minecraft:water", "minecraft:bubble_column"] }
+  },
+
+  "dimensions": {
+    // no sun in the Nether and the End: skip the shadow rays there
+    "nether": { "match": ["minecraft:the_nether"], "disable": ["rtshadow"] },
+    "end":    { "match": ["minecraft:the_end"], "disable": ["rtshadow"] }
+  }
+}

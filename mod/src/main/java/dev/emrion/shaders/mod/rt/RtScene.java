@@ -59,6 +59,8 @@ public final class RtScene {
 	private static final int STRIDE = 56; // EMRION_BLOCK
 	private static final int LAYERS = ChunkSectionLayer.values().length;
 	public static final long BUDGET = Long.getLong("emrion.rt.blasBudget", 2_000_000L); // triangles per frame
+	/** BLAS per frame: each costs ~25 us of CPU (sizes, allocation, create), so the world join's 2000+ sections take a few frames, not one 60 ms one. */
+	public static final int MAX_BUILDS = Integer.getInteger("emrion.rt.blasPerFrame", 400);
 	private static final long SCRATCH_SIZE = 64L << 20;
 	private static final int RING = UboRing.REGIONS;
 	/** Fixed capacity: the TLAS and section table never move, so descriptor sets written once per runtime stay valid. */
@@ -82,6 +84,8 @@ public final class RtScene {
 		final ChunkSectionLayer layer;
 		final int x, y, z, format;
 		public int quads;
+		/** Sodium path: the frame it was queued in (SodiumRt's BLAS wait statistic). */
+		public int queued;
 		/** Vertex attributes for hit shading (section table xy); on the Sodium path rewritten every frame (arenas defragment). */
 		public long vertexAddr;
 		/** BLAS build input: R32G32B32 positions at posAddr with posStride. */
@@ -145,7 +149,8 @@ public final class RtScene {
 	/** EmrionRtSections: RING regions of CAPACITY entries; instanceCustomIndex = region * CAPACITY + slot. */
 	private @Nullable RawBuffer sections;
 	private boolean overflowWarned, multiBatchLogged;
-	private int batchesSinceTlas;
+	private int batchesSinceTlas, frameBuilds;
+	private long frameTris; // this frame's BLAS builds over all its upload batches (BUDGET, MAX_BUILDS are per frame)
 	private int frame;
 	private boolean tlasValid;
 	// stats
@@ -265,7 +270,7 @@ public final class RtScene {
 			if (arr != null) for (Entry e : arr) if (e != null) drop(e);
 		}
 
-		if (!pending.isEmpty()) {
+		if (!pending.isEmpty() && frameTris < BUDGET && frameBuilds < MAX_BUILDS) {
 			// only a frame's first batch is timed: the timer ring has one query pair per frame, a second batch would reuse queries in flight
 			boolean time = batchesSinceTlas == 0;
 			if (time) {
@@ -286,7 +291,9 @@ public final class RtScene {
 				multiBatchLogged = true;
 				EmrionShadersClient.LOG.info("RT: several BLAS batches in one frame (MC staging buffer full)");
 			}
-			buildPending(cb, pending, BUDGET);
+			long b0 = built;
+			frameTris += buildPending(cb, pending, BUDGET - frameTris, MAX_BUILDS - frameBuilds);
+			frameBuilds += (int) (built - b0);
 			// the builds read MC's vertex heaps: a later upload into a freed slice must wait for them (WAR)
 			Barriers.memory(cb, AS_BUILD, AS_READ, Barriers.TRANSFER, Barriers.TRANSFER_WRITE);
 			if (time) {
@@ -299,8 +306,8 @@ public final class RtScene {
 		log();
 	}
 
-	/** Records BLAS builds for queued entries until {@code budget} triangles; the rest stays queued. */
-	public void buildPending(VkCommandBuffer cb, ArrayDeque<Entry> pending, long budget) {
+	/** Records BLAS builds for queued entries until {@code budget} triangles or {@code maxBuilds} builds; the rest stays queued. Returns the triangles built. */
+	public long buildPending(VkCommandBuffer cb, ArrayDeque<Entry> pending, long budget, int maxBuilds) {
 		long start = System.nanoTime(), builtBefore = built;
 		List<Entry> batch = new ArrayList<>();
 		long tris = 0, scratchOffset = 0;
@@ -315,7 +322,7 @@ public final class RtScene {
 			var ommGeom = VkAccelerationStructureTrianglesOpacityMicromapEXT.calloc(stack);
 			var ommUsage = VkMicromapUsageEXT.calloc(1, stack);
 			RtOmm.Map micromap = omm != null && ommOn && !pending.isEmpty() ? omm.prepare(cb) : null;
-			while (!pending.isEmpty() && tris < budget) {
+			while (!pending.isEmpty() && tris < budget && built - builtBefore < maxBuilds) {
 				Entry e = pending.poll();
 				if (e.removed) continue;
 				ensureIndices(e.quads);
@@ -352,6 +359,7 @@ public final class RtScene {
 		}
 		record(cb, batch);
 		dev.emrion.shaders.mod.debug.HitchLog.add(dev.emrion.shaders.mod.debug.HitchLog.BLAS, start, built - builtBefore);
+		return tris;
 	}
 
 	/** One vkCmdBuildAccelerationStructuresKHR over the batch (heap-allocated structs: a batch can hold thousands). */
@@ -444,7 +452,8 @@ public final class RtScene {
 			rebuildSections();
 		}
 		frame = (frame + 1) % RING;
-		batchesSinceTlas = 0;
+		batchesSinceTlas = frameBuilds = 0;
+		frameTris = 0;
 		if (sodium != null) {
 			sodium.update(cb, cam);
 			Profiler.mark(cb, "RT: BLAS builds");
@@ -466,9 +475,11 @@ public final class RtScene {
 		sectionInstances = i;
 		if (entities != null && !deferEntities) i = entities.writeInstances(inst, sec, i, CAPACITY, frame * CAPACITY, cam);
 		recordTlasBuild(cb, i);
-		lights.upload(cb, cam, frame);
-		tlasValid = true;
 		dev.emrion.shaders.mod.debug.HitchLog.add(dev.emrion.shaders.mod.debug.HitchLog.TLAS, start);
+		start = System.nanoTime();
+		lights.upload(cb, cam, frame);
+		dev.emrion.shaders.mod.debug.HitchLog.add(dev.emrion.shaders.mod.debug.HitchLog.RT_LIGHTS, start);
+		tlasValid = true;
 	}
 
 	/** After the shadow pass captured this frame's entities: their BLAS and the TLAS again (sections unchanged). */
@@ -645,9 +656,9 @@ public final class RtScene {
 		if (now - lastLog < 5_000_000_000L) return;
 		lastLog = now;
 		long ring = RING * (long) CAPACITY * (VkAccelerationStructureInstanceKHR.SIZEOF + 16);
-		EmrionShadersClient.LOG.info("RT: {} BLAS ({} pending), {} triangles, BLAS {} MiB (avg {} B/tri), TLAS {} instances {} KiB, scratch {} MiB, "
+		EmrionShadersClient.LOG.info("RT: {} BLAS ({} pending, longest wait {} frames), {} triangles, BLAS {} MiB (avg {} B/tri), TLAS {} instances {} KiB, scratch {} MiB, "
 						+ "instance+table rings {} MiB; GPU BLAS build time so far {} ms for {} builds, worst frame {} us",
-				entriesBuilt(), pending.size(), triangles, blasBytes >> 20, triangles == 0 ? 0 : blasBytes / triangles, instanceCount, tlasBytes >> 10,
+				entriesBuilt(), pending.size() + (sodium == null ? 0 : sodium.pendingCount()), sodium == null ? 0 : sodium.takeMaxWait(), triangles, blasBytes >> 20, triangles == 0 ? 0 : blasBytes / triangles, instanceCount, tlasBytes >> 10,
 				SCRATCH_SIZE >> 20, ring >> 20, gpuBuildNs / 1_000_000, built, maxFrameBuildNs / 1000);
 		if (entities != null) EmrionShadersClient.LOG.info("RT: {}", entities.summary());
 		if (omm != null && ommOn) EmrionShadersClient.LOG.info("RT: {}", omm.summary());

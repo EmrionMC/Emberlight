@@ -31,6 +31,11 @@ public interface PackSource extends AutoCloseable {
 		return MemoryPackSource.open(zipOrDir);
 	}
 
+	/** An in-memory pack (generated packs, e.g. a lowered native pack); paths as in {@link #read}. */
+	static PackSource of(String name, java.util.SortedMap<String, byte[]> files) {
+		return new MemoryPackSource(name, new java.util.TreeMap<>(files));
+	}
+
 	@Override
 	void close() throws IOException;
 }

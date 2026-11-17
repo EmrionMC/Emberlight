@@ -6,7 +6,7 @@ import java.util.Map;
 import java.util.SequencedMap;
 
 /** Static Iris tables the planner needs: gbuffers/shadow fallback chains and geometry → vertex layout. */
-final class IrisPrograms {
+public final class IrisPrograms {
 	private IrisPrograms() {}
 
 	/** Legacy colortex aliases, index = buffer. */
@@ -28,8 +28,8 @@ final class IrisPrograms {
 
 	static {
 		String tm = "terrain_mdi", tu = "terrain_ubo", e = "entity", pa = "particle", pc = "position_color", pt = "position_tex",
-				ptc = "position_tex_color", po = "position", pctl = "position_color_tex_lightmap", li = "lines", bl = "block";
-		id("gbuffers_basic", null, po, pc, pctl, "clouds");
+				ptc = "position_tex_color", po = "position", pctl = "position_color_tex_lightmap", pcl = "position_color_lightmap", li = "lines", bl = "block";
+		id("gbuffers_basic", null, po, pc, pcl, pctl, "clouds");
 		id("gbuffers_line", "gbuffers_basic", li);
 		id("gbuffers_textured", "gbuffers_basic", pt, ptc, "clouds");
 		id("gbuffers_textured_lit", "gbuffers_textured");
@@ -56,7 +56,7 @@ final class IrisPrograms {
 		id("gbuffers_weather", "gbuffers_textured_lit", pa);
 		id("gbuffers_water", "gbuffers_terrain", tm, tu);
 		id("gbuffers_hand_water", "gbuffers_hand", e, pctl);
-		id("shadow", null, li, pa, po, pctl, tu);
+		id("shadow", null, li, pa, po, pcl, pctl, tu);
 		id("shadow_solid", "shadow", tm, tu);
 		id("shadow_cutout", "shadow", tm, tu);
 		id("shadow_water", "shadow", tm, tu, e);
@@ -66,4 +66,7 @@ final class IrisPrograms {
 	}
 
 	static int legacyIndex(String name) { return LEGACY.indexOf(name); }
+
+	/** Vertex layout variants MC draws the geometry of an Iris program slot with (empty: a pure fallback slot). */
+	public static List<String> variants(String slot) { return VARIANTS.getOrDefault(slot, List.of()); }
 }

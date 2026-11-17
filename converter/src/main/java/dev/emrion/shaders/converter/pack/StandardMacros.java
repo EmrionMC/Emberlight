@@ -9,7 +9,8 @@ import java.util.Set;
 /**
  * Iris standard macros (StandardMacros + IrisDefines) for a given environment, in Iris order. Values must match Iris on the
  * same machine so the pack takes the same branches. IRIS_FEATURE_* here are the usable flags; DefaultPackLoader re-adds them
- * per Iris rules. Environment-dependent macros the target pack does not use (MC_GL_&lt;extension&gt;, DISTANT_HORIZONS*) are left out.
+ * per Iris rules. DISTANT_HORIZONS* are left out; the MC_GL_&lt;extension&gt; macros ({@link #GL_EXTENSIONS}) are added by the loader so the
+ * manifest's macro list (and with it the cache key) stays as it was.
  */
 public final class StandardMacros {
 	private StandardMacros() {}
@@ -26,6 +27,19 @@ public final class StandardMacros {
 			"SEPARATE_HARDWARE_SAMPLERS", "HIGHER_SHADOWCOLOR", "CUSTOM_IMAGES", "PER_BUFFER_BLENDING", "COMPUTE_SHADERS",
 			"ENTITY_TRANSLUCENT", "REVERSED_CULLING", "BLOCK_EMISSION_ATTRIBUTE", "CAN_DISABLE_WEATHER", "SSBO",
 			"FADE_VARIABLE", "TEXTURE_FILTERING", "TESSELLATION_SHADERS");
+
+	/**
+	 * GL extensions Iris reports as MC_GL_&lt;name&gt; that are core in GL 4.6 and compile unchanged to SPIR-V, so a pack's
+	 * {@code #ifdef MC_GL_ARB_shader_image_load_store} branches (Eclipse's Nether/End voxelization) take Iris's path.
+	 * shortcut: a fixed subset of what the NVIDIA driver lists; add one when a pack tests another core extension.
+	 */
+	public static final List<String> GL_EXTENSIONS = List.of(
+			"GL_ARB_compute_shader", "GL_ARB_conservative_depth", "GL_ARB_derivative_control", "GL_ARB_explicit_attrib_location",
+			"GL_ARB_explicit_uniform_location", "GL_ARB_gpu_shader5", "GL_ARB_separate_shader_objects", "GL_ARB_shader_bit_encoding",
+			"GL_ARB_shader_image_load_store", "GL_ARB_shader_image_size", "GL_ARB_shader_storage_buffer_object",
+			"GL_ARB_shader_texture_lod", "GL_ARB_shading_language_420pack", "GL_ARB_shading_language_packing",
+			"GL_ARB_tessellation_shader", "GL_ARB_texture_cube_map_array", "GL_ARB_texture_gather", "GL_ARB_texture_query_levels",
+			"GL_ARB_texture_query_lod");
 
 	/** Iris WorldRenderingPhase in ordinal order. */
 	public static final List<String> RENDER_STAGES = List.of(

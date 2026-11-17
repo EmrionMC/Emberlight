@@ -66,10 +66,62 @@ class RtLightsTest {
 	}
 
 	@Test
+	void strongestFirstKeysSortLikeTheStableWeightSort() {
+		// the order the overfull-cell path had with a boxed List.sort(Float.compare(b, a)): descending weight, ties in pair order
+		java.util.Random r = new java.util.Random(2);
+		float[] w = new float[5000];
+		for (int i = 0; i < w.length; i++) w[i] = i % 7 == 0 ? (r.nextBoolean() ? 0f : -0f) : i % 5 == 0 ? 3.25f : (r.nextFloat() - 0.5f) * 40;
+		Integer[] expected = new Integer[w.length];
+		long[] keys = new long[w.length];
+		for (int i = 0; i < w.length; i++) {
+			expected[i] = i;
+			keys[i] = RtLights.strongestFirst(w[i], i);
+		}
+		java.util.Arrays.sort(expected, (a, b) -> Float.compare(w[b], w[a]));
+		java.util.Arrays.sort(keys);
+		for (int i = 0; i < w.length; i++) assertEquals(expected[i], (int) keys[i], "position " + i);
+	}
+
+	@Test
 	void aSourceBeyondTheProbeLimitIsCountedNotLooped() {
 		// every source hashing to one slot: only BLOCK_PROBES fit where the shader looks
 		float[] pos = new float[200 * 4];
 		int[] block = new int[RtLights.BLOCK_SLOTS];
 		assertEquals(200 - RtLights.BLOCK_PROBES, RtLights.fillBlocks(block, pos, 200));
+	}
+
+	@SuppressWarnings("unchecked")
+	@Test
+	void aCompileRunningWhenItsSectionEmptiesDoesNotPutItsLightsBack() throws Exception {
+		var foundField = RtLights.class.getDeclaredField("FOUND");
+		var sectionsField = RtLights.class.getDeclaredField("SECTIONS");
+		foundField.setAccessible(true);
+		sectionsField.setAccessible(true);
+		var found = (ThreadLocal<int[]>) foundField.get(null);
+		var sections = (java.util.Map<Long, int[]>) sectionsField.get(null);
+		net.minecraft.core.SectionPos a = net.minecraft.core.SectionPos.of(1, 2, 3), b = net.minecraft.core.SectionPos.of(4, 5, 6);
+		RtLights.collecting = true;
+		try {
+			RtLights.begin(); // a torch at 0 0 0, level 14
+			found.get()[0] = 1;
+			found.get()[1] = 14 << 12;
+			RtLights.emptied(a.asLong());
+			RtLights.end(a);
+			assertNull(sections.get(a.asLong()), "the compile began before the section emptied");
+			RtLights.begin(); // a later compile of the refilled section counts
+			found.get()[0] = 1;
+			found.get()[1] = 14 << 12;
+			RtLights.end(a);
+			assertNotNull(sections.get(a.asLong()));
+			RtLights.begin();
+			found.get()[0] = 1;
+			found.get()[1] = 14 << 12;
+			RtLights.clear(); // world change while compiling
+			RtLights.end(b);
+			assertNull(sections.get(b.asLong()));
+		} finally {
+			RtLights.collecting = false;
+			RtLights.clear();
+		}
 	}
 }

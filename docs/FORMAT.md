@@ -1,7 +1,9 @@
 # Emrion Pack Format (EPF) — version 2
 
 The converter writes a converted shaderpack as a directory. The mod reads it. This document is the **only contract**
-between `converter/` and `mod/`. The Java records that mirror it live in `converter/src/main/java/dev/emrion/shaders/format/`
+between `converter/` and `mod/`. Two compilers write it: the Iris/OptiFine converter (`converter/…/glsl`, `plan/`) and the
+native-format compiler (`converter/…/nativefmt/`, NATIVE_FORMAT.md §15), which compiles `emberlight.json` packs directly.
+Where the two differ in naming, this document says so; the runtime treats both the same. The Java records that mirror it live in `converter/src/main/java/dev/emrion/shaders/format/`
 and are used by both sides (Gson, field names = JSON keys). A change here bumps `formatVersion`.
 The JSON examples below show intent. Where an example and `Manifest.java` disagree in shape (for example, `size` is split into
 `relativeSize`/`absoluteSize`), the **Java records win**, and this document is fixed in the same commit.
@@ -29,6 +31,7 @@ The JSON examples below show intent. Where an example and `Manifest.java` disagr
 
 - All paths in the manifest are relative to the cache directory and use `/`.
 - Dimension keys are the pack folder names: `world0`, `world-1`, `world1`, or custom ones from `dimension.properties`.
+  Native packs: `default` plus the name of each dimension override; `dimensionMap` routes to them the same way.
 - Enum values are lower_snake_case strings.
 - Texture formats use Iris/GL names (`RGBA16F`, `R11F_G11F_B10F`, `RGBA8_SNORM`, `R16UI`, …), after **promotion**: RGB-only
   formats become RGBA (`RGB8→RGBA8`, `RGB16F→RGBA16F`, `RGB8_SNORM→RGBA8_SNORM`, …). The original format is kept in `declaredFormat`.
@@ -177,15 +180,25 @@ only look at their first two arguments). The shared evaluator is `expr.CustomUni
   "set1": [ 0, 1, 7, 12, 13 ],          // set-1 bindings the program actually uses (for barriers)
   "writesStorage": [ 40 ],             // set-1 bindings written via imageStore/SSBO (for barriers)
   "usesPushConstants": true,
-  "localSize": null, "workGroups": null, "workGroupsRender": null,      // compute: [x,y,z] or [sx,sy] scale
-  "mipmapBefore": ["colortex0"],       // composite-like: generate mips for these before the pass
+  "localSize": null, "workGroups": null, "workGroupsRender": null,      // compute: [x,y,z] (from the SPIR-V) or [sx,sy] scale
+  "mipmapBefore": ["colortex0"],       // composite-like: generate mips for these before the pass (shadowcomp: shadowcolorN)
   "viewportScale": 1.0,
   "viewportOffset": null,              // scale.<program> offset [x, y] (fraction of the target size), null = 0 0
   "renderStageOrdinal": null
 }
 ```
 
-**Program keys** are the Iris program names (`gbuffers_terrain`, `composite3`, `deferred1_b`, `setup2`). A `.csh` is a
+**Geometry slots.** The runtime maps every vanilla pipeline to a geometry slot named like the Iris program that draws it
+(`gbuffers_terrain_solid`, `gbuffers_hand`, `shadow_water`, …; the table is the mod's `GbufferMapping`) and draws it with
+the program whose key or `fallbackFor` names the first slot of the slot's fallback chain that some program serves; no
+such program = not drawn. The shadow pass runs with the program that serves the `shadow` slot. Program keys themselves are
+free-form for the runtime (profiler labels, file names).
+
+**Program keys** of converted packs are the Iris program names (`gbuffers_terrain`, `composite3`, `deferred1_b`, `setup2`).
+Native packs use their pass names for fullscreen, compute and final passes, and `<pass>.<class>` for the one program per
+geometry class a geometry pass draws (`gbuffer.terrain_solid`, `fallbackFor: ["gbuffers_terrain_solid"]`, one slot each);
+`el_none.shadow` is a program that draws nothing, emitted only so the shadow pass runs when no pass draws the native
+`shadow` class itself. A `.csh` is a
 `compute` program named like its file; the slot-0 compute of a pass that also has a fullscreen program (`composite.csh`
 next to `composite.fsh`) is keyed `<pass>_csh` (`composite_csh`). Frame commands run a pass's computes (`<pass>_csh` or
 `<pass>`, then `_a` … `_z`) before its `fullscreen` command, in the pass's flip state; only the fullscreen program flips.
@@ -298,9 +311,9 @@ multidraw-indirect path: `terrain_mdi`, set 0 = `[Globals, Projection, TerrainUn
 ```
 Custom textures (top-level `textures`): `{ "name", "file", "format", "dims", "size", "filter", "wrap", "mipmap" }`, or
 `"resource": "minecraft:textures/atlas/blocks.png"` for MC resources the mod resolves at runtime. Raw textures (iris-spec §2.5,
-`<file> TEXTURE_2D|3D|RECTANGLE <format> <w> <h> [d] <pixel format> <pixel type>`) add `"rawPixel": "RGB HALF_FLOAT"`; the
-converter rewrites the file as tightly packed texels of the promoted `format` (RGB data gets alpha 1), `size` is `[w, h(, d)]`,
-and the default sampling is Iris's raw default linear/clamp (an `.mcmeta` overrides it). The mod uploads it into a 2D or 3D image.
+`<file> TEXTURE_1D|2D|3D|RECTANGLE <format> <w> [h] [d] <pixel format> <pixel type>`) add `"rawPixel": "RGB HALF_FLOAT"`; the
+converter rewrites the file as tightly packed texels of the promoted `format` (RGB data gets alpha 1), `size` is `[w(, h(, d))]`,
+and the default sampling is Iris's raw default linear/clamp (an `.mcmeta` overrides it). The mod uploads it into a 1D, 2D or 3D image.
 
 ### 7.4 Frame commands
 
@@ -373,6 +386,7 @@ Resources added to set 1 of the patched programs (bindings assigned like any oth
 | `sampled_image` | `emrion_rtao` | The RT AO pass's output (R32F, screen size, 1 = unoccluded), written before the first pass that samples it (effect `ao`) |
 | `sampled_image` | `emrion_rt_entity_atlas` | `RtEntities`' 2048² copy of the entity textures traced this frame (helper sampler `emrRtEntityAtlas`, nearest/clamp); white when no effect traces entities |
 | `sampled_image` | `block_atlas` | the block atlas (alpha test of cutout hits) |
+| `sampled_image` | `block_atlas_normals`, `block_atlas_specular` | the block atlas's LabPBR `_n` / `_s` atlases (same layout as `block_atlas`; native helpers `emrRtNormalAtlas` / `emrRtSpecularAtlas` behind `el_hitNormalMap` / `el_hitSpecular`); 1×1 LabPBR defaults (flat normal, specular 0) without a LabPBR resource pack |
 
 Patched stages are emitted as `#version 460` with `GL_EXT_ray_query`, `GL_EXT_buffer_reference` and
 `GL_EXT_buffer_reference_uvec2`; every other stage stays `#version 450`.

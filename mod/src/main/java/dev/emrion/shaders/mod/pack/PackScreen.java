@@ -4,6 +4,7 @@ import com.mojang.blaze3d.platform.InputConstants;
 import dev.emrion.shaders.mod.gui.EmberScreen;
 import dev.emrion.shaders.mod.gui.LoadingHud;
 import dev.emrion.shaders.mod.gui.ShaderOptionsScreen;
+import dev.emrion.shaders.mod.photo.PhotoMode;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -49,6 +50,24 @@ public final class PackScreen extends EmberScreen {
 		grid(packs, 1);
 		section("Emberlight");
 		grid(pageTiles(), 2);
+		section("Photo mode");
+		boolean world = minecraft.level != null;
+		row(tile("Samples", (d, s) -> {
+			var c = PhotoMode.SAMPLE_CHOICES;
+			PhotoMode.samples = c.get(Math.floorMod(c.indexOf(PhotoMode.samples) + d, c.size()));
+			PackManager.saveConfig("photo.samples", String.valueOf(PhotoMode.samples));
+		}).value(() -> Component.literal(String.valueOf(PhotoMode.samples))).tooltip(
+				"Frames averaged into one photo. More samples: less noise, longer capture."),
+				tile("Resolution", (d, s) -> {
+					PhotoMode.scale = 3 - PhotoMode.scale;
+					PackManager.saveConfig("photo.scale", String.valueOf(PhotoMode.scale));
+				}).value(() -> Component.literal(PhotoMode.scale + "×")).lit(() -> PhotoMode.scale > 1).tooltip(
+						"2×: renders at twice the window size (four times the pixels, more VRAM) and scales down. The screen shows a zoomed part meanwhile."),
+				tile("Take photo", (d, s) -> {
+					minecraft.gui.setScreen(null);
+					PhotoMode.request(PhotoMode.scale, PhotoMode.samples);
+				}).active(world).tooltip("Freezes the game, renders the view many times and saves the average to screenshots/. "
+						+ "Also a key (Controls, unbound) and /emberlight photo [scale] [samples]. Esc cancels."));
 		options = button("Shader Options...", this::openOptions);
 		options.active = PackManager.optionSession() != null;
 		footer(options, primary("Done", this::onClose));

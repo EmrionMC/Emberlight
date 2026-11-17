@@ -8,13 +8,18 @@
 float emrRtRfTrace(vec3 o, vec3 d, float tMin, float tMax, uint mask, out int inst, out uint prim, out vec2 bary) {
 	rayQueryEXT rq;
 	rayQueryInitializeEXT(rq, emrRtTlas, gl_RayFlagsNoneEXT, mask, o, tMin, d, tMax);
-	for (int guard = 0; guard < 32 && rayQueryProceedEXT(rq); guard++) {
+	bool more;
+	for (int guard = 0; (more = rayQueryProceedEXT(rq)) && guard < 32; guard++) {
 		if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;
 		int ci = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false);
 		EmrRtVerts v = emrRtVerts(ci);
 		uvec3 tri = emrRtTri(uint(rayQueryGetIntersectionPrimitiveIndexEXT(rq, false)));
 		// translucent candidates are always confirmed; terrain and entities alpha-tested (clear glass is alpha 0)
 		if ((mask & 0x02u) != 0u || emrRtHitAlpha(ci, v, tri, rayQueryGetIntersectionBarycentricsEXT(rq, false)) >= 0.1) rayQueryConfirmIntersectionEXT(rq);
+	}
+	if (more) { // more candidates than the guard: the nearest face of any kind (alpha ignored), never one behind the true hit
+		rayQueryInitializeEXT(rq, emrRtTlas, gl_RayFlagsOpaqueEXT, mask, o, tMin, d, tMax);
+		rayQueryProceedEXT(rq);
 	}
 	inst = 0; prim = 0u; bary = vec2(0.0);
 	if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) return -1.0;
@@ -30,13 +35,14 @@ float emrRtRfTrace(vec3 o, vec3 d, float tMin, float tMax, uint mask, out int in
 bool emrRtRfAny(vec3 o, vec3 d, float tMin, float tMax, uint mask) {
 	rayQueryEXT rq;
 	rayQueryInitializeEXT(rq, emrRtTlas, gl_RayFlagsTerminateOnFirstHitEXT, mask, o, tMin, d, tMax);
-	for (int guard = 0; guard < 32 && rayQueryProceedEXT(rq); guard++) {
+	bool more;
+	for (int guard = 0; (more = rayQueryProceedEXT(rq)) && guard < 32; guard++) {
 		if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;
 		int ci = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false);
 		if (emrRtIsEntity(ci) || emrRtHitAlpha(ci, emrRtVerts(ci), emrRtTri(uint(rayQueryGetIntersectionPrimitiveIndexEXT(rq, false))),
 				rayQueryGetIntersectionBarycentricsEXT(rq, false)) >= 0.1) rayQueryConfirmIntersectionEXT(rq);
 	}
-	return rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT;
+	return more || rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT; // more: as hit
 }
 
 // The nearest translucent face that is not water (glass, ice, slime, honey) within [tMin, tMax], t < 0 when none.
@@ -178,12 +184,13 @@ float emrRtRfAo(vec3 p, vec3 n) {
 	return pow(open / float(emrRt_refraction_aoRays), float(emrRt_refraction_aoStrength) * 0.004);
 }
 
-// Distance of the opaque surface behind this pixel (depthtex1), 0 where there is none (sky).
-float emrRtRfDistBehind() {
+// The opaque surface behind this pixel (depthtex1) in playerPos space, vec3(0) where there is none (sky). It is the point the
+// rasteriser drew, with the projection's jitter (DLSS, TAA); the pack's playerPos of the fragment has that jitter removed.
+vec3 emrRtRfBehind() {
 	float z = texelFetch(depthtex1, ivec2(gl_FragCoord.xy), 0).r;
-	if (z >= 1.0) return 0.0;
+	if (z >= 1.0) return vec3(0.0);
 	vec4 v = gbufferProjectionInverse * vec4(vec3(gl_FragCoord.xy / vec2(viewWidth, viewHeight), z) * 2.0 - 1.0, 1.0);
-	return length(v.xyz / v.w);
+	return mat3(gbufferModelViewInverse) * (v.xyz / v.w);
 }
 
 // Light level the hit's block emits (at_midBlock.w, terrain only): AO never dims a light, as in rt_ao.comp.
@@ -223,8 +230,13 @@ bool emrRtRfFragment(vec3 p, vec3 geoNormalView, vec3 normalView, bool water) {
 	// The surface the straight view shows behind this fragment must be in the TLAS (else, e.g. a section not built yet, keep it
 	// unrefracted): checked on the straight ray, not by comparing the refracted hit's distance with it (that failed wherever the
 	// bent ray legitimately passes a step edge or a squid the straight ray hits: a second copy of them).
-	float behind = emrRtRfDistBehind(), tsMax = behind * 1.03 + 0.3 - lp - inside;
-	if (behind > 0.0 && (tsMax <= 0.01 || !emrRtRfAny(o, d, 0.01, tsMax, mask))) return false;
+	// The ray goes through the drawn point itself: along the fragment's unjittered d it missed a mob floating above the floor
+	// by up to a pixel at its edges (the floor behind lies far beyond tsMax), so the unrefracted squid showed as lines beside
+	// its tentacles and inside its body.
+	vec3 vb = emrRtRfBehind();
+	float behind = length(vb), tsMax = behind * 1.03 + 0.3 - lp - inside;
+	vec3 db = vb / max(behind, 1e-4);
+	if (behind > 0.0 && (tsMax <= 0.01 || !emrRtRfAny(db * lp + (o - p), db, 0.01, tsMax, mask))) return false;
 	emrRtRfT = t; emrRtRfInst = inst; emrRtRfPrim = prim; emrRtRfB = b; emrRtRfO = o; emrRtRfR = r;
 	emrRtRfPathLen = lp + inside + t;
 	return true;

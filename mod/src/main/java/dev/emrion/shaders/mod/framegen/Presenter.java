@@ -200,7 +200,15 @@ public final class Presenter {
 	private static void abandon(String why) {
 		if (!wedged) EmrionShadersClient.LOG.error("Frame generation presenter stuck ({}): frame generation off until restart, its Vulkan objects are leaked", why);
 		wedged = true;
+		// under the lock: a swapchain call in progress finishes first, every later one sees stop (the caller destroys the swapchain next)
+		boolean locked = false;
+		try {
+			locked = LOCK.tryLock(1, TimeUnit.SECONDS);
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+		}
 		stop = true;
+		if (locked) LOCK.unlock();
 	}
 
 	/** Before MC destroys the swapchain: it idles only its own queue, but our presents still wait on its semaphores. */
@@ -412,7 +420,7 @@ public final class Presenter {
 	/** vkAcquireNextImageKHR without ever blocking inside the lock (the other side may need it to free an image). */
 	static int acquire(org.lwjgl.vulkan.VkDevice device, long swapchain, long semaphore, java.nio.IntBuffer index) {
 		// with VSync (FIFO) this waits for the next vblank to free an image; after 1 s the interpolated frame is skipped
-		return pollAcquire(() -> vkAcquireNextImageKHR(device, swapchain, 0L, semaphore, VK_NULL_HANDLE, index), 1_000_000_000L);
+		return pollAcquire(() -> stop ? VK_ERROR_OUT_OF_DATE_KHR : vkAcquireNextImageKHR(device, swapchain, 0L, semaphore, VK_NULL_HANDLE, index), 1_000_000_000L);
 	}
 
 	/** Polls {@code acquire} (one try with timeout 0) under the lock until it is no longer NOT_READY/TIMEOUT, for up to 5 s. */
@@ -444,6 +452,7 @@ public final class Presenter {
 			Reflex.oobMarker(f.swapchain(), f.reflexId(), true);
 			LOCK.lock();
 			try {
+				if (stop) return VK_ERROR_OUT_OF_DATE_KHR; // abandoned: the swapchain may be destroyed
 				return vkQueuePresentKHR(vkQueue, info);
 			} finally {
 				LOCK.unlock();
@@ -497,6 +506,7 @@ public final class Presenter {
 		var submit = VkSubmitInfo2.calloc(1, stack).sType$Default().pWaitSemaphoreInfos(waits).pCommandBufferInfos(cbi).pSignalSemaphoreInfos(signal);
 		LOCK.lock();
 		try {
+			if (stop) throw new IllegalStateException("frame generation presenter abandoned"); // the acquired image may be destroyed
 			check(KHRSynchronization2.vkQueueSubmit2KHR(vkQueue, submit, fence), "frame generation copy submit");
 		} finally {
 			LOCK.unlock();

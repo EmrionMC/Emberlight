@@ -48,4 +48,15 @@ class HazardsTest {
 		h.read(a, FRAGMENT, SAMPLED_READ);
 		assertNull(h.flushMasks(), "now it is");
 	}
+
+	@Test
+	void attachmentLoadReadsThePreviousWrite() {
+		var h = new Hazards();
+		var a = new Hazards.Tracked("a");
+		h.write(a, TRANSFER, TRANSFER_WRITE); // clear
+		h.flushMasks();
+		h.write(a, COLOR_OUT, FrameExecutor.LOADED_WRITE); // unblended fullscreen pass: loadOp LOAD, then write
+		assertArrayEquals(new long[] {TRANSFER, TRANSFER_WRITE, COLOR_OUT, COLOR_WRITE | COLOR_READ}, h.flushMasks(),
+				"the load is a colour-attachment read of the clear");
+	}
 }

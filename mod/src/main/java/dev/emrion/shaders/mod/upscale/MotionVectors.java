@@ -59,28 +59,33 @@ public final class MotionVectors {
 		this.ctx = ctx;
 		width = w;
 		height = h;
-		int usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT
-				| VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-		image = new RawImage(ctx, VK_FORMAT_R16G16_SFLOAT, w, h, 1, 1, usage, "upscale motion vectors");
-		int cs = VK_SHADER_STAGE_COMPUTE_BIT;
-		setLayout = new Descriptors.LayoutBuilder().add(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, cs).add(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, cs)
-				.add(2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, cs).add(3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, cs)
-				.add(4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, cs).build(ctx, true);
-		layout = Descriptors.pipelineLayout(ctx, 0, setLayout);
-		params = new RawBuffer(ctx, (long) SLOT * UboRing.REGIONS, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true, "motion vector params");
-		long module = ShaderModules.create(ctx, ShaderModules.resource("/assets/emberlight/spv/upscale_motion.comp.spv"));
-		pipeline = ComputePipelines.create(ctx, module, layout, ctx.pipelineCache().handle);
-		ShaderModules.destroy(ctx, module);
+		try { // a failure (VRAM full) frees what was made so far: destroyLater skips the fields still unset
+			int usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT
+					| VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+			image = new RawImage(ctx, VK_FORMAT_R16G16_SFLOAT, w, h, 1, 1, usage, "upscale motion vectors");
+			int cs = VK_SHADER_STAGE_COMPUTE_BIT;
+			setLayout = new Descriptors.LayoutBuilder().add(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, cs).add(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, cs)
+					.add(2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, cs).add(3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, cs)
+					.add(4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, cs).build(ctx, true);
+			layout = Descriptors.pipelineLayout(ctx, 0, setLayout);
+			params = new RawBuffer(ctx, (long) SLOT * UboRing.REGIONS, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true, "motion vector params");
+			long module = ShaderModules.create(ctx, ShaderModules.resource("/assets/emberlight/spv/upscale_motion.comp.spv"));
+			pipeline = ComputePipelines.create(ctx, module, layout, ctx.pipelineCache().handle);
+			ShaderModules.destroy(ctx, module);
 
-		objSetLayout = new Descriptors.LayoutBuilder().add(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT).build(ctx, true);
-		objLayout = Descriptors.pipelineLayout(ctx, 16, objSetLayout);
-		long vs = ShaderModules.create(ctx, ShaderModules.resource("/assets/emberlight/spv/object_motion.vert.spv"));
-		long fs = ShaderModules.create(ctx, ShaderModules.resource("/assets/emberlight/spv/object_motion.frag.spv"));
-		objPipeline = new GraphicsPipelineBuilder().stage(VK_SHADER_STAGE_VERTEX_BIT, vs).stage(VK_SHADER_STAGE_FRAGMENT_BIT, fs).layout(objLayout)
-				.colors(new int[] {VK_FORMAT_R16G16_SFLOAT}).vertexBinding(0, 32, 0).attribute(0, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 0)
-				.attribute(1, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 16).build(ctx, ctx.pipelineCache().handle);
-		ShaderModules.destroy(ctx, vs);
-		ShaderModules.destroy(ctx, fs);
+			objSetLayout = new Descriptors.LayoutBuilder().add(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT).build(ctx, true);
+			objLayout = Descriptors.pipelineLayout(ctx, 16, objSetLayout);
+			long vs = ShaderModules.create(ctx, ShaderModules.resource("/assets/emberlight/spv/object_motion.vert.spv"));
+			long fs = ShaderModules.create(ctx, ShaderModules.resource("/assets/emberlight/spv/object_motion.frag.spv"));
+			objPipeline = new GraphicsPipelineBuilder().stage(VK_SHADER_STAGE_VERTEX_BIT, vs).stage(VK_SHADER_STAGE_FRAGMENT_BIT, fs).layout(objLayout)
+					.colors(new int[] {VK_FORMAT_R16G16_SFLOAT}).vertexBinding(0, 32, 0).attribute(0, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 0)
+					.attribute(1, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 16).build(ctx, ctx.pipelineCache().handle);
+			ShaderModules.destroy(ctx, vs);
+			ShaderModules.destroy(ctx, fs);
+		} catch (RuntimeException | Error failed) {
+			destroyLater();
+			throw failed;
+		}
 	}
 
 	/**
@@ -123,6 +128,7 @@ public final class MotionVectors {
 			float eta = Minecraft.getInstance().gameRenderer.mainCamera().getFluidInCamera() == FogType.WATER ? 1.333f : 1f / 1.333f;
 			var rt = PackManager.rtState();
 			boolean refraction = compositionView != 0 && rt != null && rt.effects().contains("refraction");
+			pc.putFloat(144, Upscaling.ndcJitterX()).putFloat(148, Upscaling.ndcJitterY()); // as the object pass: same pixels as the gbuffers
 			pc.putFloat(156, !refraction ? 0f : rt.effects().contains("refraction:glass=0") ? -eta : eta);
 			vkCmdDispatch(cb, (width + 7) / 8, (height + 7) / 8, 1);
 		}
@@ -156,7 +162,7 @@ public final class MotionVectors {
 			buf = objVertices[objRegion] = new RawBuffer(ctx, Math.max(bytes * 3 / 2, 64 * 1024), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true, "object motion vertices");
 		}
 		MemoryUtil.memFloatBuffer(buf.mapped, n * 8).put(ObjectMotion.out, 0, n * 8);
-		memory(cb, COMPUTE, STORAGE_WRITE, COLOR_OUT, COLOR_WRITE);
+		memory(cb, COMPUTE, STORAGE_WRITE, COLOR_OUT, COLOR_READ | COLOR_WRITE); // loadOp LOAD reads the camera motion
 		RawPass.begin(cb, width, height, image.view);
 		vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, objPipeline);
 		RawPass.pushImages(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, objLayout, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, sampler, depthView);
@@ -183,8 +189,8 @@ public final class MotionVectors {
 	}
 
 	public void destroyLater() {
-		image.destroyLater();
-		params.destroyLater();
+		if (image != null) image.destroyLater();
+		if (params != null) params.destroyLater();
 		for (RawBuffer b : objVertices) if (b != null) b.destroyLater();
 		ctx.destroyLater(() -> {
 			vkDestroyPipeline(ctx.vk, objPipeline, null);

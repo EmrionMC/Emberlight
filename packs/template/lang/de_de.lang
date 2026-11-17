@@ -1,0 +1,14 @@
+pack.name=Emberlight-Vorlage
+option.RT_SHADOWS=Raytracing-Schatten
+option.SHADOW_RAYS=Schattenstrahlen pro Pixel
+option.SHADOW_SOFTNESS=Schattenweichheit
+option.SHADOW_SOFTNESS.comment=Größe der Sonnenscheibe, die die Schattenstrahlen abtasten. 0 = harte Schatten.
+option.EXPOSURE=Belichtung
+option.TONEMAP=Tonemapping
+value.TONEMAP.none=Keins (abschneiden)
+option.SUN_COLOR=Sonnenfarbe
+option.FOG=Entfernungsnebel
+page.image=Bild
+profile.low=Niedrig
+profile.medium=Mittel
+profile.high=Hoch

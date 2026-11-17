@@ -1,0 +1,11 @@
+pack.name=Emberlight Template
+option.EXPOSURE=Exposure
+option.TONEMAP=Tonemapper
+value.TONEMAP.aces=ACES
+value.TONEMAP.reinhard=Reinhard
+value.TONEMAP.none=None (clip)
+option.FOG=Distance fog
+page.image=Image
+profile.low=Low
+profile.medium=Medium
+profile.high=High

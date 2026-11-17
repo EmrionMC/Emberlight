@@ -89,6 +89,7 @@ public final class DefaultPackLoader implements PackLoader {
 				if (k.startsWith("IRIS_FEATURE_")) usableFeatures.add(k.substring("IRIS_FEATURE_".length()));
 				else baseEnv.put(k, v);
 			});
+			StandardMacros.GL_EXTENSIONS.forEach(e -> baseEnv.putIfAbsent("MC_" + e, ""));
 		}
 
 		void warn(String file, String msg) {

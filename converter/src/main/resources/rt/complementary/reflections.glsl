@@ -5,21 +5,25 @@
 // The face the patched getFaceData returns: what the pack's voxeliser would store for it, but per hit (interpolated vertex
 // colour and lightmap) and for any geometry (slabs, plants, fences, blocks outside the voxel volume).
 faceData emrRtFace;
+const int EMR_RT_PORTAL = 30020; // block.properties: nether_portal
 vec2 emrRtHitUv;
 float emrRtHitRad;
 
-// Closest solid/cutout hit (mask 0x01, cutout alpha-tested at mip 0 like the shadow rays, no skip list: plants reflect). Fills
-// emrRtFace.glColor/lightmap, emrRtHitUv (exact UV) and emrRtHitRad (sprite half size, as the voxeliser measures it).
+// Closest solid/cutout hit (mask 0x01, cutout alpha-tested at mip 0 like the shadow rays, no skip list: plants reflect), or a
+// Nether portal (translucent terrain, the only translucent the reflection shows: it glows, the pack's voxels never had it).
+// Fills emrRtFace.glColor/lightmap, emrRtHitUv (exact UV) and emrRtHitRad (sprite half size, as the voxeliser measures it).
 bool emrRtReflHit(vec3 origin, vec3 dir, float tMin, out float t, out vec3 n, out uint id) {
 	// NaN/inf origin or direction is undefined behaviour for ray queries (can stall traversal): no hit instead
 	float dd = dot(dir, dir);
 	if (any(isnan(origin)) || any(isinf(origin)) || isnan(dd) || isinf(dd) || dd < 1e-8 || !(tMin < 1024.0)) return false; // also tMin > tMax
 	rayQueryEXT rq;
-	rayQueryInitializeEXT(rq, emrRtTlas, gl_RayFlagsNoneEXT, 0x01u, origin, tMin, dir, 1024.0); // > RD 32 diagonal
+	rayQueryInitializeEXT(rq, emrRtTlas, gl_RayFlagsNoneEXT, 0x03u, origin, tMin, dir, 1024.0); // > RD 32 diagonal
 	for (int guard = 0; guard < 64 && rayQueryProceedEXT(rq); guard++) {
 		if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;
-		EmrRtVerts v = emrRtVerts(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false));
+		int ci = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false);
+		EmrRtVerts v = emrRtVerts(ci);
 		uvec3 tri = emrRtTri(uint(rayQueryGetIntersectionPrimitiveIndexEXT(rq, false)));
+		if (emrRtSection[ci].z == 2u && emrRtId(v, tri.x) != EMR_RT_PORTAL) continue;
 		if (textureLod(emrRtAtlas, emrRtBaryUv(v, tri, rayQueryGetIntersectionBarycentricsEXT(rq, false)), 0.0).a >= 0.1)
 			rayQueryConfirmIntersectionEXT(rq);
 	}

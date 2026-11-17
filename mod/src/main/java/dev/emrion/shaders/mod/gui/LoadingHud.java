@@ -1,6 +1,7 @@
 package dev.emrion.shaders.mod.gui;
 
 import dev.emrion.shaders.mod.pack.PackManager;
+import dev.emrion.shaders.mod.runtime.PackPipelines;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElement;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
@@ -18,8 +19,13 @@ public final class LoadingHud implements HudElement {
 
 	private record State(String pack, String text, Kind kind) {}
 
+	/** The pipeline build phase: shown with the build's x/y and fraction. */
+	public static final String PREPARING = "Preparing shaders…";
 	private static volatile @Nullable State state;
 	private static volatile int shaderErrors;
+	/** When the running load started (ms): one that ends within {@link #QUIET_MS} (a warm dimension switch) never shows. */
+	private static volatile long busySince;
+	private static final long QUIET_MS = 300;
 	/** Render thread: the end state on screen since (ms), -1 = not shown yet. */
 	private static long shownSince = -1;
 	private static @Nullable State shown;
@@ -27,10 +33,12 @@ public final class LoadingHud implements HudElement {
 	/** A load or reload starts. */
 	public static void begin(String pack) {
 		shaderErrors = 0;
-		state = new State(pack, "Reading pack", Kind.BUSY);
+		phase(pack, "Reading pack");
 	}
 
 	public static void phase(String pack, String text) {
+		State s = state;
+		if (s == null || s.kind != Kind.BUSY) busySince = System.currentTimeMillis();
 		state = new State(pack, text, Kind.BUSY);
 	}
 
@@ -54,6 +62,10 @@ public final class LoadingHud implements HudElement {
 	public static void ready(String pack) {
 		State s = state;
 		if (s == null || s.kind != Kind.BUSY) return;
+		if (System.currentTimeMillis() - busySince < QUIET_MS) { // never shown: no "Ready" either
+			state = null;
+			return;
+		}
 		int n = shaderErrors;
 		state = new State(pack, n == 0 ? "Ready" : "Ready, " + n + " shader error" + (n == 1 ? "" : "s") + " (see log)", Kind.READY);
 	}
@@ -74,10 +86,16 @@ public final class LoadingHud implements HudElement {
 
 	@Override
 	public void extractRenderState(GuiGraphicsExtractor g, DeltaTracker delta) {
+		if (!Minecraft.getInstance().gui.hud.isHidden()) draw(g);
+	}
+
+	/** The panel (also drawn over MC's level loading screen, which hides the HUD). */
+	public static void draw(GuiGraphicsExtractor g) {
 		Minecraft mc = Minecraft.getInstance();
 		State s = state;
-		if (s == null || mc.gui.hud.isHidden()) return;
+		if (s == null) return;
 		long now = System.currentTimeMillis();
+		if (s.kind == Kind.BUSY && now - busySince < QUIET_MS) return;
 		if (s != shown) {
 			shown = s;
 			shownSince = now;
@@ -97,6 +115,12 @@ public final class LoadingHud implements HudElement {
 		g.fill(x, y, x + w, y + h, fade(0xE00E0805, alpha));
 		g.outline(x, y, w, h, fade(0xFF4A2E20, alpha));
 		float p = PackManager.progress;
+		String text = s.text;
+		int built = PackPipelines.BUILT.get(), total = PackPipelines.TOTAL.get();
+		if (s.kind == Kind.BUSY && text == PREPARING && total > 0) {
+			text += " " + built + "/" + total;
+			p = (float) built / total;
+		}
 		String pct = s.kind == Kind.BUSY && p >= 0 ? (int) (p * 100) + "%" : "";
 		int pw = font.width(pct);
 		g.text(font, EmberScreen.fit(font, Component.literal(s.pack), w - 14 - (pw > 0 ? pw + 6 : 0)), x + 6, y + 5, fade(EmberScreen.GOLD, alpha));
@@ -106,7 +130,7 @@ public final class LoadingHud implements HudElement {
 			case READY -> shaderErrors > 0 ? EmberScreen.CHANGED : EmberScreen.GOLD;
 			case FAILED -> EmberScreen.BAD;
 		};
-		g.text(font, EmberScreen.fit(font, Component.literal(s.text), w - 12), x + 6, y + 16, fade(color, alpha));
+		g.text(font, EmberScreen.fit(font, Component.literal(text), w - 12), x + 6, y + 16, fade(color, alpha));
 		// progress line along the bottom edge: the converter's fraction, a sliding segment while it has none
 		int bx = x + 1, bw = w - 2, by = y + h - 2;
 		g.fill(bx, by, bx + bw, by + 1, fade(0xFF2A1A12, alpha));

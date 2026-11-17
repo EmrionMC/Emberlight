@@ -9,6 +9,8 @@
 // a = valid), emrBlT / emrBlRH (temporal accumulation, a = history length), emrBlOut (filtered ratio, read by the gbuffers),
 // emrBlGH (last frame's geometry).
 
+uint emrBlMask() { return emrRt_blocklight_entities != 0 ? 0x07u : 0x03u; } // rtx/bl_common.glsl
+
 uniform mat4 gbufferModelViewInverse;
 uniform mat4 gbufferProjectionInverse;
 uniform mat4 gbufferPreviousModelView;
@@ -26,8 +28,11 @@ vec3 emrBlDir(ivec2 p, ivec2 size) {
 	return normalize(mat3(gbufferModelViewInverse) * (v.xyz / v.w));
 }
 
+// dist is the distance to the player (emrBlG.w), not along the view ray: the ray starts at the eye, off the player by the view bob.
 vec3 emrBlPixelPos(ivec2 p, ivec2 size, float dist) {
-	return gbufferModelViewInverse[3].xyz + emrBlDir(p, size) * dist;
+	vec3 e = gbufferModelViewInverse[3].xyz, d = emrBlDir(p, size);
+	float b = dot(e, d);
+	return e + d * (sqrt(max(b * b - dot(e, e) + dist * dist, 0.0)) - b); // |e + d t| = dist
 }
 
 // The pixel (texel units) where playerPos-space point x was last frame.
@@ -43,7 +48,8 @@ bool emrBlPrevTexel(vec3 x, ivec2 size, out vec2 t) {
 bool emrBlPrimary(vec3 o, vec3 d, out float t, out vec3 n, out float lm) {
 	rayQueryEXT rq;
 	rayQueryInitializeEXT(rq, emrRtTlas, gl_RayFlagsNoneEXT, 0x05u, o, 0.0, d, 1024.0);
-	for (int guard = 0; guard < 48 && rayQueryProceedEXT(rq); guard++) {
+	bool more;
+	for (int guard = 0; (more = rayQueryProceedEXT(rq)) && guard < 48; guard++) {
 		if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;
 		int ci = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false);
 		EmrRtVerts cv = emrRtVerts(ci);
@@ -52,7 +58,8 @@ bool emrBlPrimary(vec3 o, vec3 d, out float t, out vec3 n, out float lm) {
 	}
 	t = lm = 0.0;
 	n = vec3(0.0);
-	if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) return false;
+	// more candidates than the guard: no surface (the gbuffers' fallback), not one that may lie behind the true one
+	if (more || rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) return false;
 	t = rayQueryGetIntersectionTEXT(rq, true);
 	int ci = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
 	EmrRtVerts v = emrRtVerts(ci);

@@ -30,7 +30,7 @@ class TargetPackRtTest {
 	static final Path SETTINGS = ROOT.resolve("ComplementaryUnbound_r5.9.3 + EuphoriaPatches_1.10.5.txt");
 	/** sha256 over the RT-off output (paths + bytes); changes only with an intended output change and a Converter.VERSION bump. */
 
-	static final String RT_OFF_GOLDEN = "9b772fe24ad7800944f52e0a206af8df5cb8090296b5a397db51c9d052a37007";
+	static final String RT_OFF_GOLDEN = "ca39a3bc5f7eabba7914ad565b6a7d53fff12ccff42c4bd4453e2b954d0cbe34";
 
 	static Converter.Result convert(Path out, Set<String> rt) {
 		try (var compiler = new ShadercSpirvCompiler()) {
@@ -185,6 +185,23 @@ class TargetPackRtTest {
 		assertEquals(0, f.stagesFailed());
 		String ff = Files.readString(f.outputDir().resolve("src/world0/gbuffers_terrain.fsh.glsl"));
 		assertFalse(ff.contains("emrRtx"), "faithful stage has RTX code");
+	}
+
+	@Test
+	void rtxGiCacheAddsUpdateAndResolvePasses(@TempDir Path out) throws Exception {
+		assumeTrue(Files.isDirectory(PACK) && Files.isRegularFile(SETTINGS));
+		var r = convert(out.resolve("cache"), Set.of("shadows", "shadows:rtx", "blocklight", "blocklight:rtx", "gi", "gi:rtx", "gi:cache", "materials", "shafts"));
+		assertEquals(0, r.stagesFailed());
+		assertTrue(r.manifest().rt().effects().contains("gi:cache"), r.manifest().rt().unavailable().toString());
+		Path src = r.outputDir().resolve("src/world0");
+		assertTrue(Files.readString(src.resolve("prepare_a.csh.glsl")).contains("imageLoad(emrGiCk"));
+		assertTrue(Files.readString(src.resolve("prepare_j.csh.glsl")).contains("imageAtomicCompSwap(emrGiCk"));
+		assertTrue(Files.readString(src.resolve("prepare_k.csh.glsl")).contains("emrRt_gi_cacheStale"));
+		var targets = r.manifest().dimensions().get("world0").targets().stream().map(t -> t.name()).toList();
+		assertTrue(targets.containsAll(List.of("emrGiCk", "emrGiCs", "emrGiCr")), targets.toString());
+		// without it: no cache images, the trace's lookup is the stub
+		var o = convert(out.resolve("nocache"), Set.of("shadows", "shadows:rtx", "gi", "gi:rtx", "materials", "shafts"));
+		assertFalse(Files.readString(o.outputDir().resolve("src/world0/prepare_a.csh.glsl")).contains("emrGiCk"));
 	}
 
 	@Test

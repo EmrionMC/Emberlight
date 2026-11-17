@@ -491,13 +491,31 @@ public abstract class EmberScreen extends Screen {
 	}
 
 
-	// ---- the Emberlight pages, as tiles with their live state (pack screen, shader options) -------------------------
+	// ---- the Emberlight pages, as tiles with their live state (pack screen only: one entry point) ------------------
+
+	/** A native pack's ray tracing is set in its own options; other packs get Emberlight's RT page (which explains a missing table). */
+	private void openRt() {
+		PackManager.RtSupport rt = PackManager.rtSupport();
+		OptionSession session = rt != null && rt.nativePack() ? PackManager.optionSession() : null;
+		minecraft.gui.setScreen(session != null ? new ShaderOptionsScreen(this, session) : new RtOptionsScreen(this));
+	}
+
+	private static @Nullable String rtHint() {
+		PackManager.RtSupport rt = PackManager.rtSupport();
+		return rt == null ? null : rt.nativePack() ? "This pack does its own ray tracing. Opens the pack's options, where its ray tracing settings are."
+				: rt.effects().isEmpty() ? "Emberlight can add ray tracing only to packs with an RT patch table (Complementary, or packs that ship one)." : null;
+	}
 
 	protected List<Tile> pageTiles() {
 		return List.of(
-				tile("Ray tracing", (d, s) -> minecraft.gui.setScreen(new RtOptionsScreen(this))).value(() -> Component.literal(!RtCapability.enabled
-						? "Not supported" : !RtConfig.enabled ? "Off" : RtConfig.style.equals("rtx") ? "On · RTX style" : "On · Faithful style"))
-						.lit(() -> RtCapability.enabled && RtConfig.enabled),
+				tile("Ray tracing", (d, s) -> openRt()).value(() -> {
+					PackManager.RtSupport rt = PackManager.rtSupport();
+					return Component.literal(rt != null && rt.nativePack() ? "Built into the pack" : rt != null && rt.effects().isEmpty() ? "Not for this pack"
+							: !RtCapability.enabled ? "Not supported" : !RtConfig.enabled ? "Off" : RtConfig.style.equals("rtx") ? "On · RTX style" : "On · Faithful style");
+				}).lit(() -> {
+					PackManager.RtSupport rt = PackManager.rtSupport();
+					return rt == null ? RtCapability.enabled && RtConfig.enabled : rt.nativePack() || !rt.effects().isEmpty() && RtCapability.enabled && RtConfig.enabled;
+				}).tooltip(rtHint()),
 				tile("Upscaling", (d, s) -> minecraft.gui.setScreen(new UpscaleScreen(this))).value(() -> Component.literal(
 						UpscaleConfig.mode == UpscaleConfig.Mode.OFF ? "Off" : UpscaleConfig.mode.shortLabel + " · " + UpscaleConfig.preset.label))
 						.lit(() -> UpscaleConfig.mode != UpscaleConfig.Mode.OFF),

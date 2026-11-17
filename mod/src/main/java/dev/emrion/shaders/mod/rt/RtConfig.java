@@ -12,7 +12,7 @@ import net.minecraft.client.Minecraft;
  * (true | false), {@code rt.shadowRays} (1–16), {@code rt.distance} (chunks, 0 = render distance), {@code rt.refraction},
  * {@code rt.caustics}, {@code rt.ao} (RT ambient occlusion instead of the pack's SSAO), {@code rt.shadowEntities} (entities cast
  * RT shadows, default true), {@code rt.blockLightRays} (0 = off, 1–16, default 4), {@code rt.gi} (off | low | medium | high, default low),
- * {@code rt.style} (rtx | faithful, default rtx), {@code rt.omm} (opacity micromaps, default true), {@code rt.device} (read by {@link RtCapability} at boot).
+ * {@code rt.giCache} (RTX GI radiance cache, default true), {@code rt.style} (rtx | faithful, default rtx), {@code rt.omm} (opacity micromaps, default true), {@code rt.device} (read by {@link RtCapability} at boot).
  */
 public final class RtConfig {
 	private RtConfig() {}
@@ -33,6 +33,8 @@ public final class RtConfig {
 	/** RT global illumination quality: off | low (half res, 1 ray) | medium (half res, 2 rays) | high (full res, 2 rays). */
 	public static final List<String> GI_MODES = List.of("off", "low", "medium", "high");
 	public static volatile String gi = "off";
+	/** RTX GI: world-space radiance cache (SHaRC-style hash grid) ends bounce rays at cached light (RAYTRACING.md §39). */
+	public static volatile boolean giCache = true;
 	/**
 	 * faithful = RT only makes the pack's own effects more accurate; rtx (default) = RT lights the scene. RTX sun shadows are
 	 * always fully traced (no hybrid) with at least 4 rays; every other switch works in both styles.
@@ -59,6 +61,7 @@ public final class RtConfig {
 		blockLightRays = parse(get(p, "blockLightRays", null), 4, 0, 16);
 		String g = get(p, "gi", "low");
 		gi = GI_MODES.contains(g) ? g : "off";
+		giCache = Boolean.parseBoolean(get(p, "giCache", "true"));
 		String st = get(p, "style", "rtx");
 		style = STYLES.contains(st) ? st : "rtx";
 		extra = get(p, "extra", "");
@@ -85,9 +88,13 @@ public final class RtConfig {
 		p.setProperty("rt.shadowEntities", Boolean.toString(shadowEntities));
 		p.setProperty("rt.blockLightRays", Integer.toString(blockLightRays));
 		p.setProperty("rt.gi", gi);
+		p.setProperty("rt.giCache", Boolean.toString(giCache));
 		p.setProperty("rt.style", style);
-		if (!extra.isEmpty()) p.setProperty("rt.extra", extra);
+		if (extra.isEmpty()) p.remove("rt.extra"); // cleared: a stale saved value must not come back
+		else p.setProperty("rt.extra", extra);
 		p.setProperty("rt.omm", Boolean.toString(omm));
+		RtPreset preset = RtPreset.detect(p);
+		p.setProperty("rt.preset", preset == null ? "custom" : preset.name().toLowerCase(java.util.Locale.ROOT)); // informational: load derives it from the values
 	}
 
 	/** The converter's RT effect set; empty (the plain Iris-equivalent conversion) unless RT is on and supported. */
@@ -118,12 +125,14 @@ public final class RtConfig {
 		if (blockRays > 0) {
 			s.add("blocklight");
 			if (blockRays != 4) s.add("blocklight:rays=" + blockRays);
+			if (shadowEntities) s.add("blocklight:entities"); // torches cast entity and block-entity shadows too
 			if (rtx) s.add("blocklight:rtx");
 		}
 		if (!gi.equals("off")) {
 			if (rtx) {
 				s.add("gi:rtx");
 				s.add("gi:entities"); // its primary rays hit entities: they stay in the TLAS, shadow rays skip them unless shadows:entities
+				if (giCache) s.add("gi:cache");
 			}
 			s.add("gi");
 			if (!gi.equals("low")) s.add("gi:rays=2");

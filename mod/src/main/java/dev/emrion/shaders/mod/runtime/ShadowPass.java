@@ -193,7 +193,8 @@ final class ShadowPass {
 		u.gbufferProjection().mul(u.gbufferModelView(), VIEW_PROJECTION);
 		Matrix4fc sv = u.shadowModelView();
 		LIGHT.set(sv.m02(), sv.m12(), sv.m22()).normalize(); // shadow view +Z (towards the light) in camera-relative space
-		var shadow = e.dimension().programs().get("shadow");
+		var shadow = e.dimension().programs().values().stream().filter(p -> p.kind().equals("shadow") && p.fallbackFor().contains("shadow")).findFirst()
+				.orElse(e.dimension().programs().get("shadow")); // the program serving the "shadow" slot (native packs: <pass>.shadow)
 		boolean voxelizes = !shadow.writesStorage().isEmpty() || shadow.stages().geometry() != null; // Iris: image stores or a shadow.gsh = voxelization
 		float mul = s.distanceRenderMul(), entityMul = s.entityDistanceMul();
 		configure(TERRAIN, s, voxelizes, mul, renderDistance);

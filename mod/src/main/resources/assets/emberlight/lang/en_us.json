@@ -6,5 +6,6 @@
   "key.emberlight.wireframe": "Wireframe (debug mode, singleplayer)",
   "key.category.emberlight.main": "Emberlight",
   "key.emberlight.rt": "Toggle ray tracing (Emberlight RT)",
-  "key.emberlight.snapshot": "Debug Snapshot (position, settings, screenshot)"
+  "key.emberlight.snapshot": "Debug Snapshot (position, settings, screenshot)",
+  "key.emberlight.photo": "Photo Mode (noise-free screenshot)"
 }

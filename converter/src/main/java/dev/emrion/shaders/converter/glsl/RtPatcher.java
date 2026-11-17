@@ -39,20 +39,35 @@ public final class RtPatcher {
 			return apply(pack, request, null, RtPatchTable.PACK_TABLE + ": " + e.getMessage());
 		}
 		if (own != null) {
-			String miss = missing(pack, own);
+			String miss = missing(pack.source(), own);
 			return miss == null ? apply(pack, request, own)
 					: apply(pack, request, null, RtPatchTable.PACK_TABLE + " targets " + own.pack() + " " + own.version() + " but shaders/" + miss + " is missing");
 		}
 		for (String t : RtPatchTable.TABLES) {
 			RtPatchTable candidate = RtPatchTable.load(t);
-			if (missing(pack, candidate) == null) return apply(pack, request, candidate);
+			if (missing(pack.source(), candidate) == null) return apply(pack, request, candidate);
 		}
 		return apply(pack, request, null);
 	}
 
+	/** The effects the table {@link #apply} would use for this pack offers; empty: no usable table (none, broken or for another version). */
+	public static Set<String> tableEffects(dev.emrion.shaders.converter.pack.PackSource src) throws java.io.IOException {
+		try {
+			RtPatchTable own = RtPatchTable.fromPack(src);
+			if (own != null) return missing(src, own) == null ? Set.copyOf(own.effects().keySet()) : Set.of();
+		} catch (IllegalArgumentException e) {
+			return Set.of();
+		}
+		for (String t : RtPatchTable.TABLES) {
+			RtPatchTable candidate = RtPatchTable.load(t);
+			if (missing(src, candidate) == null) return Set.copyOf(candidate.effects().keySet());
+		}
+		return Set.of();
+	}
+
 	/** The first detect file the pack lacks, or null. */
-	private static String missing(ResolvedPack pack, RtPatchTable table) throws java.io.IOException {
-		for (String f : table.detect()) if (pack.source().read("shaders/" + f).isEmpty()) return f;
+	private static String missing(dev.emrion.shaders.converter.pack.PackSource src, RtPatchTable table) throws java.io.IOException {
+		for (String f : table.detect()) if (src.read("shaders/" + f).isEmpty()) return f;
 		return null;
 	}
 

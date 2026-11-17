@@ -187,7 +187,10 @@ public final class Hdr {
 	public static long beforeBlit(long backbufferView, int w, int h) {
 		boolean mask = hudlessTaken && hudless != null && hudless.width == w && hudless.height == h;
 		hudlessTaken = false;
-		if (!active()) return 0;
+		if (!active()) {
+			releaseImages(); // HDR switched off: its full-size images are not needed until it comes back
+			return 0;
+		}
 		VulkanContext ctx = VulkanContext.get();
 		out = sized(ctx, out, w, h, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, "hdr output");
 		var cb = RawCommands.begin(ctx);
@@ -214,6 +217,28 @@ public final class Hdr {
 			if (slots[i] != null && free) slots[i].destroyLater();
 			slots[i] = null;
 		}
+	}
+
+	private static void releaseImages() {
+		if (out != null) out.destroyLater();
+		if (hudless != null) hudless.destroyLater();
+		out = hudless = null;
+	}
+
+	/** Client stopping (after FrameGen.shutdown freed the interpolated slots): before MC destroys the device. */
+	public static void shutdown() {
+		releaseImages();
+		if (probe != null) probe.destroyLater();
+		probe = null;
+		if (pipeline == 0) return;
+		VulkanContext ctx = VulkanContext.get();
+		long p = pipeline, l = layout, s = setLayout;
+		ctx.destroyLater(() -> {
+			vkDestroyPipeline(ctx.vk, p, null);
+			vkDestroyPipelineLayout(ctx.vk, l, null);
+			vkDestroyDescriptorSetLayout(ctx.vk, s, null);
+		});
+		pipeline = layout = setLayout = 0;
 	}
 
 	private static RawImage sized(VulkanContext ctx, @Nullable RawImage img, int w, int h, int format, int usage, String label) {

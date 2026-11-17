@@ -31,8 +31,8 @@ void main() {
 		return;
 	}
 	// one pass over the cell: U's parts (rtx/bl_common.glsl emrBlOpen) and the weighted draw (emrBlPick)
-	vec3 front = vec3(0.0), back = vec3(0.0);
-	float best = -99.0, sum = 0.0, chosen = 0.0;
+	vec3 front = vec3(0.0), flush = vec3(0.0), back = vec3(0.0);
+	float best = -99.0, bestFlush = -99.0, sum = 0.0, chosen = 0.0;
 	uint li = ~0u, h = emrBlHash(uvec3(p, uint(frameCounter)));
 	for (uint k = first; k < end; k++) {
 		uint i = emrBlIndex[k];
@@ -42,9 +42,12 @@ void main() {
 		float base = level / 15.0 * win * win / (1.0 + EMR_BL_FALLOFF * dd * dd);
 		if (base <= 0.0) continue;
 		vec3 c = emrBlColor(i);
-		if (dot(n, l.xyz - q) >= -0.05) {
+		vec3 a = abs(l.xyz - qa);
+		if (l.w != emrBlPos[i].w) { // a vanilla emitter flush with the surface, as emrBlOpen
+			flush += c * base;
+			bestFlush = max(bestFlush, level - (a.x + a.y + a.z));
+		} else if (dot(n, l.xyz - q) >= -0.05) {
 			front += c * base;
-			vec3 a = abs(l.xyz - qa);
 			if (emrBlCol[i].a > 0.0) best = max(best, level - (a.x + a.y + a.z));
 		} else back += c * base;
 		float tgt = emrBlLum(c) * base * clamp((dot(n, dv) / max(dd, 1e-3) + EMR_BL_WRAP) / (1.0 + EMR_BL_WRAP), 0.0, 1.0);
@@ -56,7 +59,8 @@ void main() {
 			chosen = tgt;
 		}
 	}
-	vec3 u = front + back * clamp((lm * 15.0 - best - 1.0) * 0.5, 0.0, 1.0);
+	vec3 u = front + flush * clamp((lm * 15.0 - best - 1.0) * 0.5, 0.0, 1.0)
+		+ back * clamp((lm * 15.0 - max(best, bestFlush) - 1.0) * 0.5, 0.0, 1.0);
 	if (emrBlLum(u) < 1e-6) {
 		imageStore(emrBlU, p, vec4(0.0));
 		imageStore(emrBlRes, p, EMR_BL_EMPTY);

@@ -1,0 +1,75 @@
+pack.name=Emberlight RTX
+pack.description=Raytracing-Schatten, GI, Spiegelungen, leuchtende Flächenlichter und Lichtstrahlen. Dezent ist anders.
+option.RTX_INTENSITY=RTX-Intensität
+option.RTX_INTENSITY.comment=Ein Regler für „mehr“: Bloom, Leuchten, Glanz, Lichtstrahlen, Sättigung. 1 = der gedachte Look, 3 = so übertrieben.
+option.GI_BOUNCES=GI-Abpraller
+option.GI_BOUNCES.comment=Raytracing-Abpraller für indirektes Licht. 0 = nur Himmels- und Lightmap-Umgebungslicht.
+option.GI_FRAMES=GI-Verlauf
+option.GI_FRAMES.comment=Wie viele Bilder der Entrauscher sich merkt. Mehr = ruhiger, reagiert langsamer.
+option.LIGHT_SAMPLES=Lichtkandidaten
+option.LIGHT_SAMPLES.comment=Blocklichter, die pro Pixel und Bild gewichtet werden; das beste wird mit Nachbarpixeln und späteren Bildern geteilt (ReSTIR). Mehr = saubereres Licht in Räumen voller Lampen.
+option.REFLECTIONS=Spiegelungen
+option.REFLECTIONS.comment=Welche Oberflächen Spiegelungsstrahlen verfolgen: Niedrig = nur spiegelglatte, Wahnsinn = fast alles.
+value.REFLECTIONS.off=Aus
+value.REFLECTIONS.low=Niedrig
+value.REFLECTIONS.high=Hoch
+value.REFLECTIONS.insane=Wahnsinn
+option.SHADOW_SOFTNESS=Schattenweichheit
+option.SHADOW_SOFTNESS.comment=Größe der Sonnenscheibe, die die Schattenstrahlen abtasten.
+option.EMISSIVE_STRENGTH=Leuchtstärke
+option.BLOCKLIGHT_STRENGTH=Blocklicht-Stärke
+option.FOG_DENSITY=Nebeldichte
+option.VOLUMETRICS=Volumetrisches Licht
+option.VOL_STEPS=Volumetrische Schritte
+option.BLOOM=Bloom
+option.EXPOSURE=Belichtung
+option.AUTO_EXPOSURE=Augenanpassung
+option.WATER_WAVES=Wasserwellen
+option.PUDDLES=Regenpfützen
+option.CLOUDS=Wolken
+option.PBR_SOURCE=Materialien
+option.PBR_SOURCE.comment=Auto: LabPBR-Texturen eines Ressourcenpakets (Emberlight PBR), sonst die eingebaute Tabelle.
+value.PBR_SOURCE.auto=Auto
+value.PBR_SOURCE.table=Eingebaute Tabelle
+page.lighting=Beleuchtung
+page.atmosphere=Atmosphäre
+page.image=Bild
+page.quality=Qualität
+profile.low=Niedrig
+profile.medium=Mittel
+profile.high=Hoch
+profile.ultra=Ultra
+profile.insane=Wahnsinn
+option.MIRROR_BOUNCES=Spiegel-Reflexionen
+option.MIRROR_BOUNCES.comment=Spiegel im Spiegel spiegeln weiter (zwei Spiegel gegenüber: ein Gang aus Bildern). 1 = andere Spiegel erscheinen als Farbfläche.
+option.NEON_GLOW=Leucht-Schein
+option.NEON_GLOW.comment=Zusätzlicher Bloom-Schein um leuchtende Flächen (Lampen, glasierte Neon-Terrakotta von Emberlight PBR).
+option.CAUSTICS=Wasser-Kaustiken
+option.CAUSTICS.comment=Von den Wellen gebündeltes Sonnenlicht: tanzende Lichtmuster unter Wasser und an Wänden daneben (am stärksten bei Sonnenuntergang). 0 = aus.
+option.SSS=Volumenstreuung
+option.SSS.comment=Licht durch Blätter und Gras, wenn die Sonne dahinter steht, weiches Licht auf Schnee, Schleim und Honig. 0 = aus.
+option.ANISOTROPY=Nebel-Anisotropie
+option.ANISOTROPY.comment=Wie stark Nebel Licht nach vorn streut (heller Schein Richtung Sonne). 0 = in alle Richtungen gleich.
+option.AERIAL_PERSPECTIVE=Luftperspektive
+option.AERIAL_PERSPECTIVE.comment=Dunst über fernem Gelände, aus derselben Atmosphäre wie der Himmel. 0 = aus.
+option.UNDERWATER_RAYS=Lichtstrahlen unter Wasser
+option.UNDERWATER_RAYS.comment=Raytracing-Lichtschächte durch die Wellen unter Wasser (braucht volumetrisches Licht).
+option.SKY_QUALITY=Himmelsqualität
+option.SKY_QUALITY.comment=Schritte der Atmosphären-Berechnung: Himmel, Sonnenuntergänge, Mehrfachstreuung.
+option.SUN_INTENSITY=Sonnenhelligkeit
+option.MOON_INTENSITY=Mondhelligkeit
+option.MOON_INTENSITY.comment=Das Mondlicht folgt auch der Mondphase: Vollmond am hellsten, Neumond nur ein schwacher Schein.
+option.GOLDEN_HOUR=Goldene Stunde
+option.GOLDEN_HOUR.comment=Farbe der tiefen Sonne: 1 = die Rötung der Atmosphäre selbst, mehr = tieferes Orange, weniger = weißer.
+option.BLUE_HOUR=Blaue Stunde
+option.BLUE_HOUR.comment=Ozon, das den Dämmerungshimmel nach Sonnenuntergang blau hält. 0 = keins (orange-graue Dämmerung).
+option.POM=Parallax-Tiefe
+option.POM.comment=Parallax Occlusion Mapping aus den Höhenkarten des Ressourcenpakets (Emberlight PBR): Ziegel, Bruchstein und Bretter bekommen aus der Nähe echte Tiefe. Blendet mit der Entfernung aus (16 / 32 / 48 Blöcke).
+value.POM.off=Aus
+value.POM.low=Niedrig
+value.POM.high=Hoch
+value.POM.ultra=Ultra
+option.REFRACTION=Glas und Eis
+option.REFRACTION.comment=Hoch: Licht wird durch Glasblöcke, Eis, Schleim und Honig gebrochen (durch den Block verfolgt, nach seiner Dicke getönt, Totalreflexion) und in Eis, Schleim und Honig gestreut. Niedrig: dünne getönte Scheiben.
+value.REFRACTION.low=Niedrig
+value.REFRACTION.high=Hoch

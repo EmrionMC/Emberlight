@@ -5,6 +5,8 @@
 // comes from the ReSTIR passes (rtx/bl_restir_*.csh, run before the gbuffers on this frame's surfaces) through their
 // denoiser; this only looks it up for the fragment. RAYTRACING.md §32.
 
+uint emrBlMask() { return emrRt_blocklight_entities != 0 ? 0x07u : 0x03u; } // rtx/bl_common.glsl
+
 uniform sampler2D emrBlOutSampler;
 uniform sampler2D emrBlGSampler;
 const ivec2 EMR_BL_RING[8] = ivec2[8](ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1), ivec2(1, 1), ivec2(-1, 1), ivec2(1, -1), ivec2(-1, -1));

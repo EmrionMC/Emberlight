@@ -93,7 +93,9 @@ New package `dev.emrion.shaders.mod.rt`:
 - **Always rebuild, never refit:** a re-meshed section changes its vertex count and topology. A section BLAS is small (median
   of roughly 1–3 k triangles, about 10–50 µs on the GPU). Flags: `PREFER_FAST_TRACE | ALLOW_COMPACTION`. SOLID geometry gets
   `VK_GEOMETRY_OPAQUE_BIT_KHR`, so traversal skips the candidate loop. CUTOUT and TRANSLUCENT geometry does not.
-- **Budget.** At most N triangles per frame (default 2 M, about 1 ms). The rest waits for the next upload hook or the next
+- **Budget.** At most N triangles per frame (default 2 M, about 1 ms) and at most 400 BLAS per frame (`-Demrion.rt.blasPerFrame`;
+  each costs ~25 µs of CPU for sizes, allocation and creation, so a world join or RT switch-on with 2000+ sections took one
+  60 ms frame). The rest waits for the next upload hook or the next
   `levelStart`. A section without a BLAS yet is simply missing from the TLAS for a frame or two (no shadow there), which is
   invisible during normal play and acceptable during the initial load.
 - **Scratch:** one 64 MiB scratch buffer (aligned to `minAccelerationStructureScratchOffsetAlignment`) used as a ring inside a
@@ -795,9 +797,9 @@ Other effects add entities the same way: an `entities` option in their table ent
 - Hybrid + entities traces entities that the map already shadows: nearly the same image at extra cost. The option matters
   for Full mode.
 | Light sources: while MC compiles a section, every block with `getLightEmission() > 0` that is not buried (some neighbour is not solid-render and emits less, so the inside of a lava lake or a glowstone wall is dropped) is stored per section (position, level, "full block"). Collected only while an `RtScene` exists | `rt/RtLights`, `SectionCompilerMixin` (compile HEAD/RETURN, `getBlockState` wrap) |
-| Light grid, uploaded every frame at `levelStart` (cells recomputed only when the light set changed or the camera crossed a cell; header and camera-relative light positions every frame): 16 × 16 × 16 cells of 8 blocks (128 blocks on each axis around the camera). A light enters every cell its range (level blocks) reaches, at most 31 per cell (the strongest at the cell centre win), up to 4096 lights. Written into a host ring and copied into one device buffer (`EmrRtLights`, builtin `emrion_rt_lights`, 640 KiB), so one static descriptor serves every frame | `RtLights.upload` from `RtScene.buildTlas` |
+| Light grid, uploaded every frame at `levelStart` (cells recomputed only when the light set changed or the camera crossed a cell; header and camera-relative light positions every frame): 16 × 16 × 16 cells of 8 blocks (128 blocks on each axis around the camera). A light enters every cell its range (level blocks) reaches, at most 31 per cell (the strongest at the cell centre win), up to 4096 lights. Written into a host ring and copied into one device buffer (`EmrRtLights`, builtin `emrion_rt_lights`, 640 KiB), so one static descriptor serves every frame. A rebuild that took more than 4 ms (a lava sea: 16 k sources, ~1 M cell entries, 60-110 ms) makes the next one run on a worker (common pool) into a second set of lists that is swapped in when done; the frame keeps uploading the last complete lists meanwhile, so lights there appear a few frames late instead of every frame stalling. One rebuild at a time and none in the frame of a swap, so every list's remap maps the list uploaded before it; the GI change box does not count down while a rebuild is in flight. A recompile with the same lights does not trigger a rebuild | `RtLights.upload` from `RtScene.buildTlas` |
 | Patch: a new `after` patch kind in `RtPatcher` inserts a body after a statement inside a function (matched by tokens, exactly once, else "unavailable"). The `blocklight` effect patches the pack's `DoLighting` after `blockLighting = mix(specialLighting, blockLighting, blocklightDecider);` with `blockLighting *= emrRtBlockLight(playerPos, worldGeoNormal, lightmap.x);`. Before the held light, `XLIGHT_I` and the caustics, and covering both the floodfill and the vanilla term | `complementary-r5.json` effect `blocklight`, `rt/complementary/blocklight.glsl`, `blocklight_apply.glsl` |
-| Estimator: the pack's block light keeps its colours and falloff, and RT only removes light that a ray proves blocked. `P = (lightmap.x)³` is the weight of the pack's vanilla light level, `V = Σ wᵢ vᵢ` the visible and `B = Σ wᵢ (1 − vᵢ)` the blocked weight over the sources of the pixel's cell, with `wᵢ = ((level − max(L1 distance − 1, 0)) / 15)³` (the pack's steep lightmap curve; L1 because vanilla light falls one level per axis step, so `wᵢ` is on the same scale as `P`) and `vᵢ` = the visible share of the source, from alpha-tested shadow rays (mask 0x01, cutout alpha ≥ 0.1 at mip 0, lava never blocks) to fixed points on a disk facing the pixel (radius 0.45 for full blocks/lava, 0.15 otherwise; see Sampling). The removed share is `min(max(P − V, 0), B) / P`: a source sealed in rock (lava behind a wall, glowstone under the floor) never lit the point in the pack, so it changes nothing, and light no known source explains (entities) stays. The ray stops where it enters the source's block, so the emitter's own model never shadows itself; a source behind the surface (geometric normal) counts as blocked. Result `1 − (1 − ambient) · removed`, faded to 1 between 32 and 56 blocks from the camera (§20); cells with no source or a full cell (31 sources, beside a lava lake: the sources that light the point may be missing) keep the pack's light | `blocklight.glsl` |
+| Estimator: the pack's block light keeps its colours and falloff, and RT only removes light that a ray proves blocked. `P = (lightmap.x)³` is the weight of the pack's vanilla light level, `V = Σ wᵢ vᵢ` the visible and `B = Σ wᵢ (1 − vᵢ)` the blocked weight over the sources of the pixel's cell, with `wᵢ = ((level − max(L1 distance − 1, 0)) / 15)³` (the pack's steep lightmap curve; L1 because vanilla light falls one level per axis step, so `wᵢ` is on the same scale as `P`) and `vᵢ` = the visible share of the source, from alpha-tested shadow rays (mask 0x01, cutout alpha ≥ 0.1 at mip 0; lava blocks like any solid: it is in the solid BLAS, opaque geometry) to fixed points on a disk facing the pixel (radius 0.45 for full blocks/lava, 0.15 otherwise; see Sampling). The removed share is `min(max(P − V, 0), B) / P`: a source sealed in rock (lava behind a wall, glowstone under the floor) never lit the point in the pack, so it changes nothing, and light no known source explains (entities) stays. The ray stops where it enters the source's block, so the emitter's own model never shadows itself; a source behind the surface (geometric normal) counts as blocked. Result `1 − (1 − ambient) · removed`, faded to 1 between 32 and 56 blocks from the camera (§20); cells with no source or a full cell (31 sources, beside a lava lake: the sources that light the point may be missing) keep the pack's light | `blocklight.glsl` |
 | Sampling: the `rays` strongest sources at the pixel (by `wᵢ`) are traced; weaker ones, and any under 1/16 of `P`, are not traced and count as possibly visible (`removed = min(max(P − V − U, 0), B) / P`, U = untraced weight), so the choice is the same every frame. Tracing stops once `V ≥ P` (nothing can be removed). Each traced source is a disk facing the pixel with **16 fixed sample points** (12 on a ring at 0.77 radius, 4 at 0.3): the 4 ring points 90° apart first, the other 12 only where those 4 disagree (penumbra). An edge that misses all 4 cuts off at most 2 ring points (error ≤ 1/8). Lit and fully shadowed pixels cost 4 rays per source, penumbra pixels 16. Nothing varies per frame or pixel. History: the first version drew sources stochastically from the weight CDF (flicker 0.311 vs 0.142 without RT block light, room scene, static camera, unpinned time, mean absolute frame-to-frame luma difference); then one ray per source to a point jittered by interleaved gradient noise rotated by `frameCounter` (0.153): the pack's TAA did not hide it, and the user saw a grainy, cross-hatched band along every block-light shadow edge that changed every frame. Euclidean `wᵢ` broke pillar shadows in the middle: behind an occluder the vanilla flood takes a detour, `P` drops faster than the Euclidean weight of a farther visible source, and `V ≥ P` switched the shadow off part of the way out. | |
 | Options: `rays` (default 4), `ambient` (0.15, the share of block light kept in full shadow: the floodfill's bounce stand-in). Config `rt.blockLightRays` (0 = off, default off), button "RT block light: OFF / 2 / 4 / 8 rays" and status line on the Emberlight RT page. Autotest `rt …+light` | `RtConfig`, `RtOptionsScreen`, `AutoTest` |
 | Scene `mod/emrion-blocklight-scenes.txt`: cave (as in the RT scenes) and `room`: a stone-brick room with two pillars and torches behind them, a hanging and a standing lantern, a wall torch, a lava pool, iron bars and a fence | |
@@ -896,7 +898,7 @@ changed; `TargetPackRtTest.rtxStyleConvertsAndFaithfulHasNoRtxCode`). RTX code l
 |---|---|---|
 | Coloured sunlight through glass | `shadows` variant `rtx` (`rtx/shadows.glsl`) | Shadow rays also see translucent terrain (mask 0x02; translucent BLAS geometry is `NO_DUPLICATE_ANY_HIT`, so each face tints once) and multiply the colour of every face they pass: the texel's hue (normalised to its brightest channel, `saturation` 1.5) weighted by alpha × `glass` (1.6). Water is skipped; its colour and caustics come from the map, which is used only where no glass coloured the ray. Sun cone `sun` = 0.03 rad (penumbra hard at the contact, wider with distance), at least `minRays` = 4 stratified rays per pixel, accumulated by the pack's TAA. Entity shadows always on. |
 | Block lights as real lights | `blocklight` variant `rtx` (`rtx/blocklight.glsl`), `RtLights`, `LightColors` | Builds on the pack's block light (vanilla light plus coloured floodfill, so its colours and brightness stay). Per channel, the factor is S / U × `strength` (1.8), clamped to [`ambient` 0.15, `strength`]. U is the light the known sources give without shadows or facing. S is the same with wrapped N·L, shadows (the `rays` strongest sources, 8 fixed ring points at `size` 1.6 × the source radius, 4 first and 4 more only in penumbrae; no noise) and the colour of glass it passes (hue only). Source colours come from a table by block name (dyed candles by dye), stored as RGB555 in the section light list and uploaded after the 4096 light positions, squared because the pack adds block light before a square root. Light blocks, cells without sources and the translucent programs (glass, water) keep the pack's light. |
-| Block-light GI, glass in GI, more bounces | `gi` variant `rtx` (`rtx/gi_*.csh`, `rtx/gi_common.glsl`, `rtx/gi_apply.glsl`) | A third channel C (4 more RGBA16F images) carries bounced block light. GI rays pass glass, tinted (up to 4 glass hits per ray, applied only in front of the closest opaque hit). The hit is lit by one block light chosen by weight, with a shadow ray, glows if it lies inside a light block, and adds last frame's GI at that point (history reprojection, × `bounce` 0.85), which gives multiple bounces. Sky seen through glass goes into B. The gbuffers add C × `10 · lum(blocklightCol) · blockStrength` (4) to `blockLighting`. Same temporal and à-trous filter as Faithful GI. |
+| Block-light GI, glass in GI, more bounces | `gi` variant `rtx` (`rtx/gi_*.csh`, `rtx/gi_common.glsl`, `rtx/gi_apply.glsl`) | A third channel C (4 more RGBA16F images) carries bounced block light. GI rays pass glass, tinted (up to 4 glass hits per ray, applied only in front of the closest opaque hit). The hit is lit by one block light chosen by weight, with a shadow ray (nothing on a light block's own face, §37), and adds last frame's GI at that point (history reprojection, × `bounce` 0.85), which gives multiple bounces. Sky seen through glass goes into B. The gbuffers add C × `10 · lum(blocklightCol) · blockStrength` (4) to `blockLighting`. Same temporal and à-trous filter as Faithful GI. |
 | Material table | effect `materials` (`rtx/materials.glsl`, bare patch after the specular read in `GetCustomMaterials`, gbuffers_terrain) | labPBR mode only (`RP_MODE=3`, the user's setting) and only where the specular map is empty (no labPBR resource pack). A table by pack block id gives perceptual smoothness and F0 / metal id: iron 0.65 (labPBR 230), gold 0.75 (231), copper 0.62 (234), netherite 0.45 as a dark albedo metal (255), so metals reflect in their own colour; obsidian 0.82, ice 0.92, diamond/emerald 0.85, glazed terracotta 0.75, amethyst/lapis/redstone 0.7, quartz 0.6, polished stone 0.58. All dielectrics use F0 0.04. The pack's own PBR reflection and highlight code does the rest, and a labPBR pack's maps always win. Concrete and smooth stone are left out (barely visible, a full-screen reflection pass in the glass room: +3 ms). IPBR mode keeps the pack's own table. |
 | Light shafts | effect `shafts` (composite1) | `GetVolumetricLight` × `strength` 2.5. The pack's shafts already follow the shadow map and take the glass colour from `shadowcolor1`, and the map is exact at this range, so an RT ray per volume step (20+ per pixel) would cost several ms for no visible gain. Not RT-traced. |
 | No glass refraction | request `refraction:glass=0` | RT refraction bent the view through stained glass by its normal map: jagged spikes over whatever is behind. Water still refracts. |
@@ -1603,6 +1605,18 @@ without the alpha test in that check removed them (a wider depth window did not)
 triangles as coverage. Why the entity alpha test fails along edges the rasteriser drew is not known (entity atlas UVs
 look right).
 
+**Squid outline, again (user F9 snapshots 2026-11-16 18-26-02, 18-27-16, 18-28-02):** broken tentacles (thin dark
+slivers beside them) and a "frame seen through the body" (an L-shaped edge inside the squid's top face), same on fish.
+A debug view of the straight-check failures (red) showed bands about one render pixel wide along every mob's raster
+silhouette, with ticks frozen (so not a stale BLAS: the logged BLAS bounds matched the summon positions). Cause: the check
+traced along the fragment's view direction `d = playerPos / |playerPos|`, which the pack computes with the TAA jitter
+removed, while `depthtex1` holds what the rasteriser drew with the jittered projection (DLSS or the pack's TAA). Along a
+mob's edge the unjittered ray passes beside it and the floor lies far beyond `tsMax`, so the pixel fell back to the
+unrefracted image. Terrain edges rarely showed it because the floor behind a step is within the margin. This was also
+the unexplained "alpha test fails along edges" above. The check now traces through the drawn point itself
+(`emrRtRfBehind()`: `depthtex1` unprojected with the jittered `gbufferProjectionInverse`). Test: pool with NoAI squid,
+glow squid, axolotl, cod, salmon and tropical fish, DLSS Quality, frozen and live: no lines, no inner frame.
+
 **Cheaper without changing the image? (`perf/refraction`, 2026-11-16).** Deep pose 14-41-55, user's config, translucent pass
 GPU time (`-Demrion.autotest.profile=true`), mean of 2 × 6 s, every variant in the same session; register counts from
 `-Demrion.debug.pipelineStats=true` (BENCHMARK.md). Refraction on: 12.6 ms, off: 1.8–3.0 ms.
@@ -1702,3 +1716,299 @@ same near-hit rule in its new single-pass form (trace on behind a near committed
   the ground, the canopy, low sun and the overview: never reached; 8 candidates are common, so the probe worked).
 - Not done: skipping the terrain-only TLAS build before the shadow pass's entity refresh (0.20 ms) needs the plan to prove
   no pass reads the TLAS in between.
+
+## 36. RTX block light: emitters set flush into a surface (`fix/lava-light`, 2026-11-16)
+
+**Bug.** A cave lit only by a lava pool in its floor was much darker with RTX than RT off (frame luma 20.1 vs 31.5). The
+pool's top (8/9 of a block) lies just below the floor, so every lava centre sat half a block behind the floor plane: U
+(§23 gate open, nothing in front explains the light) counted the whole pool, but S was ~0, since every shadow ray dipped into
+the floor. Same for any full-block vanilla emitter flush with a surface: glowstone in a wall, sea lanterns or magma in a floor.
+Not the cause: lava's colour/power (vanilla, power 1), cell caps (the full list has none), lava in shadow rays (lava is opaque solid-BLAS geometry, so it does block them,
+but the ray ends where it enters the source's block, so a pool's own lava never shadows its light; the `id == lava` skips in
+the ray loops never ran and were removed in `fix/codex-rt`).
+
+**Fix** (`rtx/bl_common.glsl emrBlSourceAt`, `emrBlOpen`, `rtx/bl_restir_a.csh`). A full vanilla emitter whose centre is
+0.05-0.7 behind the receiving surface lights it like a pack-only ore does: from the air half a block in front of its block's
+nearest point, with a disk of radius 0.45 (0.28 x 1.6) so it stays in front of the surface. In U such a "flush" source is gated
+by the sources in front (§23 rule), not added in full: a flush emitter in the next room's floor, behind a wall, darkened the
+torch hall's floor by up to 15 % (frame -3 %). It does explain the lightmap for sources further behind: the test pool's lava
+falls on below the floor, and those blocks, gated in, dimmed the floor again (lava frame 29.6 -> 25.6).
+
+**Measured** (test server, user config: RTX, GI high, full shadows, AO, block light 4, DLSS Q; frame mean luma, RT off /
+before / after with RR / after without RR; scratch folder `lavalight/`):
+
+| View | RT off | before | after (RR) | after (no RR) |
+|---|---|---|---|---|
+| lava cave, video shot key 1 | 31.5 | 20.1 | 29.4 | 29.5 |
+| lava cave, key 2 | 36.3 | 26.6 | 33.9 | 34.0 |
+| sea lantern floor + magma (new room, x 1446-1468 y 150-162) | 27.6 | 18.1 | 27.2 | 27.4 |
+| glowstone wall (new room, x 1420-1442 y 150-162) | 19.3 | 25.3 | 36.5 | 37.6 |
+| torch hall 13-28-25 | 65.3 | 65.3 | 65.6 | 65.5 |
+| hall 14-38-35 | 31.7 | 38.1 | 38.3 | 38.6 |
+| repeater rows 14-38-57 | 43.0 | 38.4 | 39.2 | 39.6 |
+
+The wall around the glowstone went from 32 to 50 (RT off 55). The glowstone room as a whole is too bright, already before
+(+31 %): with RTX GI's block bounce off (`gi=off` or `gi:blockStrength=0`) it is 21.5 (+11 %), so the excess is GI's bounce
+and glow from a 45-block emitter wall (`gi:blockStrength` 2.5 was fitted on halls with point lights); not changed here.
+
+## 37. RTX GI: emitter walls and floors no longer over-light the room (`fix/gi-emitter-walls`, 2026-11-16)
+
+**Bug.** The glowstone-wall room (45 glowstone blocks in a brick wall) was +96 % brighter than RT off (frame 37.1 vs
+18.9); with GI's block bounce off it is +11 %. Ablations on the bounce hit (`rtx/gi_common.glsl emrGiBlockLight`), glowstone
+room: the light block's own glow (`gi:glow` 2.0) and the light "arriving" at a light block's face made up 12 of the 18 luma
+too many, the summed light of 45 sources at ordinary wall and floor hits most of the rest.
+- *Glow at a hit on a light block:* a second estimate of direct light. RTX block light (ReSTIR, §32) lights every surface from
+  every emitter already; GI hitting the emitter added it again, scaled by the solid angle the emitter covers, so it grew with
+  the emitter's area and lit the side walls 10–20 blocks away (RT off: dark).
+- *Light arriving at a light block's face:* since §36 a full emitter flush with a surface lights it from the air in front,
+  and that includes the emitter's own face and its neighbours in the same wall or pool. Each glowstone or lava face then
+  reflected roughly its own brightness again, a third copy of the emission.
+- *Many co-located sources:* the bounce sums every source's unshadowed weight, but the pack's brightness follows vanilla
+  light, the max over sources. 45 glowstones in one wall light a floor point 10 blocks away about like one block at 2 blocks.
+
+**Fix.** A bounce hit on a vanilla light block (its face or a torch's model) adds nothing; the glow term and the `gi:glow`
+option are gone. At other hits, full-block vanilla emitters (glowstone, lava, sea lantern, magma, lamps; the ones that
+tile into walls, floors and pools) count as the strongest of them (`emrBlPick` returns their max and sum; the drawn sample is
+scaled by max / sum when it is one of them, which keeps the estimator unbiased for that target). Torches, lanterns and the
+pack-only sources are summed as before (`gi:blockStrength` 2.5 was fitted on that; pack-only floodfills do add up in the pack).
+No new constant; `gi:blockStrength` 3 was tried (torch hall 0 %, but hall, stems, ore cave 2–4 points further off).
+
+**Measured** (test server, user config: RTX, GI high, block light 4, 2560x1440; the dev runs upscale with FSR 3 from 1706x960,
+not DLSS; frame mean luma vs RT off, and
+the mean absolute error against RT off on an 8x8-downsampled frame; scratch folder `giwall/`, run `g`):
+
+| View | RT off | before | after | MAE before / after |
+|---|---|---|---|---|
+| glowstone wall (x 1420-1442) | 18.9 | 37.1 (+96 %) | 21.4 (+13 %) | 18.9 / 4.8 |
+| sea lantern + magma floor (x 1446-1468) | 27.2 | 27.0 (−1 %) | 23.4 (−14 %) | 6.2 / 4.0 |
+| lava cave, key 1 | 31.1 | 29.6 (−5 %) | 23.9 (−23 %) | 7.6 / 7.2 |
+| lava cave, key 2 | 35.9 | 34.6 (−4 %) | 28.8 (−20 %) | 7.7 / 7.2 |
+| torch hall 13-28-25 | 64.6 | 64.9 (+0 %) | 63.0 (−3 %) | 14.2 / 13.9 |
+| hall 14-38-35 | 31.3 | 38.2 (+22 %) | 36.7 (+17 %) | 9.2 / 8.7 |
+| repeater rows 14-38-57 | 42.5 | 39.1 (−8 %) | 36.5 (−14 %) | 7.6 / 7.8 |
+| stems room (§32) | 18.4 | 23.1 (+25 %) | 21.2 (+15 %) | 4.7 / 2.9 |
+| ore cave (§32) | 35.7 | 41.2 (+15 %) | 41.1 (+15 %) | 6.4 / 6.3 |
+
+The lava cave and the sea-lantern room were right on average before only by cancelling errors: the emitter's GI copies lit
+the ceiling and back walls far above RT off (lava top third 26.0 vs 18.2, now 13.4; sea 22.7 vs 14.0, now 13.3) while the floor
+around the pool stays darker than RT off with or without GI (lava bottom third 31.0 RT off, 24.6 before, 23.6 after). That
+floor deficit is direct light, not GI: a floor point sees a source flush in the same floor at a grazing angle (wrapped N.L
+about 0.4), where the pack's light has no direction. Open: that floor deficit (frame −20 % in the lava cave); the repeater
+rows lose 3 points (their full-block lamps now count as one).
+
+*Flush floors (2026-11-16, same branch).* The floor deficit around flush emitters is fixed in direct light: a floor or
+ceiling receiver of a flush emitter (`emrBlSourceAt`'s shrunk disk) takes N.L at least `EMR_BL_FLUSH_NDL` 0.6
+(`rtx/bl_common.glsl emrBlWeight`, so ReSTIR, the gbuffers' fallback and GI's bounce hits agree). It saw the source at a grazing
+angle (wrapped N.L about 0.4), where the pack's light has no direction. Walls are left out: the glowstone wall's own surface
+was already brighter than RT off (centre third 41 vs 36), and the same floor on walls took the room to +20 %. 0.6 is fitted on
+three new single-block cells (9x9 white concrete, x 816-850 y 149-156 z 699-711: lava, glowstone, sea lantern flush in the floor;
+camera x+0.5 153 700.6, yaw 0, pitch 45); 0.7 overshot them by 5-11 %, 0.5 left the lava cave at -18 %. Tried and dropped:
+counting only touching full emitters as a cluster (a CPU flag per source): no change anywhere, the repeater view's lamps touch.
+
+Same views, frame mean vs RT off (before = `266e072`, first §37 commit `013e83f`, now) and pixel error (8x8 mean abs, luma):
+
+| View | RT off | before | 013e83f | now | error before / now |
+|---|---|---|---|---|---|
+| lava cave, key 1 | 30.8 | 29.6 (−4 %) | 23.7 (−23 %) | 26.8 (−13 %) | 7.7 / 4.2 |
+| lava cave, key 2 | 35.2 | 34.6 (−2 %) | 28.0 (−20 %) | 30.4 (−14 %) | 8.3 / 5.0 |
+| glowstone wall | 18.9 | 37.1 (+96 %) | 21.4 (+13 %) | 21.4 (+13 %) | 18.9 / 4.8 |
+| sea lantern + magma floor | 27.2 | 27.0 (−1 %) | 23.5 (−14 %) | 26.6 (−2 %) | 6.2 / 0.9 |
+| torch hall 13-28-25 | 64.6 | 64.9 (+0 %) | 63.0 (−3 %) | 63.0 (−3 %) | 14.2 / 13.9 |
+| hall 14-38-35 | 31.4 | 38.2 (+22 %) | 36.7 (+17 %) | 36.8 (+17 %) | 9.3 / 8.8 |
+| repeater rows 14-38-57 | 42.5 | 39.1 (−8 %) | 36.5 (−14 %) | 36.5 (−14 %) | 7.6 / 7.8 |
+| stems room | 18.4 | 23.1 (+25 %) | 21.2 (+15 %) | 21.2 (+15 %) | 4.7 / 2.9 |
+| ore cave | 35.7 | 41.2 (+15 %) | 41.1 (+15 %) | 41.2 (+15 %) | 6.4 / 6.3 |
+| cell: torch | 71.3 | | 73.0 (+2 %) | 73.0 (+2 %) | |
+| cell: flush lava | 72.1 | | 64.3 (−11 %) | 71.6 (−1 %) | |
+| cell: flush glowstone | 72.9 | | 68.2 (−7 %) | 76.3 (+5 %) | |
+| cell: flush sea lantern | 74.5 | | 68.5 (−8 %) | 76.9 (+3 %) | |
+
+Open: the lava cave's walls and ceiling (top third 13.4 vs 18.1 RT off, short mostly in red; the same with GI's block bounce
+off, and N.L does not move it): not flush geometry, probably the pack's extra lava light (`LAVA_ACT_ALPHA` 0.8, a strong red
+floodfill) against RTX's plain vanilla lava. The repeater rows' −14 % comes from the touching full-block emitters counting as
+one at GI bounce hits (−8 % before); their pixel error is unchanged (7.6 / 7.8).
+
+*Lava (2026-11-16, same branch).* After the flush fix the lava cave was still −13 % (key 1), its walls and ceiling −21 to
+−27 %, losing the orange glow on the pool's far walls, the pillar fronts and the chest (surfaces facing away from the pool or
+in its shadow; RT off lights them through the pack's floodfill, RTX only through GI's bounce). Two causes:
+- *The cluster rule took lava's bounce away.* It is right for emitters the pack lights like vanilla (the max over sources), but
+  the pack gives lava extra coloured light (`blocklightColorsACT.glsl`: `LAVA_ACT_ALPHA` 0.8, magma 0.1; glowstone, sea lantern,
+  lamps and torches 0) and its floodfill sums that over every block of a pool. Sources the pack sums are left out of the cluster
+  rule (`LightColors.packSums`, marked by source radius 0.44 in the full list, `RtLights`). Swept first with a temporary knob
+  (lava cave key 1, top third): rule on −10 % / −21 %, half −6 % / −11 %, off −3 % / −3 %; the glowstone room needs it on
+  (+13 % on, +32 % off), which the pack's alpha separates. The alpha is hard-coded like the pack-only sources' alphas next to it;
+  a lift does not reach it (a global initialiser behind an `#ifdef`, outside the GI pass's stage).
+- *Lava lit from its block centre*, half a block below the floor: rays from the walls to it crossed the floor's lip at shallow
+  angles. It now lights from its surface, 8/9 up its block (top third −27 → −21 % with the rule still on).
+The pack's colour and strength for lava need nothing: RTX multiplies the pack's own light (floodfill included) by S / U, in which
+a source's colour and power cancel.
+
+Final table, DLSS Quality with Ray Reconstruction (the scratchpad `rr/dlss` libraries via `-Demrion.upscale.dlssDir`; the runs
+above were FSR 3), frame mean and top third (walls, ceiling) against RT off, pixel error (scratch folder `giwall/`, run `n`):
+
+| View | RT off | now | top third RT off / now | error |
+|---|---|---|---|---|
+| lava cave, key 1 | 31.3 | 30.3 (−3 %) | 18.5 / 18.0 (−3 %) | 2.9 |
+| lava cave, key 2 | 35.7 | 33.9 (−5 %) | 20.5 / 19.7 (−4 %) | 3.4 |
+| glowstone wall | 19.3 | 21.8 (+13 %) | 24.9 / 24.8 | 4.8 |
+| sea lantern + magma floor | 27.6 | 27.2 (−1 %) | 14.3 / 13.9 | 0.9 |
+| torch hall 13-28-25 | 65.3 | 63.9 (−2 %) | 39.0 / 45.6 | 13.9 |
+| hall 14-38-35 | 31.7 | 37.0 (+17 %) | 23.9 / 33.0 | 8.8 |
+| repeater rows 14-38-57 | 43.0 | 36.8 (−14 %) | 34.6 / 32.2 | 8.0 |
+| stems room | 18.8 | 21.8 (+16 %) | 22.3 / 25.8 | 3.0 |
+| ore cave | 36.3 | 42.2 (+16 %) | 18.2 / 26.0 | 6.7 |
+| cell: torch | 72.0 | 74.3 (+3 %) | | 6.8 |
+| cell: flush lava | 72.7 | 75.9 (+4 %) | | 4.7 |
+| cell: flush glowstone | 73.6 | 77.6 (+5 %) | | 5.3 |
+| cell: flush sea lantern | 75.1 | 78.1 (+4 %) | | 5.1 |
+
+Against the flush-floor state under DLSS + RR (same views): glowstone, sea, torch hall and the glowstone / sea cells within
+0.2 points; the lava cell +3.2 (the surface lift). The hall, stems room and ore cave are as they were before §37 or better
+(+22, +25, +15 %).
+
+## 38. Snapshot fixes: caustics on walls, block-entity torch shadows, ice, portal reflections (`fix/snap-world`, 2026-11-16)
+
+From the user's F9 snapshots of 2026-11-16, replayed with the `snapshot` step on the test server.
+
+- **Caustics striped across riverbed walls** (18-10-20, "von der Seite komisch abgeschnitten"). The RT caustic
+  (`caustics.glsl`) is the light pattern on the receiver; on a face the sun grazes it is that pattern smeared along the
+  light, and the pack still lights such a face (its side shading, N.L + 0.4), so the walls of every step facing away from
+  the sun azimuth showed bright diagonal stripes cut off at each block edge. The caustics effect now also patches the pack's
+  `DoLighting` (`caustics_ndotl.glsl`: the receiver's geometric N.L) and fades the caustic contrast out between N.L 0.5 and
+  0.15. Top faces and walls facing the sun keep it. The effect is limited to the Overworld and the End (the Nether's
+  programs have `DoLighting` but no shadow functions).
+- **Block entities cast no shadow from torches** (20-05-55). Chests, signs, beds and the other block entities were already in
+  the TLAS (mask 0x04, with the entities, §14) and cast sun shadows with *Entity shadows*, but RTX block-light visibility rays
+  (`rtx/bl_common.glsl emrBlTransmit`) traced terrain only (0x03). With *Entity shadows* on, the request now carries
+  `blocklight:entities` and the rays trace 0x07 (entities alpha-tested in their own atlas). The GI's block light at a
+  bounce stays terrain-only (`emrBlMask`, defined by each includer).
+- **Dark triangles in sea ice** (20-13-45/53). Translucent surfaces are never GI surfaces (the GI primary traces 0x05), so an
+  ice sheet pixel took the nearest GI texel facing the same way from `rtx/gi_apply.glsl`'s fallback ring, within
+  0.5 + 0.25 d along the view ray: next to an iceberg that was the GI of its steps above and of the sunken ones below,
+  in triangles where one ring sample matched and the next did not; it changed as soon as the camera moved. The ring now also
+  requires the texel to lie in the receiver's plane (within 0.6 + 0.01 d blocks).
+- **Nether portal missing from reflections** (20-31-41). Reflection rays traced solid and cutout terrain only; the portal is
+  translucent and was never in the pack's reflection voxels either. `emrRtReflHit` now traces 0x03 and accepts, of the
+  translucent hits, only the portal (block id 30020), which `refl_trace.glsl` shades as its own glow (the pack's
+  `netherPortal.glsl` colour curve, emission set to sit a little below the portal seen directly).
+
+Measured (test server, 2560x1386, the user's snapshot config: RTX, DLSS Quality + frame generation, block light 8 rays): a closed
+stone room with 190 chests and 15 torches, rendered FPS 84.3 with *Entity shadows* (torch shadows of the chests) and 84.5
+without (20 s each, same run). The calibration snapshots (torch hall 13-28-25, hall 14-38-35, cold ocean 14-41-55) differ
+from the unpatched build by chat overlay, torch flicker and kelp sway only (MAE 0.5-1.6).
+
+## 39. RTX GI radiance cache (`feat/sharc`, 2026-11-17)
+
+A world-space radiance cache for the RTX GI after NVIDIA's SHaRC ("Spatially Hashed Radiance Cache", RTXGI SDK). The algorithm
+is reimplemented in our GLSL; no SDK code is used. Option *GI radiance cache* on the RT page (`rt.giCache`, request
+`gi:cache`, RTX style with GI on only), **default on**.
+
+**How it works** (`rtx/gi_cache.glsl`, `gi_cache_update.csh` = `prepare_j`, `gi_cache_resolve.csh` = `prepare_k`):
+- A hash grid of 2^20 entries (`emrGiCk` check hashes, `emrGiCs` this frame's fixed-point sums, `emrGiCr` resolved light;
+  about 68 MB). Key: voxel of `cacheVoxel` 0.5 blocks up to `cacheNear` 16 blocks from the camera, doubling twice with
+  distance (at most 2 blocks, so one-block walls never share a voxel with both sides), block-aligned, plus the face direction.
+  Linear probing over 8 slots; insert by `imageAtomicCompSwap`.
+- Update: one short path per 8x8 render pixels (random pixel each frame). From the camera's surface two cosine bounces; each
+  of the two vertices gets one sample of the light arriving there (direct sun, sky lightmap and one block-light draw, plus
+  `cacheBounce` x what its own bounce brought back); the third hit takes its light from the cache. So bounces accumulate
+  over frames, also off screen. Same units as the GI channels (A sun, B sky, C block light).
+- Resolve: per entry, this frame's samples are blended into at most `cacheFrames` 32 frames of history; entries without a
+  sample for `cacheStale` 96 frames are evicted.
+- Use: `gi_trace.csh`'s bounce hit (`emrGiBounceRtx`) takes the cached light times its own albedo where the voxel has
+  `cacheMin` 4 samples, instead of its shadow ray, block-light ray and last frame's screen-space GI. Not for hits closer
+  than the voxel (corners would average light from behind the ray), not inside RtLights' light-change box.
+- Lights placed or removed: inside the change box the trace skips the cache, and a sample from there makes the resolve
+  drop the entry's history (the WIP version kept 3 frames of it, which left a fading copy of a removed torch).
+
+**Review of the paused WIP (b694062).** Sound overall. Changed: the change-box history drop above; `cacheBounce` as its own
+option (the WIP reused `gi:bounce` 0.85, see calibration); GUI tile, docs, converter version.
+
+**Calibration.** With the cache's bounce at 0.85 the views were 1-4 points brighter than without (hall +17 -> +21 %, ore
+cave +16 -> +20 %, cells +3..5 -> +6..9 %; torch hall and repeater rows closer to RT off), sum of the pixel errors 74.6 ->
+78.5. Swept `cacheBounce` (frame mean vs RT off, DLSS Quality + RR, 2560x1440, scratch folder `sharc/`, runs `ab`, `d`):
+
+| View | RT off | cache off | 0.85 | 0.5 | **0.25** | 0 |
+|---|---|---|---|---|---|---|
+| lava cave, key 1 | 31.3 | −4 % | −3 % | −4 % | −5 % | −5 % |
+| lava cave, key 2 | 35.7 | −7 % | −7 % | −7 % | −8 % | −8 % |
+| glowstone wall | 19.3 | +14 % | +13 % | +14 % | +13 % | +13 % |
+| sea lantern + magma floor | 27.6 | −1 % | −1 % | −1 % | −2 % | −2 % |
+| torch hall 13-28-25 | 65.3 | −2 % | +1 % | −1 % | −2 % | −3 % |
+| hall 14-38-35 | 31.7 | +17 % | +21 % | +19 % | +18 % | +16 % |
+| repeater rows 14-38-57 | 43.0 | −14 % | −9 % | −12 % | −14 % | −15 % |
+| stems room | 18.8 | +16 % | +17 % | +16 % | +14 % | +14 % |
+| ore cave | 36.3 | +16 % | +20 % | +17 % | +15 % | +13 % |
+| cell: torch | 72.0 | +3 % | +6 % | +4 % | +3 % | +2 % |
+| cell: flush lava | 72.9 | +4 % | +6 % | +5 % | +4 % | +3 % |
+| cell: flush glowstone | 73.8 | +5 % | +9 % | +7 % | +5 % | +4 % |
+| cell: flush sea lantern | 75.3 | +4 % | +7 % | +5 % | +4 % | +3 % |
+| sum of pixel errors (8x8) | | 74.6 | 78.5 | 75.8 | 72.8 | 72.6 |
+
+`cacheBounce` 0.25: every view within 1 point of the cache-off numbers, no new constant elsewhere (`gi:blockStrength`
+unchanged). DLSS Quality without RR (run `h`): cache on/off within 1 point in every view, too. The Nether renders the same
+with and without it.
+
+**Noise** (static view, 8 frames 0.2 s apart, ticks frozen; mean per-pixel luma std over time, full resolution / 4x4
+blocks; run `i`, DLSS Quality + RR):
+
+| View | RT off | cache off | cache on |
+|---|---|---|---|
+| torch hall | 0.23 / 0.05 | 0.28 / 0.17 | 0.23 / 0.10 |
+| hall | 0.22 / 0.05 | 0.19 / 0.11 | 0.15 / 0.07 |
+| stems room | 0.22 / 0.05 | 0.15 / 0.09 | 0.14 / 0.08 |
+| ore cave | 0.23 / 0.05 | 0.22 / 0.13 | 0.22 / 0.13 |
+| cell: flush lava | 0.21 / 0.06 | 0.12 / 0.07 | 0.11 / 0.06 |
+
+The cache takes out a third to 40 % of the low-frequency GI shimmer where bounce light matters (torch hall, hall), and
+changes nothing measurable elsewhere. RR still gets per-pixel noisy GI (the primary bounce rays stay per pixel); only the
+bounce hit's light is cached.
+
+**FPS** (`gpu.sh exclusive`, 2560x1440, DLSS Quality + RR, GI high, 20 s each, two repeats, avg / 1 % low):
+
+| View | cache off | cache on |
+|---|---|---|
+| hall 14-38-35 | 63.9 / 46.2, 67.6 / 51.2 | 67.0 / 51.4, 68.7 / 48.0 |
+| stems room | 93.5 / 72.0, 92.3 / 68.4 | 93.8 / 78.7, 92.7 / 77.8 |
+| lava cave | 54.8 / 47.4, 55.4 / 48.7 | 55.4 / 44.6, 56.1 / 48.1 |
+| outdoors (580 75 590) | 78.3 / 66.1, 77.9 / 65.8 | 77.8 / 65.8, 77.5 / 65.3 |
+
+Equal within the run-to-run spread (the hall +2-5 %): the update paths cost about what the skipped shadow and
+block-light rays at cached bounce hits save.
+
+**GI lag** (torch placed / removed in the lava cell, every frame recorded, two repeats each): time to 50 % / 90 % of the
+change after the `setblock` was sent: placed 354-429 / 1463-1496 ms without, 371-425 / 1388-1499 ms with the cache; removed
+145-165 / 730-797 ms without, 162-169 / 808-840 ms with. Same within the network jitter. Motion (turn 1.5 degrees per
+frame for 40 frames, hall and stems room): the last frames differ by 0.55 / 0.21 mean luma, no trails either way. No
+light leaking through walls seen in the crops (hall, cells, ore cave).
+
+## Presets (`rt/RtPreset`, 2026-11-16)
+
+The RT page has a preset row: **Low / Medium / High / Ultra**, plus *Custom*, which lights up as soon as an option no longer
+matches a preset. A preset sets only the `rt.*` quality keys; `rt.enabled` and `rt.omm` stay as they are. `rt.preset` is
+written next to them for information only: on load, the preset is derived from the values.
+
+| Preset | style | shadows | GI | block light | AO | reflections | refraction | caustics | trace distance | upscaler on first start |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Low | faithful | hybrid, 1 ray, no entities | off | off | off | on | off | off | 8 chunks | Performance |
+| Medium | rtx | full, 4 rays | low | Low (2) | off | on | off | off | 12 chunks | Balanced |
+| High | rtx | full, 4 rays | medium | Low (2) | on | on | off | on | 16 chunks | Quality |
+| Ultra | rtx | full, 4 rays | high | Low (2) | on | on | on | on | render distance | Quality |
+
+**First start:** when `config/emberlight.properties` has no `rt.enabled`, the GPU picks a preset (`RtPreset.TABLE`: vendor ID
+plus a regex on the device name; unknown RT GPUs by VRAM, at most High; laptop parts one tier lower; under 8 GB or integrated:
+Low; no ray query: RT stays off). If no upscaler was ever chosen, it also turns on DLSS (NVIDIA) or FSR (others) at the
+preset's upscaling level. Then it saves everything, so this runs only once. Autotests skip it unless `-Demrion.rt.autoPreset=true`.
+Script step: `rtset preset=high[,key=value...]`.
+
+Calibration: RTX 4070 Ti, 2560×1386, DLSS Quality, frame generation off, Unbound + Euphoria with the test instance settings,
+15 s per bench (avg FPS / 1% low):
+
+| Scene | Ultra | High (with refraction, r1) | Medium | Low | RT off |
+|---|---|---|---|---|---|
+| torch hall (snapshot 13-28-25) | 68.7 / 27.9 | 107.8 / 85.4 | 112.2 / 69.5 | 142.3 / 28.9 | 193.1 / 45.1 |
+| shallow water (snapshot 14-41-55) | 27.8 / 25.7 | 30.8 / 28.1 | 62.5 / 54.1 | 122.1 / 85.8 | 117.3 / 99.8 |
+| forest (scene `forest`) | 76.1 / 60.7 | 94.1 / 81.7 | 100.1 / 88.4 | 168.7 / 139.8 | 170.9 / 141.1 |
+
+Over water, refraction is the expensive option. High in water: 30.8 FPS, without refraction 48.9, without caustics 37.1,
+with GI Low 31.3; Medium with refraction 38.5 against 60.4 without. So High leaves refraction off and only Ultra has it. That
+puts the 4070 Ti (High) at about 50 FPS or more in all three scenes. Ultra is for the RTX 4080/4090/5080/5090 class.

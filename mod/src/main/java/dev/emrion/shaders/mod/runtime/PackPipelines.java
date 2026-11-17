@@ -18,6 +18,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import org.jspecify.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -52,11 +53,24 @@ public final class PackPipelines {
 	public dev.emrion.shaders.mod.vk.RawBuffer defaults;
 
 	private final VulkanContext ctx;
+	/** Pack programs built so far and to build in the running foreground build (one at a time, on the pack loader): the loading panel's x/y. */
+	public static final java.util.concurrent.atomic.AtomicInteger BUILT = new java.util.concurrent.atomic.AtomicInteger(),
+			TOTAL = new java.util.concurrent.atomic.AtomicInteger();
+	/** The build stops once this is true (null: never). */
+	private final java.util.function.@Nullable BooleanSupplier cancelled;
+	/** False: a foreground build (all cores, counts {@link #BUILT}); true: a background build (2 low-priority threads). */
+	private final boolean background;
 
 	/** {@code vanilla}: every vanilla pipeline that may draw in a world phase, compiled (collected on the render thread). */
 	public PackPipelines(VulkanContext ctx, Path cacheDir, Manifest manifest, Manifest.Dimension dim,
-			Map<RenderPipeline, FrontendRenderPipeline> vanilla) {
+			Map<RenderPipeline, FrontendRenderPipeline> vanilla, java.util.function.@Nullable BooleanSupplier cancelled, boolean background) {
 		this.ctx = ctx;
+		this.cancelled = cancelled;
+		this.background = background;
+		if (!background) {
+			BUILT.set(0);
+			TOTAL.set(0);
+		}
 		try {
 			build(cacheDir, manifest, dim, vanilla);
 		} catch (RuntimeException | Error failed) {
@@ -87,13 +101,23 @@ public final class PackPipelines {
 		Map<String, Manifest.Target> targets = new HashMap<>();
 		dim.targets().forEach(t -> targets.put(t.name(), t));
 		long cache = ctx.pipelineCache().handle;
-		int threads = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
-		try (ExecutorService pool = Executors.newFixedThreadPool(threads)) {
+		int threads = background ? 2 : Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
+		try (ExecutorService pool = Executors.newFixedThreadPool(threads, r -> {
+			Thread t = new Thread(r, "Emberlight pipeline builder");
+			t.setDaemon(true);
+			if (background) t.setPriority(Thread.MIN_PRIORITY);
+			return t;
+		})) {
 			List<CompletableFuture<Void>> jobs = new ArrayList<>();
 			for (var e : dim.programs().entrySet()) {
 				var p = e.getValue();
 				if (!p.kind().equals("composite") && !p.kind().equals("compute")) continue; // geometry programs: GbufferPipelines
-				jobs.add(CompletableFuture.runAsync(() -> pipelines.put(e.getKey(), build(cacheDir, p, targets, cache)), pool));
+				counted(TOTAL);
+				jobs.add(CompletableFuture.runAsync(() -> {
+					checkCancelled();
+					pipelines.put(e.getKey(), build(cacheDir, p, targets, cache));
+					counted(BUILT);
+				}, pool));
 			}
 			List<Integer> blitFormats = new ArrayList<>(List.of(VulkanConst.toVk(SCREEN_FORMAT)));
 			var ct0 = targets.get("colortex0");
@@ -102,9 +126,19 @@ public final class PackPipelines {
 			for (int f : targets.values().stream().filter(t -> t.mipLevels() != 1 && (t.kind().equals("color") || t.kind().equals("shadow_color")) && !Formats.isInteger(Formats.gpu(t.format())))
 					.map(t -> VulkanConst.toVk(Formats.gpu(t.format()))).distinct().toList())
 				jobs.add(CompletableFuture.runAsync(() -> mip.put(f, helper("emrion_mip", f)), pool));
-			gbuffers = new GbufferPipelines(ctx, cacheDir, manifest, dim, setLayout, vanilla, pool);
+			gbuffers = new GbufferPipelines(ctx, cacheDir, manifest, dim, setLayout, vanilla, pool, this);
 			CompletableFuture.allOf(jobs.toArray(CompletableFuture[]::new)).join();
 		}
+	}
+
+	/** Before each pipeline: stops a cancelled build (it fails with a CancellationException). */
+	public void checkCancelled() {
+		if (cancelled != null && cancelled.getAsBoolean()) throw new java.util.concurrent.CancellationException("pipeline build stopped");
+	}
+
+	/** Progress of a foreground build only. */
+	public void counted(java.util.concurrent.atomic.AtomicInteger counter) {
+		if (!background) counter.incrementAndGet();
 	}
 
 	static int descriptorType(String kind) {

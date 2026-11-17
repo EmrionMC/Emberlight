@@ -6,11 +6,11 @@ import java.util.Locale;
  * Raw custom texture data to packed texels of the promoted Vulkan format. Only layouts that need no value conversion are
  * accepted; RGB-only formats get an alpha channel.
  */
-final class RawTexels {
+public final class RawTexels {
 	private RawTexels() {}
 
 	/** @throws IllegalArgumentException if the layout needs a conversion we do not do, or the data is too short. */
-	static byte[] convert(byte[] data, String internal, String promoted, String rawPixel, int[] size) {
+	public static byte[] convert(byte[] data, String internal, String promoted, String rawPixel, int[] size) {
 		String[] px = rawPixel.split(" ");
 		String pf = px[0].replace("_INTEGER", "");
 		int channels = channels(internal);

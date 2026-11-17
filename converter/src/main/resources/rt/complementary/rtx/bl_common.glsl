@@ -10,6 +10,7 @@ const float EMR_BL_WRAP = 0.5;    // wrapped N.L (wrap 0.5, with strength 1.9 ke
 const float EMR_BL_FALLOFF = 0.2; // 1 / (1 + k d^2)
 const float EMR_BL_SIZE = 1.6;    // a source is sampled over a disk of this times its radius (0.45 full blocks, 0.15 others)
 const float EMR_BL_GLASS = 1.6;   // how strongly stained glass colours the light passing it
+const float EMR_BL_FLUSH_NDL = 0.6; // N.L floor for floors and ceilings lit by a flush emitter (single lava / sea lantern / glowstone cell within 5 % of RT off)
 
 float emrBlLum(vec3 c) {
 	return dot(c, vec3(0.2125, 0.7154, 0.0721));
@@ -45,11 +46,17 @@ vec4 emrBlSource(uint i) {
 // the air in front of the point of its block nearest p, half a block out along n. The pack's floodfill starts in the air next
 // to such a block, so an ore set flush in a wall or floor lights that surface around it; from the block itself the light
 // grazed the surface (a third of the pack's halo, darker cells) and from its centre it lay behind the face. Shadow rays still
-// take the block from emrBlSource (emrBlRay).
+// take the block from emrBlSource (emrBlRay). A full vanilla emitter set flush into p's surface (a lava pool in the floor, its
+// top 1/9 below it; glowstone in a wall) lights it the same way: its centre lay behind the surface, every shadow ray went into
+// the floor, and the lava cave was 40 % darker than RT off. Its disk shrinks to stay in front of the surface (radius 0.45:
+// a third of the disk lay behind it and shadowed the halo).
 vec4 emrBlSourceAt(uint i, vec3 p, vec3 n) {
 	vec4 l = emrBlSource(i);
-	if (emrBlCol[i].a >= 0.0) return l;
-	return vec4(l.xyz + clamp(p - l.xyz, -fract(l.w), fract(l.w)) + n * 0.5, l.w);
+	float r = fract(l.w);
+	if (emrBlCol[i].a < 0.0) return vec4(l.xyz + clamp(p - l.xyz, -r, r) + n * 0.5, l.w);
+	float h = dot(n, l.xyz - p);
+	if (r < 0.3 || h >= -0.05 || h < -0.7) return l;
+	return vec4(l.xyz + clamp(p - l.xyz, -r, r) + n * 0.5, floor(l.w) + 0.28);
 }
 
 // Colour as it lights (squared: the pack adds block light before a square root) times the source's power.
@@ -71,6 +78,11 @@ float emrBlWeight(vec4 l, vec3 p, vec3 n) {
 	float r = d / max(level, 1.0);
 	float win = max(1.0 - r * r, 0.0);
 	float ndl = clamp((dot(n, dv / max(d, 1e-3)) + EMR_BL_WRAP) / (1.0 + EMR_BL_WRAP), 0.0, 1.0);
+	// A floor or ceiling around a flush emitter (lava pool, sea lantern or glowstone set into it, emrBlSourceAt) sees it at a
+	// grazing angle, but the pack's light there has no direction: N.L at least EMR_BL_FLUSH_NDL. Not on walls: a glowstone wall's
+	// own surface is already brighter than RT off. RAYTRACING.md §37.
+	float fr = fract(l.w);
+	if (fr > 0.25 && fr < 0.3 && abs(n.y) > 0.7) ndl = max(ndl, EMR_BL_FLUSH_NDL);
 	return level / 15.0 * win * win / (1.0 + EMR_BL_FALLOFF * d * d) * ndl;
 }
 
@@ -90,23 +102,32 @@ vec3 emrBlGlass(vec4 c) {
 	return mix(vec3(1.0), hue, clamp(c.a * EMR_BL_GLASS, 0.0, 1.0));
 }
 
-// Transmittance along the ray: 0 behind opaque terrain (lava never blocks), times the colour of every translucent face passed.
+// The instance mask of the visibility rays: 0x03 terrain, 0x07 with entities and block entities (blocklight:entities). Defined by
+// the includer: rtx/blocklight.glsl and bl_restir.glsl from the blocklight option, rtx/gi_common.glsl terrain only.
+uint emrBlMask();
+
+// Transmittance along the ray: 0 behind opaque terrain (lava too: it is in the solid BLAS, opaque geometry; the ray ends at
+// the source's block, so a pool does not shadow itself) and, with emrBlMask 0x04, behind entities and block entities (chests,
+// signs, beds), times the colour of every translucent face passed. More candidates than the guard count as blocked.
 vec3 emrBlTransmit(vec3 origin, vec3 dir, float tMax) {
 	vec3 tint = vec3(1.0);
 	rayQueryEXT rq;
-	rayQueryInitializeEXT(rq, emrRtTlas, gl_RayFlagsTerminateOnFirstHitEXT, 0x03u, origin, 0.0, dir, tMax);
-	for (int guard = 0; guard < 48 && rayQueryProceedEXT(rq); guard++) {
+	rayQueryInitializeEXT(rq, emrRtTlas, gl_RayFlagsTerminateOnFirstHitEXT, emrBlMask(), origin, 0.0, dir, tMax);
+	bool more;
+	for (int guard = 0; (more = rayQueryProceedEXT(rq)) && guard < 48; guard++) {
 		if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;
 		int ci = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false);
 		EmrRtVerts v = emrRtVerts(ci);
 		uvec3 tri = emrRtTri(uint(rayQueryGetIntersectionPrimitiveIndexEXT(rq, false)));
-		int id = emrRtId(v, tri.x);
-		if (id == 10068 || id == 10070) continue;
+		if (emrRtIsEntity(ci)) {
+			if (emrRtHitAlpha(ci, v, tri, rayQueryGetIntersectionBarycentricsEXT(rq, false)) >= 0.1) rayQueryConfirmIntersectionEXT(rq);
+			continue;
+		}
 		vec4 c = textureLod(emrRtAtlas, emrRtBaryUv(v, tri, rayQueryGetIntersectionBarycentricsEXT(rq, false)), 0.0);
 		if (emrRtSection[ci].z == 2u) tint *= emrBlGlass(c * vec4(emrRtColor(v, tri.x).rgb, 1.0));
 		else if (c.a >= 0.1) rayQueryConfirmIntersectionEXT(rq);
 	}
-	return rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT ? tint : vec3(0.0);
+	return !more && rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT ? tint : vec3(0.0);
 }
 
 // Visibility of target (a point of source l's area) from p. The ray ends where it enters the source's block, so the emitter's
@@ -156,9 +177,11 @@ uint emrBlSourceIn(vec3 p) {
 // Draws one source of p's cell with probability proportional to its target (weighted reservoir sampling). Up to 16 sources
 // it is exact; a longer list (dense ore veins, a lit storage hall) gets 16 candidates drawn uniformly, resampled by target
 // (RIS), so the cost stays flat. Returns the estimate's scale: the sum of the targets (exact), or N / 16 times the
-// candidates' sum (RIS); 0 when no source reaches p. li = the source.
-float emrBlPick(vec3 p, vec3 n, inout uint seed, out uint li) {
+// candidates' sum (RIS); 0 when no source reaches p. li = the source. fullMax = the largest target among the full-block
+// vanilla emitters the pack does not sum (not lava or magma, RtLights), fullSum = their summed targets (scaled like the return value).
+float emrBlPick(vec3 p, vec3 n, inout uint seed, out uint li, out float fullMax, out float fullSum) {
 	li = ~0u;
+	fullMax = fullSum = 0.0;
 	uint first, end;
 	if (!emrBlCellRange(p, first, end)) return 0.0;
 	uint count = end - first, m = min(count, 16u);
@@ -175,9 +198,14 @@ float emrBlPick(vec3 p, vec3 n, inout uint seed, out uint li) {
 		float t = emrBlLum(emrBlColor(i)) * emrBlWeight(emrBlSourceAt(i, p, n), p, n);
 		if (t <= 0.0) continue;
 		sum += t;
+		if (!emrBlPackOnly(i) && fract(emrBlPos[i].w) > 0.445) { // full, not summed by the pack (radius 0.44: lava, magma)
+			fullMax = max(fullMax, t);
+			fullSum += t;
+		}
 		h = h * 747796405u + 2891336453u;
 		if (float(h >> 8u) / 16777216.0 * sum < t) li = i;
 	}
+	fullSum *= float(count) / float(m);
 	return sum * float(count) / float(m);
 }
 
@@ -188,8 +216,9 @@ float emrBlPick(vec3 p, vec3 n, inout uint seed, out uint li) {
 // spatially). The stable interface for other passes (RAYTRACING.md §32); include bl_buffer.glsl and this file.
 vec3 emrBlLightAt(vec3 p, vec3 n, inout uint seed) {
 	uint li;
+	float fullMax, fullSum;
 	vec3 q = p + n * 0.02;
-	float sum = emrBlPick(q, n, seed, li);
+	float sum = emrBlPick(q, n, seed, li, fullMax, fullSum);
 	if (li == ~0u) return vec3(0.0);
 	vec3 c = emrBlColor(li);
 	vec3 v = emrBlRay(q, n, emrBlSource(li), emrBlDiskPoint(emrBlSourceAt(li, q, n), q, emrBlDisk(vec2(emrBlRand(seed), emrBlRand(seed)))));
@@ -212,20 +241,26 @@ vec3 emrBlLightOpen(vec3 p, vec3 n) {
 // behind the surface never lights it, and the pack's light holds it only where it flows around an edge (the far side of a
 // pillar): sources behind count only as far as the pack's vanilla level lm (0..1) exceeds what the vanilla sources in front
 // give it in vanilla terms (level - L1 distance from the air block in front, one level of slack; §23). Sources only the pack
-// knows have no vanilla level and never explain it.
+// knows have no vanilla level and never explain it. A vanilla emitter flush with the surface (emrBlSourceAt: a lava pool in the
+// floor) sits between the two: gated by the sources in front (a lava pool in the next room's floor, behind a wall, darkened a
+// torch-lit floor here), and it explains lm for the sources behind (the lava falling on below a pool floor).
 vec3 emrBlOpen(vec3 p, vec3 n, float lm, uint first, uint end) {
-	vec3 front = vec3(0.0), back = vec3(0.0);
+	vec3 front = vec3(0.0), flush = vec3(0.0), back = vec3(0.0);
 	vec3 q = p + n * 0.5; // the air block in front, where the lightmap value lives
-	float best = -99.0;
+	float best = -99.0, bestFlush = -99.0;
 	for (uint k = first; k < end; k++) {
 		uint i = emrBlIndex[k];
 		vec4 l = emrBlSourceAt(i, p, n);
 		vec3 u = emrBlColor(i) * emrBlWeight(l, p, normalize(l.xyz - p));
-		if (dot(n, l.xyz - p) >= -0.05) { // -0.05: a pack-only source's face flush with the surface is in front
+		vec3 d = abs(l.xyz - q);
+		if (l.w != emrBlPos[i].w) { // flush: emrBlSourceAt shrank its disk
+			flush += u;
+			bestFlush = max(bestFlush, floor(l.w) - (d.x + d.y + d.z));
+		} else if (dot(n, l.xyz - p) >= -0.05) { // -0.05: a pack-only source's face flush with the surface is in front
 			front += u;
-			vec3 d = abs(l.xyz - q);
 			if (!emrBlPackOnly(i)) best = max(best, floor(l.w) - (d.x + d.y + d.z));
 		} else back += u;
 	}
-	return front + back * clamp((lm * 15.0 - best - 1.0) * 0.5, 0.0, 1.0);
+	return front + flush * clamp((lm * 15.0 - best - 1.0) * 0.5, 0.0, 1.0)
+		+ back * clamp((lm * 15.0 - max(best, bestFlush) - 1.0) * 0.5, 0.0, 1.0);
 }

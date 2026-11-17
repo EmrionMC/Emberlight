@@ -6,6 +6,7 @@ import dev.emrion.shaders.converter.glsl.LineMap;
 import dev.emrion.shaders.converter.glsl.PreprocessedStage;
 import dev.emrion.shaders.converter.glsl.StageType;
 import dev.emrion.shaders.converter.glsl.Transpiler;
+import dev.emrion.shaders.converter.nativefmt.NativeCompiler;
 import dev.emrion.shaders.converter.pack.PackLoader;
 import dev.emrion.shaders.converter.pack.PackSource;
 import dev.emrion.shaders.converter.pack.ResolvedPack;
@@ -17,6 +18,7 @@ import dev.emrion.shaders.converter.report.Diagnostic;
 import dev.emrion.shaders.converter.report.Diagnostics;
 import dev.emrion.shaders.converter.report.Report;
 import dev.emrion.shaders.converter.spirv.SpirvCompiler;
+import dev.emrion.shaders.converter.spirv.SpirvReflection;
 import dev.emrion.shaders.format.Manifest;
 import dev.emrion.shaders.format.ManifestJson;
 
@@ -84,8 +86,17 @@ public final class DefaultConverter implements Converter {
 		ProgressListener progress = request.progress() == null ? ProgressListener.NONE : request.progress();
 		Diagnostics diagnostics = new Diagnostics();
 		progress.progress("load", 0, 1);
-		try (PackSource source = opener.open(request.pack());
+		try (PackSource opened = opener.open(request.pack());
 		     ExecutorService pool = Executors.newFixedThreadPool(threads)) {
+			PackSource source = opened;
+			if (NativeCompiler.isNative(opened)) { // NATIVE_FORMAT.md §15: compiled directly, not through the Iris path
+				String key = NativeCompiler.cacheKey(opened, request, environment);
+				if (request.useCache()) {
+					Result hit = cached(request.cacheRoot().resolve(key), key);
+					if (hit != null) return hit;
+				}
+				return NativeCompiler.compile(opened, key, request, environment, compiler, pool, progress, diagnostics);
+			}
 			String packHash = source.contentHash();
 			String key = CacheKey.compute(packHash, request.settings(), environment.mcVersion(), environment.macros(), request.dimensions(), request.rt(), request.sodium());
 			if (request.useCache()) {
@@ -163,8 +174,8 @@ public final class DefaultConverter implements Converter {
 				diagnostics.addAll(d);
 			}
 			progress.progress("plan", 0, dims.size());
-			Manifest.UniformLayout layout = layoutBuilder.build(
-					analyses.values().stream().flatMap(m -> m.values().stream()).toList(), custom, diagnostics);
+			List<Transpiler.ProgramAnalysis> all = new ArrayList<>(analyses.values().stream().flatMap(m -> m.values().stream()).toList());
+			Manifest.UniformLayout layout = layoutBuilder.build(all, custom, diagnostics);
 			Map<String, DimensionPlanner.DimensionPlan> plans = new TreeMap<>();
 			for (String dim : dims) {
 				try {
@@ -175,6 +186,7 @@ public final class DefaultConverter implements Converter {
 				}
 				progress.progress("plan", plans.size(), dims.size());
 			}
+			uniqueTextureNames(plans);
 
 			List<StageJob> jobs = emit(plans, analyses);
 			Path tmp = CacheDir.begin(request.cacheRoot(), key);
@@ -386,6 +398,43 @@ public final class DefaultConverter implements Converter {
 			return results;
 		}
 
+		/**
+		 * Each dimension names its textures on its own: a name another dimension gave a different texture is renamed in
+		 * this one (texture list and resources), so {@link #copyTextures} can deduplicate by name.
+		 */
+		static void uniqueTextureNames(Map<String, DimensionPlanner.DimensionPlan> plans) {
+			Map<String, Manifest.TextureDef> taken = new HashMap<>();
+			for (var e : plans.entrySet()) {
+				var plan = e.getValue();
+				var own = plan.textures().stream().map(Manifest.TextureDef::name).collect(java.util.stream.Collectors.toSet());
+				Map<String, String> renamed = new HashMap<>();
+				List<Manifest.TextureDef> textures = new ArrayList<>();
+				for (var t : plan.textures()) {
+					String name = t.name();
+					for (int i = 2; taken.containsKey(name) && !sameTexture(taken.get(name), t) || !name.equals(t.name()) && own.contains(name); i++)
+						name = t.name() + "_" + i;
+					if (!name.equals(t.name())) {
+						renamed.put(t.name(), name);
+						t = new Manifest.TextureDef(name, t.file(), t.resource(), t.format(), t.dims(), t.size(), t.filter(), t.wrap(), t.mipmap(), t.rawPixel());
+					}
+					taken.putIfAbsent(name, t);
+					textures.add(t);
+				}
+				if (renamed.isEmpty()) continue;
+				var d = plan.dimension();
+				List<Manifest.Resource> resources = d.resources().stream().map(r -> r.texture() == null || !renamed.containsKey(r.texture()) ? r
+						: new Manifest.Resource(r.binding(), r.kind(), r.name(), r.target(), renamed.get(r.texture()), r.builtin(), r.sampler())).toList();
+				e.setValue(new DimensionPlanner.DimensionPlan(new Manifest.Dimension(d.programs(), resources, d.targets(), d.flipStates(), d.frame(),
+						d.once(), d.shadow()), plan.emits(), textures));
+			}
+		}
+
+		static boolean sameTexture(Manifest.TextureDef a, Manifest.TextureDef b) {
+			return java.util.Objects.equals(a.file(), b.file()) && java.util.Objects.equals(a.resource(), b.resource()) && a.format().equals(b.format())
+					&& a.dims() == b.dims() && java.util.Arrays.equals(a.size(), b.size()) && a.filter().equals(b.filter()) && a.wrap().equals(b.wrap())
+					&& a.mipmap() == b.mipmap() && java.util.Objects.equals(a.rawPixel(), b.rawPixel());
+		}
+
 		/** Custom textures of all dimensions, deduplicated by name and copied to textures/; {@code file} becomes the cache path. */
 		List<Manifest.TextureDef> copyTextures(Map<String, DimensionPlanner.DimensionPlan> plans, Path tmp) throws IOException {
 			Map<String, Manifest.TextureDef> byName = new TreeMap<>();
@@ -503,18 +552,22 @@ public final class DefaultConverter implements Converter {
 		private static Manifest.Program withStages(Manifest.Program p, List<StageResult> rs) {
 			Map<StageType, Map<String, String>> variants = new java.util.EnumMap<>(StageType.class);
 			String fragment = null, compute = null;
+			int[] localSize = p.localSize();
 			for (StageResult r : rs) {
 				StageJob j = r.job();
 				switch (j.stage()) {
 					case FRAGMENT -> fragment = j.spvPath();
-					case COMPUTE -> compute = j.spvPath();
+					case COMPUTE -> {
+						compute = j.spvPath();
+						localSize = SpirvReflection.reflect(r.spv()).localSize(); // the compiler evaluated constant expressions (local_size_x = 2 * 4)
+					}
 					default -> variants.computeIfAbsent(j.stage(), k -> new TreeMap<>()).put(j.variant() == null ? "fullscreen" : j.variant(), j.spvPath());
 				}
 			}
 			var stages = new Manifest.Stages(variants(variants, StageType.VERTEX), variants(variants, StageType.TESS_CONTROL),
 					variants(variants, StageType.TESS_EVAL), variants(variants, StageType.GEOMETRY), ref(fragment), ref(compute));
 			return new Manifest.Program(p.kind(), p.group(), p.fallbackFor(), stages, p.outputs(), p.blend(), p.alphaTest(),
-					p.set0(), p.set1(), p.writesStorage(), p.usesPushConstants(), p.localSize(), p.workGroups(),
+					p.set0(), p.set1(), p.writesStorage(), p.usesPushConstants(), localSize, p.workGroups(),
 					p.workGroupsRender(), p.mipmapBefore(), p.viewportScale(), p.renderStageOrdinal(), p.viewportOffset());
 		}
 

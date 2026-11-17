@@ -196,9 +196,22 @@ triggers a chunk rebuild.
 ### 5.7 Pipeline compilation (no stutter)
 
 At pack load, after conversion, in this order: create shader modules → create all `VkPipeline`s **in parallel on
-background threads** with a shared `VkPipelineCache` that is persisted to `cache/pipeline.bin` (keyed by driver UUID). Then
+background threads** with a shared `VkPipelineCache` that is persisted to `emberlight/pipeline-<driver cache UUID>.bin`. Then
 swap atomically on the render thread. Nothing is compiled lazily. A pipeline missing at draw time is a bug and is logged once;
 the draw falls back to the pack's `gbuffers_basic` variant.
+
+Every gbuffers variant a known vanilla or Sodium world pipeline can need (303 for Complementary Unbound + EP) is built in
+that step, so a new block, entity or render type never compiles in a frame; only pipelines other mods create later go
+through `GbufferPipelines.buildLate` (logged as "built in a frame"). The loading panel shows "Preparing shaders… x/y".
+In dev runs the file is shared in `~/.cache/emberlight-dev`. MC's own pipelines also go
+through it (`VulkanPipelineCacheMixin`; MC passes no cache). After a dimension's pack pipelines are active, the
+other dimensions of the pack are built once in the background (`PackManager.PRECOMPILER`, 2 low-priority threads,
+stopped by a new selection or shutdown) and dropped, so a cold cache has them before the first portal.
+If a portal or world join comes before that (`PackManager.switching`: the dimension has a pack folder but no runtime),
+MC's level loading screen stays open until the pack renders, at most 30 s, with the loading panel on it
+(`LevelLoadingScreenMixin`), so no vanilla frames show. Only the screen waits: the player-loaded signal to the server
+keeps vanilla timing. A failure or a pack without that dimension releases it at once.
+Measured 2026-11-16 (BENCHMARK.md, "Shader compile stutter"): cold 11-22 s per dimension, warm 0.2-0.6 s.
 
 ### 5.8 Performance principles
 
@@ -228,6 +241,8 @@ Planned set; each mixin class carries a comment explaining why it is needed.
 | `FrontendRenderPass.setPipeline` HEAD | inject, field swap | Only when the gbuffers programs together write more colortex than `maxColorAttachments` (Bliss: 9 > 8): `GbufferPipelines` splits the programs into attachment groups (first fit, most outputs first) and builds each pipeline against its group; setting a pipeline of another group ends the dynamic rendering, puts a colour/depth memory barrier, resumes with that group's attachments (LOAD, same depth) and swaps the pass's attachment list. With one group nothing happens (a static boolean check). |
 | `TextureAtlas.upload` RETURN / `cycleAnimationFrames` TAIL / `createTexture` TAIL | inject | PBR atlases mirror each atlas's layout and animation; a reload drops the per-texture PBR cache. |
 | `PipelineCache.get` (`compilePipeline` executor) | modify arg | With a pack selected, MC's blocking pipeline compiles run on our own thread instead of the chunk worker pool: after a resource reload every chunk worker can wait on the render thread, so a compile queued behind them never finishes. `PackManager.prepare` also never blocks: it starts the missing vanilla compiles and builds the pack pipelines a few frames later (the old pack keeps rendering). |
+| `VulkanRenderPipeline.compile` (`vkCreateGraphicsPipelines`) | modify arg | MC's pipelines use our persisted VkPipelineCache instead of none. |
+| `LevelLoadingScreen.tick` (`isLevelReady`), `extractRenderState` TAIL | wrap, inject | The screen stays open while the pack builds the new dimension's pipelines (no vanilla frames), with the loading panel on it (§5.7). |
 | `VulkanConst.textureUsageToVk` | return | Add the STORAGE usage bit for our custom usage flag. |
 | `VulkanFeatureSets.optionalFeatureSets` | return | Enable `fragmentStoresAndAtomics`, `vertexPipelineStoresAndAtomics`, `geometryShader`, `shaderStorageImageWriteWithoutFormat` (only those the pack needs). |
 | `SectionCompiler` / `BufferBuilder` | wrap | Extended terrain vertex format plus per-quad attributes. |

@@ -1,0 +1,75 @@
+pack.name=Emberlight RTX
+pack.description=Ray-traced shadows, GI, reflections, emissive area lights and god rays. Subtle it is not.
+option.RTX_INTENSITY=RTX Intensity
+option.RTX_INTENSITY.comment=One slider for "more": bloom, glow, gloss, god rays, saturation. 1 = the intended look, 3 = so much.
+option.GI_BOUNCES=GI Bounces
+option.GI_BOUNCES.comment=Ray-traced diffuse light bounces. 0 = sky and lightmap ambient only.
+option.GI_FRAMES=GI History
+option.GI_FRAMES.comment=Frames of history the denoiser keeps. More = smoother, slower to react.
+option.LIGHT_SAMPLES=Light Candidates
+option.LIGHT_SAMPLES.comment=Block lights weighed per pixel each frame; the best one is shared with neighbouring pixels and later frames (ReSTIR). More = cleaner light in rooms full of lamps.
+option.REFLECTIONS=Reflections
+option.REFLECTIONS.comment=Which surfaces trace reflection rays: Low = mirror-like only, Insane = nearly everything.
+value.REFLECTIONS.off=Off
+value.REFLECTIONS.low=Low
+value.REFLECTIONS.high=High
+value.REFLECTIONS.insane=Insane
+option.SHADOW_SOFTNESS=Shadow Softness
+option.SHADOW_SOFTNESS.comment=Size of the sun disc the shadow rays sample.
+option.EMISSIVE_STRENGTH=Emissive Strength
+option.BLOCKLIGHT_STRENGTH=Block Light Strength
+option.FOG_DENSITY=Fog Density
+option.VOLUMETRICS=Volumetric Light
+option.VOL_STEPS=Volumetric Steps
+option.BLOOM=Bloom
+option.EXPOSURE=Exposure
+option.AUTO_EXPOSURE=Eye Adaptation
+option.WATER_WAVES=Water Waves
+option.PUDDLES=Rain Puddles
+option.CLOUDS=Clouds
+option.PBR_SOURCE=Materials
+option.PBR_SOURCE.comment=Auto: LabPBR maps of a resource pack (Emberlight PBR) when present, else the built-in table.
+value.PBR_SOURCE.auto=Auto
+value.PBR_SOURCE.table=Built-in table
+page.lighting=Lighting
+page.atmosphere=Atmosphere
+page.image=Image
+page.quality=Quality
+profile.low=Low
+profile.medium=Medium
+profile.high=High
+profile.ultra=Ultra
+profile.insane=Insane
+option.MIRROR_BOUNCES=Mirror Bounces
+option.MIRROR_BOUNCES.comment=Mirrors seen in a mirror reflect on (two facing mirrors: a corridor of images). 1 = other mirrors show as plain colour.
+option.NEON_GLOW=Emissive Glow
+option.NEON_GLOW.comment=Extra bloom halo around glowing surfaces (lamps, neon terracotta of Emberlight PBR).
+option.CAUSTICS=Water Caustics
+option.CAUSTICS.comment=Sunlight focused by the waves: dancing light under water and on walls beside it (strongest at sunset). 0 = off.
+option.SSS=Subsurface Scattering
+option.SSS.comment=Light through leaves and grass when the sun is behind them, soft light on snow, slime and honey. 0 = off.
+option.ANISOTROPY=Fog Anisotropy
+option.ANISOTROPY.comment=How strongly fog scatters light forward (bright halo toward the sun). 0 = the same in every direction.
+option.AERIAL_PERSPECTIVE=Aerial Perspective
+option.AERIAL_PERSPECTIVE.comment=Atmospheric haze on distant terrain, from the same atmosphere as the sky. 0 = off.
+option.UNDERWATER_RAYS=Underwater Sun Shafts
+option.UNDERWATER_RAYS.comment=Ray-traced light shafts through the waves under water (needs volumetric light).
+option.SKY_QUALITY=Sky Quality
+option.SKY_QUALITY.comment=Ray-march steps of the atmosphere: sky, sunsets, multiple scattering.
+option.SUN_INTENSITY=Sun Brightness
+option.MOON_INTENSITY=Moon Brightness
+option.MOON_INTENSITY.comment=Moonlight also follows the moon phase: full moon brightest, new moon a faint glow.
+option.GOLDEN_HOUR=Golden Hour
+option.GOLDEN_HOUR.comment=Colour of the low sun: 1 = the atmosphere's own reddening, more = deeper orange, less = whiter.
+option.BLUE_HOUR=Blue Hour
+option.BLUE_HOUR.comment=Ozone that keeps the twilight sky blue after sunset. 0 = none (orange-grey dusk).
+option.POM=Parallax Depth
+option.POM.comment=Parallax occlusion mapping from the resource pack's height maps (Emberlight PBR): bricks, cobblestone and planks get real depth up close. Fades out with distance (16 / 32 / 48 blocks).
+value.POM.off=Off
+value.POM.low=Low
+value.POM.high=High
+value.POM.ultra=Ultra
+option.REFRACTION=Glass and Ice
+option.REFRACTION.comment=High: light refracts through glass blocks, ice, slime and honey (traced through the block, tinted by its thickness, total internal reflection) and scatters inside ice, slime and honey. Low: thin tinted sheets.
+value.REFRACTION.low=Low
+value.REFRACTION.high=High

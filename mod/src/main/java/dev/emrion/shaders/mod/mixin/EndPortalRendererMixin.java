@@ -40,7 +40,7 @@ public class EndPortalRendererMixin {
 			return;
 		}
 		// shortcut: Iris scrolls by its own frameTimeCounter; ours is not reachable here, so only the phase differs (pinned in autotests)
-		float t = (IrisTimer.FIXED >= 0 ? IrisTimer.FIXED : System.nanoTime() % 3_600_000_000_000L / 1e9f) * 0.01f % 1f;
+		float t = (IrisTimer.FIXED >= 0 ? IrisTimer.FIXED : IrisTimer.wallSeconds()) * 0.01f % 1f;
 		original.call(collector, poseStack, RenderTypes.entitySolid(AbstractEndPortalRenderer.END_PORTAL_LOCATION),
 				(SubmitNodeCollector.CustomGeometryRenderer) (pose, consumer) -> {
 					for (Direction d : faces) {

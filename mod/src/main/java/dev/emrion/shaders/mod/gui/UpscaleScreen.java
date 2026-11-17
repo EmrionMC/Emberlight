@@ -57,17 +57,23 @@ public final class UpscaleScreen extends EmberScreen {
 			row(tile("Download NVIDIA DLSS files", (d, s) -> minecraft.gui.setScreen(new DlssDownloadScreen(this))).value("›")
 					.tooltip("About " + DlssDownloadScreen.TOTAL_MB + " MB from NVIDIA's GitHub, once. Until then FSR is used."));
 		// selectable with DLSS, RT on and a supported GPU/driver/model (the reason shows otherwise)
+		var support = dev.emrion.shaders.mod.pack.PackManager.rtSupport();
+		var rtState = dev.emrion.shaders.mod.pack.PackManager.rtState();
+		boolean nativePack = support != null && support.nativePack();
 		String rrWhy = mode != Mode.DLSS ? "needs NVIDIA DLSS as the upscaler"
-				: !dev.emrion.shaders.mod.rt.RtConfig.enabled || !dev.emrion.shaders.mod.rt.RtCapability.enabled ? "needs ray tracing on" : Dlss.rrUnavailable();
+				: !dev.emrion.shaders.mod.rt.RtCapability.enabled || !nativePack && !dev.emrion.shaders.mod.rt.RtConfig.enabled ? "needs ray tracing on"
+				: Dlss.rrUnavailable() != null ? Dlss.rrUnavailable()
+				: nativePack && rtState != null && rtState.unavailable().containsKey("rr") ? "this pack provides no Ray Reconstruction guides" : null;
 		row(tile("Ray Reconstruction", (d, s) -> {
 			rr = !rr;
 			rebuild();
 		}).toggle(() -> rr && rrWhy == null).active(rrWhy == null)
 				.hint(rrWhy != null ? Component.literal("Unavailable: " + rrWhy).withColor(rr ? BAD : FAINT)
-				: rr ? Component.literal("Replaces Emberlight's RT denoisers") : null).tooltip(
+				: rr ? Component.literal(nativePack ? "Replaces the pack's RT denoisers" : "Replaces Emberlight's RT denoisers") : null).tooltip(
 				"NVIDIA DLSS Ray Reconstruction: one AI model denoises the ray-traced lighting and upscales, instead of DLSS Super "
 						+ "Resolution plus Emberlight's own GI, block-light and AO denoisers (they are switched off while it runs).\n"
-						+ "Needs DLSS, ray tracing on and an RTX GPU; turning it on or off reconverts the pack."));
+						+ "Native Emberlight packs that support it skip their own denoisers instead.\n"
+						+ "Needs DLSS, ray tracing on (built into native packs) and an RTX GPU; turning it on or off reconverts the pack."));
 		section("Quality");
 		row(tile("Preset", (d, s) -> {
 			preset = Preset.values()[Math.floorMod(preset.ordinal() + d, Preset.values().length)];

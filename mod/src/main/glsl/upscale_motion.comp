@@ -10,7 +10,7 @@ layout(std140, set = 0, binding = 4) uniform Reprojection { // a UBO: 160 bytes 
 	mat4 toPrev;    // current NDC -> previous clip (unjittered), including the camera translation
 	mat4 toPrevSky; // the same without the translation, for the sky (depth 1 = at infinity)
 	vec4 proj;      // projection m00, m11, m22, m32
-	vec4 surface;   // xyz: unused; w: refraction eta at water (1/1.333 from above), 0 = RT refraction off, < 0 = glass not refracted
+	vec4 surface;   // xy: this frame's projection jitter in NDC; z: unused; w: refraction eta at water (1/1.333 from above), 0 = RT refraction off, < 0 = glass not refracted
 } pc;
 
 float viewZ(float depth) { return -pc.proj.w / (depth * 2.0 - 1.0 + pc.proj.z); }
@@ -49,8 +49,10 @@ void main() {
 	}
 	vec2 mv = vec2(0.0);
 	if (depth >= 0.56) { // below: Iris's hand depth range, it moves with the camera
-		vec4 prev = (depth >= 1.0 ? pc.toPrevSky : pc.toPrev) * vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
-		if (prev.w > 1e-6) mv = (prev.xy / prev.w * 0.5 + 0.5) - uv;
+		// the depth was rasterised jittered: the surface at this pixel centre is at the unjittered NDC minus the jitter
+		vec2 ndc = uv * 2.0 - 1.0 - pc.surface.xy;
+		vec4 prev = (depth >= 1.0 ? pc.toPrevSky : pc.toPrev) * vec4(ndc, depth * 2.0 - 1.0, 1.0);
+		if (prev.w > 1e-6) mv = (prev.xy / prev.w - ndc) * 0.5;
 	}
 	imageStore(motion, p, vec4(mv, 0.0, 0.0));
 }

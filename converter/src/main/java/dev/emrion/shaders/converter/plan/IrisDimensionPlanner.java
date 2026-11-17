@@ -95,6 +95,8 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 		final Set<Integer> needsAlt = new TreeSet<>();
 		final Set<String> mipOn = new HashSet<>();
 		final Set<Integer> mipmapped = new TreeSet<>();
+		/** shadowcolor indices a shadowcomp pass mipmaps; Iris leaves their mip filter on, so every program samples them mipped. */
+		final Set<Integer> shadowcompMips = new TreeSet<>();
 		Set<Integer> lastAtLeastOnce = Set.of();
 		final SequencedMap<List<List<Integer>>, Integer> flipStates = new LinkedHashMap<>(); // [colortex alt, shadowcolor alt]
 		// shadowcolor flips happen only in shadowcomp; every other pass reads the final state (Iris ShadowRenderTargets)
@@ -176,7 +178,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 				frame.add(copyDepth("shadowtex0", "shadowtex1"));
 				frame.add(geometryCmd("shadow_translucent", afterBegin));
 				for (var t : targets)
-					if (t.mipLevels() == 0 && (t.kind().equals("shadow_color") || t.name().startsWith("shadowtex")))
+					if (t.name().startsWith("shadowtex") ? t.mipLevels() == 0 : t.kind().equals("shadow_color") && colorMip(t.name().charAt(11) - '0'))
 						frame.add(mipmaps(t.name(), "main"));
 				frame.addAll(shadowcomp);
 			}
@@ -418,6 +420,13 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 				}
 				var a = analyses.get(p);
 				for (int n : mipmapBuffers(a)) {
+					if (g == ProgramGroup.SHADOWCOMP) { // Iris ShadowCompositeRenderer: the directives address shadowcolorN
+						if (n >= 8) continue;
+						shadowColors.add("shadowcolor" + n);
+						shadowcompMips.add(n);
+						out.add(mipmaps("shadowcolor" + n, shadowSnap.contains(n) ? "alt" : "main"));
+						continue;
+					}
 					if (!colortex.contains(n)) continue;
 					String side = snap.contains(n) ? "alt" : "main";
 					out.add(mipmaps("colortex" + n, side));
@@ -535,6 +544,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 					if (!"readonly".equals(i.access())) storage.add(b.get(i.name()));
 				}
 				for (var buf : a.buffers()) {
+					if (!buf.used()) continue; // not emitted (GlslTranspiler.emitBlock)
 					if (buf.blockName().equals("EmrRtSections")) { // RT helper section table (RtPatcher)
 						b.put(buf.blockName(), bind(new Res("storage_buffer", null, null, "emrion_rt_sections", null)));
 						continue;
@@ -568,7 +578,8 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 				var stages = stages(a, compute, geo);
 				var d = directives(a);
 				List<String> mips = new ArrayList<>();
-				if (!geo && !compute) for (int n : mipmapBuffers(a)) if (colortex.contains(n)) mips.add("colortex" + n);
+				if (!geo && !compute) for (int n : mipmapBuffers(a))
+					if (a.group() == ProgramGroup.SHADOWCOMP ? n < 8 : colortex.contains(n)) mips.add((a.group() == ProgramGroup.SHADOWCOMP ? "shadowcolor" : "colortex") + n);
 				out.put(name, new Manifest.Program(kind, a.group().name().toLowerCase(Locale.ROOT),
 						geo ? List.copyOf(geometry.get(name)) : List.of(), stages, outputs,
 						compute ? null : blend(name, kind, outputs), geo ? alphaTest(name) : null,
@@ -679,7 +690,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 				String side = c.flip().contains(n) ? "alt" : "main";
 				boolean mip = c.mipOn().contains(n + ":" + side);
 				boolean integer = isInteger(colortexFormat(n)[1]);
-				return new Res("sampled_image", canon, null, null, sampler(integer ? "nearest" : "linear", mip ? "linear" : "none", "clamp", null));
+				return new Res("sampled_image", canon, null, null, sampler(integer ? "nearest" : "linear", !mip ? "none" : integer ? "nearest" : "linear", "clamp", null));
 			}
 			if (canon.startsWith("depthtex")) return new Res("sampled_image", canon, null, null, sampler("nearest", "none", "clamp", null));
 			if (canon.startsWith("shadowtex")) {
@@ -691,8 +702,9 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 			if (canon.startsWith("shadowcolor")) {
 				int i = canon.charAt(11) - '0';
 				shadowColors.add(canon);
-				return new Res("sampled_image", canon, null, null, sampler(colorNearest(i) ? "nearest" : "linear",
-						colorMip(i) ? "linear" : "none", "clamp", null));
+				boolean integer = isInteger(consts.getOrDefault(canon + "Format", "").trim().toUpperCase(Locale.ROOT));
+				String mip = !colorMip(i) && !shadowcompMips.contains(i) ? "none" : integer ? "nearest" : "linear";
+				return new Res("sampled_image", canon, null, null, sampler(colorNearest(i) || integer ? "nearest" : "linear", mip, "clamp", null));
 			}
 			if (canon.equals("noisetex")) return new Res("sampled_image", null, noiseTexture(), null, sampler("linear", "none", "repeat", null));
 			throw new IllegalArgumentException("no builtin resource " + canon);
@@ -738,9 +750,10 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 			String[] p = value.trim().split("\\s+");
 			String target = p[1].toUpperCase(Locale.ROOT);
 			int dims = switch (target) {
+				case "TEXTURE_1D" -> 1;
 				case "TEXTURE_2D", "TEXTURE_RECTANGLE" -> 2;
 				case "TEXTURE_3D" -> 3;
-				default -> 0; // shortcut: TEXTURE_1D needs 1D image views, add if a pack uses it
+				default -> 0;
 			};
 			if (p.length != dims + 5 || !KNOWN_FORMATS.contains(p[2].toUpperCase(Locale.ROOT))) {
 				warn(null, "unsupported raw custom texture '" + value + "'");
@@ -821,7 +834,7 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 					String[] f = format(consts.get(sc + "Format"));
 					boolean clear = !Boolean.FALSE.equals(bool(consts.get(sc + "Clear")));
 					float[] cc = vec4(consts.get(sc + "ClearColor"));
-					out.add(new Manifest.Target(sc, "shadow_color", f[1], f[0], 2, null, new int[]{res, res}, colorMip(i) ? 0 : 1,
+					out.add(new Manifest.Target(sc, "shadow_color", f[1], f[0], 2, null, new int[]{res, res}, colorMip(i) || shadowcompMips.contains(i) ? 0 : 1,
 							shadowNeedsAlt.contains(i), clear, cc == null ? new float[]{1, 1, 1, 1} : cc, false, 0));
 				}
 			}

@@ -54,7 +54,7 @@ public final class PipelineCacheStore {
 	}
 
 	/** Call on exit and after a pack load. */
-	public void save() {
+	public synchronized void save() { // the pack loader and the precompiler both save; one tmp file per process
 		try (MemoryStack stack = MemoryStack.stackPush()) {
 			PointerBuffer size = stack.mallocPointer(1);
 			VulkanContext.check(vkGetPipelineCacheData(ctx.vk, handle, size, null), "vkGetPipelineCacheData");

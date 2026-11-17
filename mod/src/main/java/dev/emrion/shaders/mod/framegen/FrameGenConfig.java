@@ -52,7 +52,7 @@ public final class FrameGenConfig {
 
 	/** The mode that really runs: DLSS falls back to Off when DLSS FG is unavailable on this machine. */
 	public static Mode effective() {
-		if (closed || Presenter.wedged()) return Mode.OFF;
+		if (closed || Presenter.wedged() || dev.emrion.shaders.mod.photo.PhotoMode.frozen()) return Mode.OFF; // photo: real frames only
 		Mode m = mode;
 		return m == Mode.DLSS && DlssFrameGen.unavailable() != null ? Mode.OFF : m;
 	}

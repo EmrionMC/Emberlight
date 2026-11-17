@@ -42,12 +42,12 @@ final class RtAoPass {
 
 	private final VulkanContext ctx;
 	private final int width, height;
-	private final long setLayout, layout, tracePipeline, filterPipeline;
+	private long setLayout, layout, tracePipeline, filterPipeline;
 	private final RawImage[] history = new RawImage[2];
 	// 160 bytes of parameters: more than the 128 bytes of push constants Vulkan guarantees, so a UBO slot per frame in flight
 	private static final int PARAMS = 160, SLOT = 256;
-	private final RawBuffer params;
-	final PackRuntime.Img output;
+	private RawBuffer params;
+	final PackRuntime.Img output = new PackRuntime.Img("emrion rtao", null);
 	private final Matrix4f prevViewProj = new Matrix4f(), viewProj = new Matrix4f(), inv = new Matrix4f();
 	private Vec3 prevCam = Vec3.ZERO;
 	private int frame;
@@ -56,6 +56,15 @@ final class RtAoPass {
 		this.ctx = ctx;
 		this.width = width;
 		this.height = height;
+		try {
+			init();
+		} catch (RuntimeException | Error failed) { // e.g. out of GPU memory half-way: release what was created
+			destroyLater();
+			throw failed;
+		}
+	}
+
+	private void init() {
 		int cs = VK_SHADER_STAGE_COMPUTE_BIT;
 		setLayout = new Descriptors.LayoutBuilder()
 				.add(0, KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, cs)
@@ -75,7 +84,6 @@ final class RtAoPass {
 		ShaderModules.destroy(ctx, filter);
 		int usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
 		for (int i = 0; i < 2; i++) history[i] = new RawImage(ctx, VK_FORMAT_R16G16B16A16_SFLOAT, width, height, 1, 1, usage, "rt ao history " + i);
-		output = new PackRuntime.Img("emrion rtao", null);
 		RawImage out = new RawImage(ctx, VK_FORMAT_R32_SFLOAT, width, height, 1, 1, usage, "rt ao");
 		output.raw = out;
 		output.image = out.image;
@@ -149,10 +157,11 @@ final class RtAoPass {
 				.pImageInfo(VkDescriptorImageInfo.calloc(1, stack).sampler(sampler).imageView(view).imageLayout(VK_IMAGE_LAYOUT_GENERAL));
 	}
 
+	/** Also after a failed construction: destroys what was created. */
 	void destroyLater() {
-		for (RawImage h : history) h.destroyLater();
-		output.raw.destroyLater();
-		params.destroyLater();
+		for (RawImage h : history) if (h != null) h.destroyLater();
+		if (output.raw != null) output.raw.destroyLater();
+		if (params != null) params.destroyLater();
 		ctx.destroyLater(() -> {
 			vkDestroyPipeline(ctx.vk, tracePipeline, null);
 			vkDestroyPipeline(ctx.vk, filterPipeline, null);

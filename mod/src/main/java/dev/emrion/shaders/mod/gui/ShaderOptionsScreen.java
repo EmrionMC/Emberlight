@@ -44,10 +44,6 @@ public final class ShaderOptionsScreen extends EmberScreen {
 	@Override
 	protected void build() {
 		boolean root = id.isEmpty();
-		if (root) { // our own pages, outside the pack's screen tree
-			section("Emberlight");
-			grid(pageTiles(), 2);
-		}
 		List<String> elements = session.screen(id);
 		List<@Nullable AbstractWidget> cells = new ArrayList<>();
 		for (String e : elements) cells.add(cell(e));

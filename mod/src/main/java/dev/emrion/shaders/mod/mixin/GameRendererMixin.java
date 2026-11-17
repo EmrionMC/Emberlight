@@ -37,6 +37,7 @@ public class GameRendererMixin {
 		FrameTimeLogger.INSTANCE.frame();
 		dev.emrion.shaders.mod.autotest.AutoTest.onFrame();
 		dev.emrion.shaders.mod.upscale.VanillaUpscale.frameStart();
+		dev.emrion.shaders.mod.photo.PhotoMode.onRender((GameRenderer) (Object) this);
 		if (!EmrionShadersClient.active()) {
 			if (FrameTimeLogger.INSTANCE.recording() && dev.emrion.shaders.mod.autotest.AutoTest.PROFILE) dev.emrion.shaders.mod.autotest.GlGpuTimer.frameStart();
 			return;
@@ -59,6 +60,7 @@ public class GameRendererMixin {
 	/** Frame generation: MC's main target after the level and vanilla post effects, before the GUI = the HUD-less image. */
 	@Inject(method = "render", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/fog/FogRenderer;endFrame()V"))
 	private void emrion$hudless(CallbackInfo ci) {
+		dev.emrion.shaders.mod.photo.PhotoMode.beforeGui(((GameRenderer) (Object) this).mainRenderTarget());
 		boolean fg = dev.emrion.shaders.mod.framegen.FrameGen.wantsHudless();
 		if (!fg && !dev.emrion.shaders.mod.hdr.Hdr.active()) return;
 		var main = ((GameRenderer) (Object) this).mainRenderTarget();

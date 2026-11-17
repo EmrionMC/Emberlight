@@ -435,6 +435,39 @@ RR costs about 10 % (≈ 1.5 ms per frame at 1706×924 → 2560×1386) more than
 Not checked: the End snapshot (the snapshot replay hung on the dimension change, a harness problem), Faithful style with
 RR (the options exist there, not looked at), FSR frame generation with RR, Windows.
 
+### 11.5 Native packs (`feat/native-rr`, 2026-11-17)
+
+Native packs provide their own guides ([NATIVE_FORMAT.md §14.4](NATIVE_FORMAT.md)): with `settings.rayReconstruction`
+and RR on, the pack is compiled with `EL_RR_ACTIVE` and writes `el_rrDiffuse`, `el_rrSpecular`, `el_rrNormal` (render-size
+RGBA16F images Emberlight allocates only then); `rr_guides.comp` copies them (bit 3 of its flags, NaN-safe) instead of
+deriving albedo from the TLAS. Emberlight's RT switch is not needed for a native pack (it traces its own rays); a native
+pack without the setting is compiled with "rr" unavailable and gets DLSS SR. `packs/emberlight-rtx` implements it.
+
+Which of the pack's denoisers to drop was measured (2560×1440, DLSS Quality, Emberlight PBR resource pack, test server):
+sun visibility and reflections raw (no gather, no history) looked the same as with their denoisers under RR. The GI did
+not: it is traced at half resolution and joint-bilaterally upsampled, so its noise is blotchy and spatially correlated,
+and RR kept it as texture. With a 4-frame history the brick walls of the neon street were covered in coloured blotches
+and the glowstone room's floor in orange fireflies; 8 and 16 frames still boiled; the pack's normal history (24 frames
+moving, up to 72 at rest) without the à-trous passes was as clean as SR, also in the turn strips. So under RR only the
+à-trous passes go (and the sun/reflection gathers and histories).
+
+| Scene (rest, 8 s bench, exclusive GPU) | SR frame time | RR frame time |
+|---|---|---|
+| chapel (morning) | 8.90 ms (112 FPS) | 12.26 ms (82 FPS) |
+| mirror room (night) | 8.06 ms (124 FPS) | 11.20 ms (89 FPS) |
+| neon street (night) | 8.39 ms (119 FPS) | 11.30 ms (88 FPS) |
+| glowstone room (day) | 8.84 ms (113 FPS) | 11.23 ms (89 FPS) |
+
+RR costs ~3 ms here (1706×960 → 2560×1440), more than the ~1.5 ms measured with Complementary at 1706×924 → 2560×1386
+(§11.4); the three skipped à-trous passes do not make up for it.
+
+What it looks like (stills and turn strips, SR vs RR): mirrors stay as sharp as with SR, at rest and turning; the
+glowstone room's glossy floor is clean in motion where SR shows orange grain under the lamp. Caveats: glossy reflections
+of very bright sources (the glowstone in the floor) are dimmer than with SR, since the raw one-sample reflections reach
+RR tonemapped and clipped (the LDR cut, §11.1); RR softens the floor texture under the chapel's coloured light beams (the
+volumetric haze is composited over it); the sun's penumbrae are a little softer. Not checked: FSR frame generation with
+RR, the Nether/End, Windows.
+
 ## 12. Intel XeSS Super Resolution (`feat/xess`, 2026-11-16)
 
 **Windows only, not run yet.** Intel ships XeSS for Windows only: the SDK release (`intel/xess` on GitHub, latest

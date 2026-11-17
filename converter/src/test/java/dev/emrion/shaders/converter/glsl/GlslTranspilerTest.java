@@ -917,4 +917,53 @@ class GlslTranspilerTest {
 		assertTrue(o.analysis().uniforms().stream().anyMatch(u -> u.name().equals("emr_CameraBlockPos") && u.glslType().equals("ivec3")));
 		assertTrue(o.diagnostics().isEmpty(), o.diagnostics().toString());
 	}
+
+	@Test
+	void writesInAnyStageMakeTheProgramWriteStorage() throws Exception {
+		Out o = composite("""
+				#version 430
+				layout(std430, binding = 0) readonly buffer Data { float x; } data;
+				layout(rgba8) readonly uniform image2D colorimg2;
+				varying vec2 texCoord;
+				void main() { texCoord = vec2(data.x) + imageLoad(colorimg2, ivec2(0)).xy; gl_Position = vec4(0.0); }
+				""", """
+				#version 430
+				layout(std430, binding = 0) buffer Data { float x; } data;
+				layout(rgba8) uniform image2D colorimg2;
+				varying vec2 texCoord;
+				void main() { data.x = texCoord.x; imageStore(colorimg2, ivec2(0), vec4(1.0)); gl_FragData[0] = vec4(1.0); }
+				""");
+		assertFalse(o.analysis().buffers().getFirst().readonly());
+		assertEquals("readwrite", o.analysis().images().getFirst().access());
+	}
+
+	@Test
+	void builtinNamedGlobalAfterACommaIsNotDeclaredAgain() throws Exception {
+		Out o = composite(VS, """
+				#version 120
+				const float k = 1.0, pi = 3.0;
+				void main() { gl_FragColor = vec4(pi * k); }
+				""");
+		assertFalse(o.fs().contains("uniform float pi"), o.fs());
+		assertTrue(o.analysis().uniforms().stream().noneMatch(u -> u.name().equals("pi")));
+	}
+
+	@Test
+	void unusedBufferBlockNeedsNoBinding() throws Exception {
+		var stages = List.of(TranspilerTestSupport.stage("composite", ProgramGroup.COMPOSITE, StageType.VERTEX, VS),
+				TranspilerTestSupport.stage("composite", ProgramGroup.COMPOSITE, StageType.FRAGMENT, """
+						#version 430
+						layout(std430, binding = 0) buffer Data { float x; } data;
+						varying vec2 texCoord;
+						void main() { gl_FragData[0] = vec4(texCoord, 0.0, 1.0); }
+						"""));
+		Transpiler.ProgramAnalysis a = TR.analyze(stages);
+		assertFalse(a.buffers().getFirst().used());
+		var c = TranspilerTestSupport.context(a, null);
+		var noBuffers = new Transpiler.EmitContext(c.uniformMembers(), n -> n.startsWith("bufferObject") ? null : c.resourceBinding().apply(n),
+				c.outputLocations(), null);
+		var r = TR.emit(a, noBuffers, "fullscreen");
+		assertTrue(r.diagnostics().isEmpty(), r.diagnostics().toString());
+		assertFalse(r.glsl().get(StageType.FRAGMENT).contains(" Data "));
+	}
 }

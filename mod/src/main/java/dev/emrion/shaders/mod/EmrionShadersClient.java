@@ -4,6 +4,8 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import dev.emrion.shaders.mod.autotest.AutoTest;
 import dev.emrion.shaders.mod.debug.Profiler;
 import dev.emrion.shaders.mod.pack.PackManager;
+import dev.emrion.shaders.mod.photo.PhotoMode;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
 import dev.emrion.shaders.mod.vertex.DebugVertex;
 import dev.emrion.shaders.mod.pack.PackScreen;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -79,6 +81,7 @@ public final class EmrionShadersClient implements ClientModInitializer {
 		KeyMapping wireframeKey = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.emberlight.wireframe", InputConstants.UNKNOWN.getValue(), category));
 		KeyMapping rtKey = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.emberlight.rt", InputConstants.UNKNOWN.getValue(), category));
 		// F9: unbound in vanilla 26.3 (F1-F7 and F11 are taken)
+		KeyMapping photoKey = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.emberlight.photo", InputConstants.UNKNOWN.getValue(), category));
 		KeyMapping snapshotKey = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.emberlight.snapshot", InputConstants.KEY_F9, category));
 		net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback.EVENT.register((d, ctx) -> d.register(
 				net.fabricmc.fabric.api.client.command.v2.ClientCommands.literal("emberlight").then(net.fabricmc.fabric.api.client.command.v2.ClientCommands
@@ -91,7 +94,16 @@ public final class EmrionShadersClient implements ClientModInitializer {
 							dev.emrion.shaders.mod.debug.Snapshot.pendingNote = com.mojang.brigadier.arguments.StringArgumentType.getString(c, "note");
 							dev.emrion.shaders.mod.debug.Snapshot.delay = 3;
 							return 1;
-						})))));
+						}))).then(net.fabricmc.fabric.api.client.command.v2.ClientCommands.literal("photo").executes(c -> {
+							PhotoMode.request(PhotoMode.scale, PhotoMode.samples);
+							return 1;
+						}).then(net.fabricmc.fabric.api.client.command.v2.ClientCommands.argument("scale", IntegerArgumentType.integer(1, 2)).executes(c -> {
+							PhotoMode.request(IntegerArgumentType.getInteger(c, "scale"), PhotoMode.samples);
+							return 1;
+						}).then(net.fabricmc.fabric.api.client.command.v2.ClientCommands.argument("samples", IntegerArgumentType.integer(1, 4096)).executes(c -> {
+							PhotoMode.request(IntegerArgumentType.getInteger(c, "scale"), IntegerArgumentType.getInteger(c, "samples"));
+							return 1;
+						}))))));
 		ClientTickEvents.END_CLIENT_TICK.register(mc -> {
 			while (packKey.consumeClick()) mc.gui.setScreen(new PackScreen(mc.gui.screen())); // on OpenGL it explains how to get Vulkan
 			while (toggleKey.consumeClick()) if (active) {
@@ -123,6 +135,8 @@ public final class EmrionShadersClient implements ClientModInitializer {
 				}
 				mc.gui.hud.setOverlayMessage(Component.literal(msg), false);
 			}
+			while (photoKey.consumeClick()) PhotoMode.request(PhotoMode.scale, PhotoMode.samples);
+			PhotoMode.tick(mc);
 			while (snapshotKey.consumeClick()) dev.emrion.shaders.mod.debug.Snapshot.take(mc);
 			if (dev.emrion.shaders.mod.debug.Snapshot.delay > 0 && --dev.emrion.shaders.mod.debug.Snapshot.delay == 0)
 				dev.emrion.shaders.mod.debug.Snapshot.take(mc, dev.emrion.shaders.mod.debug.Snapshot.pendingNote);
@@ -149,6 +163,7 @@ public final class EmrionShadersClient implements ClientModInitializer {
 				dev.emrion.shaders.mod.framegen.FrameGen.shutdown(VulkanContext.get()); // presenter off before NGX and the device go
 				dev.emrion.shaders.mod.framegen.Reflex.shutdown(); // after the presenter: no more markers or presents
 				dev.emrion.shaders.mod.upscale.VanillaUpscale.shutdown();
+				dev.emrion.shaders.mod.hdr.Hdr.shutdown();
 				dev.emrion.shaders.mod.upscale.Dlss.shutdown(VulkanContext.get()); // before MC destroys the device
 				dev.emrion.shaders.mod.runtime.HorizonBox.close();
 				dev.emrion.shaders.mod.debug.HitchLog.shutdown();

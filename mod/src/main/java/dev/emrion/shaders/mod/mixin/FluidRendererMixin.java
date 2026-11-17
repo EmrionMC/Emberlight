@@ -54,7 +54,9 @@ public class FluidRendererMixin {
 		} else {
 			java.util.Arrays.fill(br, c.fluidLevel.cardinalLighting().byFace(Direction.UP));
 		}
-		float side = dir.getAxis() == Direction.Axis.Z ? 0.8f : dir.getAxis() == Direction.Axis.X ? 0.6f : 1.0f;
+		// oldLighting=false: no side shading, as DefaultFluidRendererMixin does for Sodium
+		float side = EmrionVertexFormats.directionalShadingOff() ? 1.0f
+				: dir.getAxis() == Direction.Axis.Z ? 0.8f : dir.getAxis() == Direction.Axis.X ? 0.6f : 1.0f;
 		boolean separate = EmrionVertexFormats.separateAo();
 		int[] col = new int[4];
 		for (int i = 0; i < 4; i++) {

@@ -35,7 +35,7 @@ public final class GlslTranspiler implements Transpiler {
 	// ---- fixed tables --------------------------------------------------------------------------------------------
 
 	/** GLSL types of the canonical vertex inputs (VertexLayouts.INPUT_LOCATIONS). */
-	static final Map<String, String> CANON_TYPE = Map.ofEntries(
+	public static final Map<String, String> CANON_TYPE = Map.ofEntries(
 			Map.entry("Position", "vec3"), Map.entry("Color", "vec4"), Map.entry("UV0", "vec2"), Map.entry("UV1", "ivec2"),
 			Map.entry("UV2", "ivec2"), Map.entry("Normal", "vec3"), Map.entry("mc_Entity", "ivec2"),
 			Map.entry("mc_midTexCoord", "vec2"), Map.entry("at_tangent", "vec4"), Map.entry("at_midBlock", "vec4"),
@@ -80,9 +80,28 @@ public final class GlslTranspiler implements Transpiler {
 
 	static final Set<String> ALBEDO = Set.of("tex", "texture", "gtexture", "gcolor", "u_MainSampler");
 
-	static final String LIGHTMAP_MATRIX = "mat4(vec4(0.00390625, 0.0, 0.0, 0.0), vec4(0.0, 0.00390625, 0.0, 0.0), "
+	public static final String LIGHTMAP_MATRIX = "mat4(vec4(0.00390625, 0.0, 0.0, 0.0), vec4(0.0, 0.00390625, 0.0, 0.0), "
 			+ "vec4(0.0, 0.0, 0.00390625, 0.0), vec4(0.03125, 0.03125, 0.03125, 1.0))";
 	static final String COMPOSITE_PROJECTION = "mat4(vec4(2.0, 0.0, 0.0, 0.0), vec4(0.0, 2.0, 0.0, 0.0), vec4(0.0), vec4(-1.0, -1.0, 0.0, 1.0))";
+
+	/** Vertex-decoding helpers of the terrain_sodium and clouds variants (shared with the native compiler). */
+	public static final String HELPER_SOD_CHUNK_OFFSET = "vec3 emr_sodChunkOffset() { return emr_draw.emr_sodRegionOffset"
+			+ " + vec3((uvec3(emr_sod_LightAndData.w) >> uvec3(5u, 0u, 2u)) & uvec3(7u, 3u, 7u)) * 16.0 - emr_sodGlobals.u_CameraOffset; }";
+	public static final String HELPER_SOD_POSITION = "vec3 emr_sodPosition() { uvec3 hi = (uvec3(emr_sod_Position.x) >> uvec3(0u, 10u, 20u)) & 0x3FFu;"
+			+ " uvec3 lo = (uvec3(emr_sod_Position.y) >> uvec3(0u, 10u, 20u)) & 0x3FFu;"
+			+ " return vec3((hi << 10u) | lo) * (32.0 / 1048576.0) - 8.0 + emr_sodChunkOffset(); }";
+	public static final String HELPER_SOD_UV0 = "vec2 emr_sodUV0() { return vec2(emr_sod_TexCoord & 0x7FFFu) / 32768.0"
+			+ " + mix(vec2(-1.0), vec2(1.0), bvec2(emr_sod_TexCoord >> 15u)) * emr_sodGlobals.u_TexCoordShrink; }";
+	public static final String HELPER_SOD_CHUNK_FADE = "float emr_sodChunkFade() { if (isinf(emr_sodGlobals.u_FadePeriodInv)) return 1.0; int f = texelFetch(emr_sodSectionTimeInfo, int(emr_draw.emr_sodRegionID * 256u"
+			+ " + emr_sod_LightAndData.w)).r; return f < 0 ? 1.0 : clamp(float(emr_draw.emr_sodCurrentTime - f) * emr_sodGlobals.u_FadePeriodInv, 0.0, 1.0); }";
+	public static final String HELPER_CLOUD_POS = "vec3 emr_cloudPos() { int q = gl_VertexIndex % 4, i = (gl_VertexIndex / 4) * 3; int x = texelFetch(emr_CloudFaces, i).r,"
+			+ " z = texelFetch(emr_CloudFaces, i + 1).r, f = texelFetch(emr_CloudFaces, i + 2).r; x = (x << 1) | ((f & 128) >> 7); z = (z << 1) | ((f & 64) >> 6);"
+			+ " int v = (f & 7) * 4 + ((f & 16) != 0 ? 3 - q : q); vec3 c = vec3(float((0xF03CC3 >> v) & 1), float((0x6666F0 >> v) & 1), float((0xC3F066 >> v) & 1));"
+			+ " return c * emr_CloudInfo.CellSize + vec3(float(x), 0.0, float(z)) * emr_CloudInfo.CellSize + emr_CloudInfo.CloudOffset; }";
+	public static final String HELPER_CLOUD_NORMAL = "vec3 emr_cloudNormal() { int d = texelFetch(emr_CloudFaces, (gl_VertexIndex / 4) * 3 + 2).r & 7;"
+			+ " return vec3[](vec3(0.0, -1.0, 0.0), vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, -1.0), vec3(0.0, 0.0, 1.0), vec3(-1.0, 0.0, 0.0), vec3(1.0, 0.0, 0.0))[d]; }";
+	public static final String HELPER_CLOUD_COL = "vec4 emr_cloudCol() { int f = texelFetch(emr_CloudFaces, (gl_VertexIndex / 4) * 3 + 2).r; int d = (f & 32) != 0 ? 1 : f & 7;"
+			+ " return vec4(vec3[](vec3(0.7), vec3(1.0), vec3(0.8), vec3(0.8), vec3(0.9), vec3(0.9))[d], 0.8) * emr_CloudInfo.CloudColor; }";
 
 	/** Identifiers that are keywords (or built-in types) in GLSL 450 / Vulkan GLSL but legal names in GLSL 130. */
 	static final Set<String> KEYWORDS_450 = Set.of("sample", "patch", "buffer", "shared", "coherent", "volatile", "restrict",
@@ -161,8 +180,12 @@ public final class GlslTranspiler implements Transpiler {
 		Stage(PreprocessedStage src) {
 			this.src = src;
 			this.type = src.stage();
-			this.t = GlslLexer.lex(src.text());
-			this.items = GlslParser.parse(t);
+			List<Token> lexed = GlslLexer.lex(src.text());
+			List<Item> parsed = GlslParser.parse(lexed);
+			String text = declareBuiltins(lexed, parsed);
+			if (text != null) parsed = GlslParser.parse(lexed = GlslLexer.lex(text)); // lexed again only when something was declared
+			this.t = lexed;
+			this.items = parsed;
 			this.lines = new int[t.size()];
 			int line = 1;
 			for (int i = 0; i < t.size(); i++) {
@@ -171,6 +194,41 @@ public final class GlslTranspiler implements Transpiler {
 				line += newlines(t.get(i).text);
 			}
 			analyse();
+		}
+
+		/**
+		 * Iris built-in uniforms a stage uses without declaring them (Eclipse's world1 gbuffers_skytextured uses
+		 * gbufferProjectionInverse): declared in front of the first non-directive token, on its line, so line numbers stay.
+		 * @return the text with the declarations, or null when none are needed
+		 */
+		static String declareBuiltins(List<Token> t, List<Item> items) {
+			Set<String> used = new java.util.LinkedHashSet<>(), declared = new HashSet<>();
+			for (Item it : items) { // global declarators after a comma (const float k = 1.0, pi = 3.0;) have no type in front
+				if (it.name != null) declared.add(it.name);
+				for (Declarator d : it.decls) declared.add(d.name());
+			}
+			for (int i = 0; i < t.size(); i++) {
+				Token k = t.get(i);
+				if (!k.ident() || (i > 0 && t.get(i - 1).is("."))) continue;
+				if (i > 0 && t.get(i - 1).ident() && !Set.of("return", "else", "case").contains(t.get(i - 1).text)) declared.add(k.text);
+				else used.add(k.text);
+			}
+			StringBuilder decl = new StringBuilder();
+			for (String n : used)
+				if (!declared.contains(n)) dev.emrion.shaders.converter.expr.UniformCatalog.lookup(n)
+						.ifPresent(b -> decl.append("uniform ").append(b.glslType()).append(' ').append(n).append("; "));
+			if (decl.isEmpty()) return null;
+			StringBuilder out = new StringBuilder();
+			boolean done = false;
+			for (Token k : t) {
+				out.append(k.ws);
+				if (!done && k.kind != GlslLexer.Kind.DIRECTIVE) {
+					out.append(decl);
+					done = true;
+				}
+				out.append(k.text);
+			}
+			return out.toString();
 		}
 
 		final int[] lines;
@@ -450,7 +508,11 @@ public final class GlslTranspiler implements Transpiler {
 					if (slot != null) set0.add(slot);
 					else samplers.putIfAbsent(name, new SamplerDecl(name, type));
 				} else if (GlslTypes.isImage(type)) {
-					images.putIfAbsent(name, new ImageDecl(name, type, imageFormat(u.item()), access(u.item())));
+					// stages declare their own access (readonly in VS, written in FS): the program writes if any stage may
+					ImageDecl prev = images.get(name);
+					String access = access(u.item());
+					images.put(name, prev == null ? new ImageDecl(name, type, imageFormat(u.item()), access)
+							: prev.access().equals(access) ? prev : new ImageDecl(name, prev.glslType(), prev.format(), "readwrite"));
 				} else if (type.equals("accelerationStructureEXT")) { // RT variants only (RtPatcher helpers)
 					samplers.putIfAbsent(name, new SamplerDecl(name, type));
 				} else if (!GlslTypes.isOpaque(type)) {
@@ -465,7 +527,7 @@ public final class GlslTranspiler implements Transpiler {
 					boolean used = it.decls.isEmpty() || s.count(it.decls.getFirst().name()) > 1;
 					var prev = buffers.get(it.name);
 					buffers.put(it.name, prev == null ? new BufferDecl(it.name, layoutInt(it, "binding", 0), it.has("readonly"), used)
-							: new BufferDecl(prev.blockName(), prev.declaredBinding(), prev.readonly(), used || prev.used()));
+							: new BufferDecl(prev.blockName(), prev.declaredBinding(), prev.readonly() && it.has("readonly"), used || prev.used()));
 				}
 			}
 			boolean usesFog = s.used("gl_Fog");
@@ -1074,6 +1136,7 @@ public final class GlslTranspiler implements Transpiler {
 			}
 			int b;
 			if ("buffer".equals(storage)) {
+				if (!it.decls.isEmpty() && s.count(it.decls.getFirst().name()) <= 1) return; // unused instance: no binding needed
 				b = binding(it.name.equals("EmrRtSections") || it.name.equals("EmrRtLights") ? it.name : "bufferObject" + layoutInt(it, "binding", 0));
 				packing = "std140".equals(packing) ? "std140" : "std430";
 			} else if ("uniform".equals(storage)) {
@@ -1201,25 +1264,15 @@ public final class GlslTranspiler implements Transpiler {
 		Map<String, String> helpers() {
 			Map<String, String> h = new LinkedHashMap<>();
 			// first (emr_ftransform may call them). terrain_sodium: Sodium's chunk_vertex.glsl decoding (positions 20-bit fixed point, draw id = section in its region)
-			h.put("emr_sodChunkOffset", "vec3 emr_sodChunkOffset() { return emr_draw.emr_sodRegionOffset"
-					+ " + vec3((uvec3(emr_sod_LightAndData.w) >> uvec3(5u, 0u, 2u)) & uvec3(7u, 3u, 7u)) * 16.0 - emr_sodGlobals.u_CameraOffset; }");
-			h.put("emr_sodPosition", "vec3 emr_sodPosition() { uvec3 hi = (uvec3(emr_sod_Position.x) >> uvec3(0u, 10u, 20u)) & 0x3FFu;"
-					+ " uvec3 lo = (uvec3(emr_sod_Position.y) >> uvec3(0u, 10u, 20u)) & 0x3FFu;"
-					+ " return vec3((hi << 10u) | lo) * (32.0 / 1048576.0) - 8.0 + emr_sodChunkOffset(); }");
-			h.put("emr_sodUV0", "vec2 emr_sodUV0() { return vec2(emr_sod_TexCoord & 0x7FFFu) / 32768.0"
-					+ " + mix(vec2(-1.0), vec2(1.0), bvec2(emr_sod_TexCoord >> 15u)) * emr_sodGlobals.u_TexCoordShrink; }");
+			h.put("emr_sodChunkOffset", HELPER_SOD_CHUNK_OFFSET);
+			h.put("emr_sodPosition", HELPER_SOD_POSITION);
+			h.put("emr_sodUV0", HELPER_SOD_UV0);
 			// fade-in off (MC option 0 s: Sodium's period inverse is +inf): no per-vertex fetch from Sodium's host-visible time buffer
-			h.put("emr_sodChunkFade", "float emr_sodChunkFade() { if (isinf(emr_sodGlobals.u_FadePeriodInv)) return 1.0; int f = texelFetch(emr_sodSectionTimeInfo, int(emr_draw.emr_sodRegionID * 256u"
-					+ " + emr_sod_LightAndData.w)).r; return f < 0 ? 1.0 : clamp(float(emr_draw.emr_sodCurrentTime - f) * emr_sodGlobals.u_FadePeriodInv, 0.0, 1.0); }");
+			h.put("emr_sodChunkFade", HELPER_SOD_CHUNK_FADE);
 			// clouds variant (MC 26.3 clouds.vsh): 3 bytes per face in CloudFaces (cell x/2, cell z/2, direction + flags); Iris's face colours (alpha 0.8)
-			h.put("emr_cloudPos", "vec3 emr_cloudPos() { int q = gl_VertexIndex % 4, i = (gl_VertexIndex / 4) * 3; int x = texelFetch(emr_CloudFaces, i).r,"
-					+ " z = texelFetch(emr_CloudFaces, i + 1).r, f = texelFetch(emr_CloudFaces, i + 2).r; x = (x << 1) | ((f & 128) >> 7); z = (z << 1) | ((f & 64) >> 6);"
-					+ " int v = (f & 7) * 4 + ((f & 16) != 0 ? 3 - q : q); vec3 c = vec3(float((0xF03CC3 >> v) & 1), float((0x6666F0 >> v) & 1), float((0xC3F066 >> v) & 1));"
-					+ " return c * emr_CloudInfo.CellSize + vec3(float(x), 0.0, float(z)) * emr_CloudInfo.CellSize + emr_CloudInfo.CloudOffset; }");
-			h.put("emr_cloudNormal", "vec3 emr_cloudNormal() { int d = texelFetch(emr_CloudFaces, (gl_VertexIndex / 4) * 3 + 2).r & 7;"
-					+ " return vec3[](vec3(0.0, -1.0, 0.0), vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, -1.0), vec3(0.0, 0.0, 1.0), vec3(-1.0, 0.0, 0.0), vec3(1.0, 0.0, 0.0))[d]; }");
-			h.put("emr_cloudCol", "vec4 emr_cloudCol() { int f = texelFetch(emr_CloudFaces, (gl_VertexIndex / 4) * 3 + 2).r; int d = (f & 32) != 0 ? 1 : f & 7;"
-					+ " return vec4(vec3[](vec3(0.7), vec3(1.0), vec3(0.8), vec3(0.8), vec3(0.9), vec3(0.9))[d], 0.8) * emr_CloudInfo.CloudColor; }");
+			h.put("emr_cloudPos", HELPER_CLOUD_POS);
+			h.put("emr_cloudNormal", HELPER_CLOUD_NORMAL);
+			h.put("emr_cloudCol", HELPER_CLOUD_COL);
 			h.put("emr_FogParameters", "struct emr_FogParameters { vec4 color; float density; float start; float end; float scale; };");
 			h.put("emr_translate", "mat4 emr_translate(vec3 o) { return mat4(1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, o.x, o.y, o.z, 1.0); }");
 			// composites draw Iris's quad: 6 vertices with MC's quad indices 0,1,2,2,3,0 over (0,0) (1,0) (1,1) (0,1), UV (0,0)

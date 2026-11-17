@@ -3,21 +3,20 @@
 // blocked sources account for it (sum w_i (1 - v_i)). Light from unknown sources (entities) stays. Light grid: RtLights.
 // Light grid: RtLights, declared in bl_buffer.glsl (emrRtLightCell, emrRtLight, emrRtLightFade).
 
-// Opaque or alpha-tested terrain along the ray (cutout alpha 0.1 at mip 0, like the shadow pass).
-// Lava (ids 10068, 10070) never blocks, or a pool would shadow itself.
+// Opaque or alpha-tested terrain along the ray (cutout alpha 0.1 at mip 0, like the shadow pass). Lava blocks too (solid BLAS,
+// opaque geometry); the ray ends at the source's block, so a pool does not shadow itself. More candidates than the guard: blocked.
 float emrRtLightVisibility(vec3 origin, vec3 dir, float tMax) {
 	rayQueryEXT rq;
 	rayQueryInitializeEXT(rq, emrRtTlas, gl_RayFlagsTerminateOnFirstHitEXT, 0x01u, origin, 0.0, dir, tMax);
-	for (int guard = 0; guard < 32 && rayQueryProceedEXT(rq); guard++) {
+	bool more;
+	for (int guard = 0; (more = rayQueryProceedEXT(rq)) && guard < 32; guard++) {
 		if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;
 		EmrRtVerts v = emrRtVerts(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false));
 		uvec3 tri = emrRtTri(uint(rayQueryGetIntersectionPrimitiveIndexEXT(rq, false)));
-		int id = emrRtId(v, tri.x);
-		if (id == 10068 || id == 10070) continue;
 		vec2 uv = emrRtBaryUv(v, tri, rayQueryGetIntersectionBarycentricsEXT(rq, false));
 		if (textureLod(emrRtAtlas, uv, 0.0).a >= 0.1) rayQueryConfirmIntersectionEXT(rq);
 	}
-	return rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT ? 1.0 : 0.0;
+	return !more && rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT ? 1.0 : 0.0;
 }
 
 // Unshadowed weight of a source at p, on the pack's lightmap scale: vanilla light falls one level per block, so L1 distance

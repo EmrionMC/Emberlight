@@ -64,6 +64,7 @@
     },
     "caustics": {
       "requires": ["gbuffers_terrain"],
+      "dimensions": ["world0", "world1"],
       "options": {"water": "32000", "strength": "0.6", "bump": "1.0", "max": "3.0", "speed": "1.0"},
       "helpers": "rt/complementary/caustics.glsl",
       "uniforms": {"shadowModelViewInverse": "mat4", "shadowProjectionInverse": "mat4"},
@@ -72,7 +73,9 @@
         "waterNormals": {"program": "gbuffers_water", "function": "void main()", "at": "vec2 normalMed =", "statements": 4}
       },
       "patches": [
-        {"function": "vec3 SampleShadow(vec3,float,float)", "find": "texture2D(shadowcolor0, shadowPos.st).rgb", "body": "rt/complementary/caustics_body.glsl"}
+        {"function": "vec3 SampleShadow(vec3,float,float)", "find": "texture2D(shadowcolor0, shadowPos.st).rgb", "body": "rt/complementary/caustics_body.glsl"},
+        {"function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
+         "after": "float NdotL = dot(normalM, lightVec);", "body": "rt/complementary/caustics_ndotl.glsl"}
       ]
     },
     "ao": {
@@ -133,7 +136,7 @@
     },
     "blocklight": {
       "requires": ["gbuffers_terrain"],
-      "options": {"rays": "4", "ambient": "0.15", "refineDist": "32.0"},
+      "options": {"rays": "4", "ambient": "0.15", "refineDist": "32.0", "entities": "0"},
       "helpers": "rt/complementary/bl_buffer.glsl,rt/complementary/blocklight.glsl",
       "uniforms": {"frameCounter": "int"},
       "needs": [],
@@ -255,10 +258,10 @@
       ],
       "variants": {
         "rtx": {
-          "options": {"glass": "1.6", "glow": "2.0", "bounce": "0.85", "blockStrength": "2.5", "blockHue": "0.75", "boost": "4", "entities": "0"},
+          "options": {"glass": "1.6", "bounce": "0.85", "blockStrength": "2.5", "blockHue": "0.75", "boost": "4", "entities": "0"},
           "helpers": "rt/complementary/rtx/gi_apply.glsl",
           "needs": ["blocklightCol"],
-          "uniforms": {"gbufferModelView": "mat4", "gbufferProjection": "mat4"},
+          "uniforms": {"gbufferModelView": "mat4", "gbufferProjection": "mat4", "gbufferModelViewInverse": "mat4", "gbufferProjectionInverse": "mat4"},
           "patches": [
             {
               "function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
@@ -271,7 +274,7 @@
           ],
           "computes": [
             {"program": "prepare_a", "helpers": ["rt/complementary/gi_common.glsl", "rt/complementary/bl_buffer.glsl", "rt/complementary/rtx/bl_common.glsl",
-              "rt/complementary/rtx/gi_common.glsl"], "body": "rt/complementary/rtx/gi_trace.csh"},
+              "rt/complementary/rtx/gi_cache_off.glsl", "rt/complementary/rtx/gi_common.glsl"], "body": "rt/complementary/rtx/gi_trace.csh"},
             {"program": "prepare_b", "helpers": ["rt/complementary/gi_common.glsl"], "body": "rt/complementary/rtx/gi_temporal.csh"},
             {"program": "prepare_c", "helpers": ["rt/complementary/gi_common.glsl", "rt/complementary/rtx/gi_atrous.glsl"], "body": "rt/complementary/rtx/gi_atrous_c.csh"},
             {"program": "prepare_d", "helpers": ["rt/complementary/gi_common.glsl", "rt/complementary/rtx/gi_atrous.glsl"], "body": "rt/complementary/rtx/gi_atrous_d.csh"},
@@ -282,6 +285,24 @@
             "emrGiTC": "emrGiTCSampler rgba rgba16f half_float false true $res $res",
             "emrGiHC": "emrGiHCSampler rgba rgba16f half_float false true $res $res",
             "emrGiFC": "emrGiFCSampler rgba rgba16f half_float false true $res $res"
+          }
+        },
+        "cache": {
+          "options": {"cacheRate": "0.125", "cacheBounce": "0.25", "cacheVoxel": "0.5", "cacheNear": "16.0", "cacheMin": "4.0", "cacheFrames": "32.0", "cacheStale": "96.0"},
+          "computes": [
+            {"program": "prepare_a", "helpers": ["rt/complementary/gi_common.glsl", "rt/complementary/bl_buffer.glsl", "rt/complementary/rtx/bl_common.glsl", "rt/complementary/rtx/gi_cache.glsl", "rt/complementary/rtx/gi_common.glsl"], "body": "rt/complementary/rtx/gi_trace.csh"},
+            {"program": "prepare_b", "helpers": ["rt/complementary/gi_common.glsl"], "body": "rt/complementary/rtx/gi_temporal.csh"},
+            {"program": "prepare_c", "helpers": ["rt/complementary/gi_common.glsl", "rt/complementary/rtx/gi_atrous.glsl"], "body": "rt/complementary/rtx/gi_atrous_c.csh"},
+            {"program": "prepare_d", "helpers": ["rt/complementary/gi_common.glsl", "rt/complementary/rtx/gi_atrous.glsl"], "body": "rt/complementary/rtx/gi_atrous_d.csh"},
+            {"program": "prepare_e", "helpers": ["rt/complementary/gi_common.glsl", "rt/complementary/rtx/gi_atrous.glsl"], "body": "rt/complementary/rtx/gi_atrous_e.csh"},
+            {"program": "prepare_j", "helpers": ["rt/complementary/gi_common.glsl", "rt/complementary/bl_buffer.glsl", "rt/complementary/rtx/bl_common.glsl", "rt/complementary/rtx/gi_cache.glsl", "rt/complementary/rtx/gi_common.glsl"], "body": "rt/complementary/rtx/gi_cache_update.csh"},
+            {"program": "prepare_k", "helpers": ["rt/complementary/gi_common.glsl", "rt/complementary/bl_buffer.glsl", "rt/complementary/rtx/gi_cache.glsl"],
+             "body": "rt/complementary/rtx/gi_cache_resolve.csh"}
+          ],
+          "images": {
+            "emrGiCk": "emrGiCkSampler red_integer r32ui unsigned_int false false 1024 1024",
+            "emrGiCs": "emrGiCsSampler red_integer r32ui unsigned_int false false 1024 10240",
+            "emrGiCr": "emrGiCrSampler rgba rgba16f half_float false false 1024 3072"
           }
         }
       },

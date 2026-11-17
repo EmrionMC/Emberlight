@@ -89,6 +89,20 @@ public final class PackManager {
 			dev.emrion.shaders.mod.debug.HitchLog.add(dev.emrion.shaders.mod.debug.HitchLog.COMPILE, start);
 		}
 	};
+	/**
+	 * Builds the pack's other dimensions once in the background and drops them, so a cold VkPipelineCache has them before
+	 * the first portal (11-22 s of vanilla rendering otherwise; warm builds take ~0.2 s). Not {@link #PIPELINE_COMPILER}:
+	 * the render thread can block on a vanilla compile queued there (MC's PipelineCache.get joins it).
+	 */
+	private static final ExecutorService PRECOMPILER = Executors.newSingleThreadExecutor(r -> {
+		Thread t = new Thread(r, "Emberlight shader precompiler");
+		t.setDaemon(true);
+		t.setPriority(Thread.MIN_PRIORITY);
+		return t;
+	});
+	/** The pack version whose other dimensions were precompiled (render thread). */
+	private static @Nullable Loaded precompiled;
+
 	/** Vanilla pipelines being compiled for {@link #prepare}, and the MC cache they go into. */
 	private static @Nullable Map<RenderPipeline, java.util.concurrent.CompletableFuture<CompiledRenderPipeline.Pending>> compiling;
 	private static com.mojang.blaze3d.pipeline.@Nullable PipelineCache compilingFor;
@@ -103,7 +117,13 @@ public final class PackManager {
 	public static final List<String> errors = new ArrayList<>();
 
 	/** @param lang the pack's shaders/lang/*.lang, language code (lowercase) → entries */
-	private record Loaded(Path dir, Manifest manifest, Map<String, Map<String, String>> lang) {}
+	private record Loaded(Path dir, Manifest manifest, Map<String, Map<String, String>> lang, RtSupport rtSupport) {}
+
+	/**
+	 * What Emberlight's RT page can do for a pack: a native pack traces its own rays (the page does not apply); an Iris pack
+	 * offers the effects of its RT patch table (none: no table).
+	 */
+	public record RtSupport(boolean nativePack, java.util.Set<String> effects) {}
 	private record Prepared(int generation, Loaded source, String folder, PackPipelines pipelines) {}
 
 	private static volatile @Nullable Loaded loaded;
@@ -127,6 +147,10 @@ public final class PackManager {
 	private static @Nullable PackRuntime runtime;
 	private static @Nullable FrameExecutor executor;
 	private static @Nullable UniformSystem uniforms;
+	/** Since when the level's dimension waits for its pack runtime (nanoTime, 0 = none waits): {@link #switching}. */
+	private static volatile long switchStart;
+	/** Most a dimension switch holds MC's level loading screen; then vanilla renders until the pack is ready, as before. */
+	private static final long HOLD_NS = 30_000_000_000L;
 
 	// ---- selection --------------------------------------------------------------------------------------------------
 
@@ -151,6 +175,9 @@ public final class PackManager {
 		dev.emrion.shaders.mod.framegen.FrameGenConfig.load(p);
 		dev.emrion.shaders.mod.framegen.Reflex.load(p);
 		dev.emrion.shaders.mod.hdr.Hdr.load(p);
+		dev.emrion.shaders.mod.photo.PhotoMode.load(p);
+		if (!p.containsKey("rt.enabled") && RtCapability.REQUESTED && (!dev.emrion.shaders.mod.autotest.AutoTest.ACTIVE || Boolean.getBoolean("emrion.rt.autoPreset")))
+			firstStartPreset(p);
 		if (Boolean.parseBoolean(p.getProperty("debug"))) {
 			debug = true;
 			dev.emrion.shaders.mod.debug.Profiler.visible = true;
@@ -160,6 +187,44 @@ public final class PackManager {
 		if (dev.emrion.shaders.mod.runtime.ReceiverGrid.MODES.contains(culling)) dev.emrion.shaders.mod.runtime.ReceiverGrid.mode = culling;
 		String pack = System.getProperty("emrion.pack", p.getProperty("pack", ""));
 		if (!pack.isBlank()) select(pack, false);
+	}
+
+	/**
+	 * No RT settings saved yet: pick an RT preset from the GPU (RtPreset table) and, when the user never chose an upscaler, suggest
+	 * one (DLSS on NVIDIA RTX, FSR elsewhere), then save both so this runs once. Autotests keep the old defaults unless
+	 * -Demrion.rt.autoPreset=true.
+	 */
+	private static void firstStartPreset(Properties p) {
+		var ctx = VulkanContext.get();
+		long vram = 0;
+		try (var stack = org.lwjgl.system.MemoryStack.stackPush()) {
+			var mem = org.lwjgl.vulkan.VkPhysicalDeviceMemoryProperties.malloc(stack);
+			org.lwjgl.vulkan.VK10.vkGetPhysicalDeviceMemoryProperties(ctx.vk.getPhysicalDevice(), mem);
+			for (int i = 0; i < mem.memoryHeapCount(); i++)
+				if ((mem.memoryHeaps(i).flags() & org.lwjgl.vulkan.VK10.VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0) vram = Math.max(vram, mem.memoryHeaps(i).size());
+		}
+		int vendor = ctx.properties.vendorID();
+		String name = ctx.properties.deviceNameString();
+		boolean integrated = ctx.properties.deviceType() == org.lwjgl.vulkan.VK10.VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
+		dev.emrion.shaders.mod.rt.RtPreset preset = dev.emrion.shaders.mod.rt.RtPreset.forGpu(RtCapability.enabled, vendor, name, vram, integrated);
+		String upscale = "";
+		// into the file values, then loaded again: -Demrion.rt.* / -Demrion.upscale.* launch settings still win for this session
+		p.setProperty("rt.enabled", Boolean.toString(preset != null));
+		if (preset != null) {
+			preset.applyTo(p);
+			if (!p.containsKey("upscale.mode")) {
+				var mode = vendor == dev.emrion.shaders.mod.rt.RtPreset.NVIDIA
+						? dev.emrion.shaders.mod.upscale.UpscaleConfig.Mode.DLSS : dev.emrion.shaders.mod.upscale.UpscaleConfig.Mode.FSR;
+				p.setProperty("upscale.mode", mode.name().toLowerCase(java.util.Locale.ROOT));
+				p.setProperty("upscale.preset", preset.upscale.name().toLowerCase(java.util.Locale.ROOT));
+				upscale = ", upscaling " + mode.shortLabel + " " + preset.upscale.label;
+			}
+		}
+		EmrionShadersClient.LOG.info("First start: {} ({} MiB VRAM, vendor 0x{}, RT {}) -> RT preset {}{}", name, vram >> 20, Integer.toHexString(vendor),
+				RtCapability.enabled ? "supported" : "not supported", preset == null ? "none (RT off)" : preset.label, upscale);
+		RtConfig.load(p);
+		dev.emrion.shaders.mod.upscale.UpscaleConfig.load(p);
+		writeConfig(p);
 	}
 
 	private static Properties readConfig() {
@@ -180,6 +245,13 @@ public final class PackManager {
 			errors.clear();
 		}
 		if (save) saveConfig("pack", pack == null ? "" : pack);
+		Path watched = null;
+		try {
+			if (pack != null) watched = SHADERPACKS.resolve(pack).toRealPath();
+		} catch (IOException ignored) {
+			// missing pack: load() reports it
+		}
+		NativeWatcher.watch(watched);
 		if (pack == null) {
 			submit(null);
 			status = "Off";
@@ -193,12 +265,16 @@ public final class PackManager {
 		submit(() -> {
 			try {
 				Loaded l = load(pack, gen);
-				if (gen != generation) return;
-				loaded = l;
-				status = pack + ": loaded";
-				progress = -1;
+				Minecraft.getInstance().execute(() -> { // the generation check and the publication in one render-thread step
+					if (gen != generation) return;
+					loaded = l;
+					status = pack + ": loaded";
+					progress = -1;
+				});
 			} catch (Throwable t) {
-				if (gen == generation) fail("Could not load shader pack " + pack, t);
+				Minecraft.getInstance().execute(() -> {
+					if (gen == generation) fail("Could not load shader pack " + pack, t);
+				});
 			}
 		});
 	}
@@ -237,6 +313,10 @@ public final class PackManager {
 
 		Path settings = settingsFile(pack);
 		if (!Files.isRegularFile(settings)) settings = null;
+		boolean nativePack;
+		try (var src = PackSource.open(source)) {
+			nativePack = dev.emrion.shaders.converter.nativefmt.NativeCompiler.isNative(src);
+		}
 		long start = System.nanoTime();
 		Converter.Result result;
 		PackSource[] snapshot = new PackSource[1]; // the pack as converted, reused for its lang files (in memory: readable after close)
@@ -251,7 +331,7 @@ public final class PackManager {
 				status = "Converting " + pack + ": " + stage + " " + done + "/" + total;
 				progress = total == 0 ? 0 : (float) done / total;
 				dev.emrion.shaders.mod.gui.LoadingHud.stage(pack, stage, done, total);
-			}, true, request(), net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("sodium")));
+			}, true, request(nativePack), net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("sodium")));
 		}
 		if (gen != generation) throw new java.util.concurrent.CancellationException(); // superseded: its errors are not the new pack's
 		List<Diagnostic> errs = result.diagnostics().stream().filter(d -> d.severity() == Diagnostic.Severity.ERROR).distinct().toList(); // distinct: one per dimension otherwise
@@ -268,7 +348,17 @@ public final class PackManager {
 		if (debug) errs.stream().limit(20).forEach(d -> chat(Component.literal("[" + pack + "] " + where(d)).withStyle(ChatFormatting.RED)));
 		dev.emrion.shaders.mod.gui.LoadingHud.shaderErrors(errs.size()); // the failing programs are skipped; the panel says so, the log has them
 
-		return new Loaded(result.outputDir(), result.manifest(), readLang(snapshot[0]));
+		return new Loaded(result.outputDir(), result.manifest(), readLang(snapshot[0]), rtSupport(snapshot[0]));
+	}
+
+	private static RtSupport rtSupport(PackSource src) {
+		try {
+			if (dev.emrion.shaders.converter.nativefmt.NativeCompiler.isNative(src)) return new RtSupport(true, java.util.Set.of());
+			return new RtSupport(false, dev.emrion.shaders.converter.glsl.RtPatcher.tableEffects(src));
+		} catch (Exception e) {
+			EmrionShadersClient.LOG.warn("Could not read the RT table of {}", src.name(), e);
+			return new RtSupport(false, java.util.Set.of());
+		}
 	}
 
 	/** "file:line [program.stage]: message" for chat. */
@@ -281,6 +371,8 @@ public final class PackManager {
 	private static Map<String, Map<String, String>> readLang(PackSource src) {
 		Map<String, Map<String, String>> out = new java.util.HashMap<>();
 		try {
+			// native pack: lang/*.lang with the option screen's keys (NATIVE_FORMAT.md §10.5)
+			if (dev.emrion.shaders.converter.nativefmt.NativeCompiler.isNative(src)) return dev.emrion.shaders.converter.nativefmt.NativeCompiler.lang(src);
 			for (String path : src.list()) {
 				if (!path.startsWith("shaders/lang/") || !path.endsWith(".lang") || path.indexOf('/', 13) >= 0) continue;
 				Properties p = new Properties();
@@ -357,7 +449,9 @@ public final class PackManager {
 					progress = -1;
 				});
 			} catch (Throwable t) {
-				if (gen == generation) reloadFailed(pack, t);
+				Minecraft.getInstance().execute(() -> {
+					if (gen == generation) reloadFailed(pack, t);
+				});
 			}
 		});
 	}
@@ -376,9 +470,9 @@ public final class PackManager {
 	// ---- RT -----------------------------------------------------------------------------------------------------------
 
 	/** The converter's effect set: the RT effects plus "upscale" while an upscaler is selected (empty = plain conversion). */
-	private static java.util.Set<String> request() {
+	private static java.util.Set<String> request(boolean nativePack) {
 		java.util.Set<String> s = new java.util.TreeSet<>(RtConfig.request());
-		dev.emrion.shaders.mod.upscale.UpscaleConfig.addRequest(s);
+		dev.emrion.shaders.mod.upscale.UpscaleConfig.addRequest(s, nativePack);
 		return s;
 	}
 
@@ -415,7 +509,7 @@ public final class PackManager {
 		dev.emrion.shaders.mod.hdr.Hdr.store(p);
 		writeConfig(p);
 		Loaded l = next != null ? next : loaded;
-		java.util.Set<String> want = request();
+		java.util.Set<String> want = request(l != null && l.rtSupport().nativePack());
 		java.util.Set<String> have = l == null || l.manifest().rt() == null ? java.util.Set.of() : rtRequestOf(l.manifest());
 		if (want.equals(have) || selected == null) return false;
 		reload();
@@ -427,7 +521,14 @@ public final class PackManager {
 		// shortcut: the request is not stored in the manifest; applied entries keep their options, unavailable ones only the name
 		java.util.Set<String> s = new java.util.TreeSet<>(m.rt().effects());
 		s.addAll(m.rt().unavailable().keySet());
+		s.removeIf(e -> e.equals(dev.emrion.shaders.converter.nativefmt.NativeCompiler.RT_EFFECT) || e.startsWith(dev.emrion.shaders.converter.nativefmt.NativeCompiler.RT_EFFECT + ":")); // the pack's own, never requested
 		return s;
+	}
+
+	/** RT support of the newest loaded version (null: no pack loaded yet). */
+	public static @Nullable RtSupport rtSupport() {
+		Loaded l = next != null ? next : loaded;
+		return l == null || selected == null ? null : l.rtSupport();
 	}
 
 	/** The RT section of the newest loaded version (null: converted without RT). */
@@ -483,6 +584,16 @@ public final class PackManager {
 		return e == null || selected == null || e.dimension().shadow() == null ? 0 : e.dimension().shadow().sunPathRotation();
 	}
 
+	/**
+	 * A portal or world join waits for the pack's pipelines of the new dimension: MC's level loading screen stays open
+	 * meanwhile (LevelLoadingScreenMixin), so no vanilla frames show (the level renders behind the screen, which starts the
+	 * build). False after 30 s, on failure, or when the pack does not render that dimension.
+	 */
+	public static boolean switching() {
+		long s = switchStart;
+		return s != 0 && selected != null && enabled && System.nanoTime() - s < HOLD_NS;
+	}
+
 	/** A geometry hook failed in the middle of a frame: disable the pack; the rest of the frame renders vanilla. */
 	public static void frameFailed(Throwable t) {
 		if (selected != null) fail("Shader pack " + selected + " failed", t);
@@ -499,13 +610,17 @@ public final class PackManager {
 			String dim = mc.level == null ? null : mc.level.dimension().identifier().toString();
 			Loaded l = loaded;
 			String folder = l == null || dim == null ? null : Dimensions.folder(l.manifest(), dim);
-			if (folder == null || current != null && !folder.equals(current.folder())) deactivate();
+			// a new selection's version (same folder) replaces the running one too
+			if (folder == null || current != null && (current.source() != l || !folder.equals(current.folder()))) deactivate();
 			Loaded n = next;
 			if (n != null && current == null) { // nothing to keep showing: the reload result simply becomes the pack
 				loaded = l = n;
 				next = n = null;
 				folder = dim == null ? null : Dimensions.folder(l.manifest(), dim);
 			}
+			// a selected pack still converting (l == null) holds the loading screen too; fail() clears selected
+			if (l == null ? selected == null || dim == null : folder == null) switchStart = 0;
+			else if (current == null && switchStart == 0) switchStart = System.nanoTime();
 			Prepared p = prepared;
 			if (n != null) { // reload: keep rendering `current` until n's pipelines are ready, then swap within one frame
 				String nf = Dimensions.folder(n.manifest(), dim);
@@ -522,8 +637,15 @@ public final class PackManager {
 			if (runtime != null) {
 				var main = mc.gameRenderer.mainRenderTarget();
 				if (main.width != runtime.displayWidth || main.height != runtime.displayHeight || runtime.atlasGeneration != PbrAtlases.generation()
-						|| runtime.upscaleGeneration != dev.emrion.shaders.mod.upscale.Upscaling.generation()) resize(loaded, main.width, main.height);
-				else residencyRetry(main.width, main.height);
+						|| runtime.upscaleGeneration != dev.emrion.shaders.mod.upscale.Upscaling.generation()) {
+					try {
+						resize(loaded, main.width, main.height);
+					} catch (RuntimeException e) {
+						if (!dev.emrion.shaders.mod.photo.PhotoMode.scaleFailed(e)) throw e;
+						resize(loaded, mc.getWindow().getWidth(), mc.getWindow().getHeight()); // back at window size; this one frame renders vanilla
+						return;
+					}
+				} else residencyRetry(main.width, main.height);
 				executor.levelStart(partialTick);
 			}
 		} catch (Throwable t) {
@@ -545,7 +667,7 @@ public final class PackManager {
 	/** Builds the size-independent part (pipelines) in the background; the swap happens at a later frame start. */
 	private static void prepare(Loaded l, String folder) {
 		status = selected + ": building pipelines (" + folder + ")";
-		dev.emrion.shaders.mod.gui.LoadingHud.phase(selected, "Building pipelines");
+		dev.emrion.shaders.mod.gui.LoadingHud.phase(selected, dev.emrion.shaders.mod.gui.LoadingHud.PREPARING);
 		// the gbuffers copies need the vanilla pipelines' formats and bindings; frames go on (old pack or vanilla) until MC has them
 		Map<RenderPipeline, FrontendRenderPipeline> vanilla = vanillaPipelines();
 		if (vanilla == null) return;
@@ -555,7 +677,8 @@ public final class PackManager {
 		WORKER.execute(() -> {
 			try {
 				long start = System.nanoTime();
-				var pipelines = new PackPipelines(ctx, l.dir(), l.manifest(), l.manifest().dimensions().get(folder), vanilla);
+				// a newer selection or shutdown stops it at the next pipeline: the result would be dropped anyway
+				var pipelines = new PackPipelines(ctx, l.dir(), l.manifest(), l.manifest().dimensions().get(folder), vanilla, () -> gen != generation, false);
 				EmrionShadersClient.LOG.info("Built {} pipelines for {}/{} in {} ms", pipelines.pipelines.size(), selected, folder, (System.nanoTime() - start) / 1_000_000);
 				unclaimed = pipelines;
 				Minecraft.getInstance().execute(() -> {
@@ -569,9 +692,11 @@ public final class PackManager {
 					prepared = new Prepared(gen, l, folder, pipelines);
 				});
 			} catch (Throwable t) {
-				if (gen != generation) return;
-				if (l == next) reloadFailed(selected, t);
-				else fail("Could not build pipelines for " + selected, t);
+				Minecraft.getInstance().execute(() -> {
+					if (gen != generation) return;
+					if (l == next) reloadFailed(selected, t);
+					else fail("Could not build pipelines for " + selected, t);
+				});
 			} finally {
 				Minecraft.getInstance().execute(() -> preparing = false);
 			}
@@ -665,9 +790,35 @@ public final class PackManager {
 		else if (!RtCapability.DEBUG) RtScene.shutdown();
 		var main = mc.gameRenderer.mainRenderTarget();
 		resize(l, main.width, main.height);
+		if (switchStart != 0) EmrionShadersClient.LOG.info("Shader pack {} renders {} {} ms after the switch", selected, p.folder(), (System.nanoTime() - switchStart) / 1_000_000);
+		switchStart = 0;
 		status = selected + ": active (" + p.folder() + ")";
 		dev.emrion.shaders.mod.gui.LoadingHud.ready(selected);
 		EmrionShadersClient.LOG.info("Shader pack {} active in {}", selected, p.folder());
+		precompileOthers(l, p.folder());
+	}
+
+	private static void precompileOthers(Loaded l, String active) {
+		if (precompiled == l || PRECOMPILER.isShutdown()) return;
+		var vanilla = vanillaPipelines();
+		if (vanilla == null) return; // compiling: the next install tries again
+		precompiled = l;
+		int gen = generation;
+		VulkanContext ctx = VulkanContext.get();
+		List<String> others = l.manifest().dimensions().keySet().stream().filter(f -> !f.equals(active)).sorted().toList();
+		PRECOMPILER.execute(() -> {
+			for (String f : others) {
+				if (gen != generation) return;
+				long start = System.nanoTime();
+				try {
+					var pipelines = new PackPipelines(ctx, l.dir(), l.manifest(), l.manifest().dimensions().get(f), vanilla, () -> gen != generation, true);
+					Minecraft.getInstance().execute(pipelines::destroyLater);
+					EmrionShadersClient.LOG.info("Precompiled {}/{} in the background in {} ms", selected, f, (System.nanoTime() - start) / 1_000_000);
+				} catch (Throwable t) { // the real build reports errors when that dimension is entered
+					if (gen == generation) EmrionShadersClient.LOG.warn("Background precompile of {} failed: {}", f, t.toString());
+				}
+			}
+		});
 	}
 
 	private static String offDeviceLabel;
@@ -704,6 +855,19 @@ public final class PackManager {
 		}
 	}
 
+	/** Upscaler fallbacks in progress: Ray Reconstruction -> DLSS SR -> FSR, so at most two. */
+	private static int retries;
+
+	/** resize() once more after the upscaler fell back; after the last fallback a failure is rethrown, not retried. */
+	private static void retry(Loaded l, int width, int height) {
+		retries++;
+		try {
+			resize(l, width, height);
+		} finally {
+			retries--;
+		}
+	}
+
 	private static void resizeTimed(Loaded l, int width, int height) {
 		if (runtime != null) {
 			executor.close();
@@ -718,25 +882,26 @@ public final class PackManager {
 				&& dev.emrion.shaders.mod.upscale.UpscaleConfig.effective() != dev.emrion.shaders.mod.upscale.UpscaleConfig.Mode.OFF;
 		int[] render = up ? dev.emrion.shaders.mod.upscale.Upscaling.renderSize(width, height) : new int[] {width, height};
 		dev.emrion.shaders.mod.upscale.Upscaling.setSizes(render[0], render[1], width, height, up);
+		var attempted = dev.emrion.shaders.mod.upscale.UpscaleConfig.effective();
 		try {
 			runtime = new PackRuntime(VulkanContext.get(), current.pipelines(), l.dir(), l.manifest(), dim, uniforms, render[0], render[1], width, height);
 		} catch (RuntimeException e) {
-			if (!dev.emrion.shaders.mod.upscale.Upscaling.active()) throw e;
+			if (!dev.emrion.shaders.mod.upscale.Upscaling.active() || retries >= 2) throw e; // a fallback failed too: not the upscaler's fault (e.g. VRAM)
 			if (dev.emrion.shaders.mod.upscale.UpscaleConfig.rayReconstruction && dev.emrion.shaders.mod.upscale.UpscaleConfig.effective()
 					== dev.emrion.shaders.mod.upscale.UpscaleConfig.Mode.DLSS && String.valueOf(e.getMessage()).contains("Ray Reconstruction")) {
 				// RR just recorded why it cannot run: DLSS SR now, and a reconversion that turns our denoisers back on
 				EmrionShadersClient.LOG.error("DLSS Ray Reconstruction unavailable ({}), using DLSS Super Resolution", dev.emrion.shaders.mod.upscale.Dlss.rrUnavailable());
-				resize(l, width, height);
+				retry(l, width, height);
 				applyRt();
 				return;
 			}
-			if (dev.emrion.shaders.mod.upscale.UpscaleConfig.mode != dev.emrion.shaders.mod.upscale.UpscaleConfig.Mode.FSR
+			if (attempted != dev.emrion.shaders.mod.upscale.UpscaleConfig.Mode.FSR // FSR itself failing falls through to no upscaling
 					&& dev.emrion.shaders.mod.upscale.UpscaleConfig.effective() == dev.emrion.shaders.mod.upscale.UpscaleConfig.Mode.FSR) {
 				// DLSS or XeSS just recorded why it cannot run: same render size and conversion with FSR (no per-frame retry, see Dlss)
 				EmrionShadersClient.LOG.error("{} unavailable ({}), using FSR", dev.emrion.shaders.mod.upscale.UpscaleConfig.mode.label,
 						dev.emrion.shaders.mod.upscale.UpscaleConfig.mode == dev.emrion.shaders.mod.upscale.UpscaleConfig.Mode.XESS
 								? dev.emrion.shaders.mod.upscale.Xess.unavailable() : dev.emrion.shaders.mod.upscale.Dlss.unavailable());
-				resize(l, width, height);
+				retry(l, width, height);
 				return;
 			}
 			EmrionShadersClient.LOG.error("Upscaler failed, rendering without it", e);
@@ -748,8 +913,8 @@ public final class PackManager {
 
 	/** Waits for a running build, then queues the pack's GPU objects for destruction before MC destroys the device. */
 	public static boolean shutdown() {
-		generation++;
-		WORKER.shutdown();
+		generation++; // a running pipeline build stops at its next pipeline
+		WORKER.shutdownNow(); // queued loads and builds never start; a running conversion is interrupted
 		boolean done;
 		try {
 			done = WORKER.awaitTermination(60, java.util.concurrent.TimeUnit.SECONDS);
@@ -758,8 +923,10 @@ public final class PackManager {
 			done = false;
 		}
 		PIPELINE_COMPILER.shutdown(); // drain: its native shader-module/pipeline creation must not outlive the device
+		PRECOMPILER.shutdown(); // stops at its next pipeline (generation changed above)
 		try {
 			done &= PIPELINE_COMPILER.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS);
+			done &= PRECOMPILER.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS);
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
 			done = false;
@@ -792,6 +959,7 @@ public final class PackManager {
 
 	/** Toggled off: vanilla rendering, but the pipelines stay as {@link #prepared}, so switching back only re-installs them. */
 	private static void park() {
+		switchStart = 0;
 		Prepared p = current;
 		if (p == null) return;
 		aoLevel = 1f;
@@ -819,6 +987,7 @@ public final class PackManager {
 		EmrionShadersClient.LOG.error(what, t);
 		String pack = selected;
 		generation++;
+		switchStart = 0;
 		loaded = null;
 		next = null;
 		prepared = null;

@@ -31,8 +31,11 @@ vec3 emrGiDir(ivec2 p) {
 	return normalize(mat3(gbufferModelViewInverse) * (v.xyz / v.w));
 }
 
+// dist is the distance to the player (G.w), not along the view ray: the ray starts at the eye, off the player by the view bob.
 vec3 emrGiPos(ivec2 p, float dist) {
-	return gbufferModelViewInverse[3].xyz + emrGiDir(p) * dist;
+	vec3 e = gbufferModelViewInverse[3].xyz, d = emrGiDir(p);
+	float b = dot(e, d);
+	return e + d * (sqrt(max(b * b - dot(e, e) + dist * dist, 0.0)) - b); // |e + d t| = dist
 }
 
 vec3 emrGiPlayerPos(ivec2 fp, float z) {
@@ -98,18 +101,20 @@ float emrGiHitSky(float skyLm) {
 }
 
 // Ray queries cannot be passed to functions, so the alpha-test loop (mask 0x01 = solid + cutout terrain; cutout candidates
-// tested at mip 0 like the shadow pass) is written out in both users.
+// tested at mip 0 like the shadow pass) is written out in both users. More candidates than the guard (no opacity micromaps,
+// deep foliage) count as blocked: the rest may hold the blocker, and a leak is worse than a missing bounce.
 bool emrGiVisible(vec3 o, vec3 d, float tMax) {
 	rayQueryEXT rq;
 	rayQueryInitializeEXT(rq, emrRtTlas, gl_RayFlagsTerminateOnFirstHitEXT, 0x01u, o, 0.0, d, tMax);
-	for (int guard = 0; guard < 32 && rayQueryProceedEXT(rq); guard++) {
+	bool more;
+	for (int guard = 0; (more = rayQueryProceedEXT(rq)) && guard < 32; guard++) {
 		if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;
 		EmrRtVerts cv = emrRtVerts(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false));
 		uvec3 ct = emrRtTri(uint(rayQueryGetIntersectionPrimitiveIndexEXT(rq, false)));
 		if (textureLod(emrRtAtlas, emrRtBaryUv(cv, ct, rayQueryGetIntersectionBarycentricsEXT(rq, false)), 0.0).a >= 0.1)
 			rayQueryConfirmIntersectionEXT(rq);
 	}
-	return rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT;
+	return !more && rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT;
 }
 
 // One bounce along d: false = no hit within tMax (sky). On a hit, sun (lightColor units) and sky (ambientColor units)
@@ -120,13 +125,15 @@ bool emrGiBounce(vec3 o, vec3 d, float tMax, vec3 l, out vec3 sun, out vec3 sky)
 	sky = vec3(0.0);
 	rayQueryEXT rq;
 	rayQueryInitializeEXT(rq, emrRtTlas, gl_RayFlagsNoneEXT, 0x01u, o, 0.0, d, tMax);
-	for (int guard = 0; guard < 32 && rayQueryProceedEXT(rq); guard++) {
+	bool more;
+	for (int guard = 0; (more = rayQueryProceedEXT(rq)) && guard < 32; guard++) {
 		if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;
 		EmrRtVerts cv = emrRtVerts(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false));
 		uvec3 ct = emrRtTri(uint(rayQueryGetIntersectionPrimitiveIndexEXT(rq, false)));
 		if (textureLod(emrRtAtlas, emrRtBaryUv(cv, ct, rayQueryGetIntersectionBarycentricsEXT(rq, false)), 0.0).a >= 0.1)
 			rayQueryConfirmIntersectionEXT(rq);
 	}
+	if (more) return true; // black, as inside a wall
 	if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) return false;
 	int custom = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
 	EmrRtVerts v = emrRtVerts(custom);

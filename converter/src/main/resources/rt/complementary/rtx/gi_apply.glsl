@@ -38,6 +38,11 @@ vec3 emrRtxGi(vec3 packAmbient, vec3 lightCol, vec3 ambientCol, vec3 playerPos, 
 				ivec2 q = clamp(cq + ivec2(EMR_GI_RING[i] * float(r)), ivec2(0), size - 1);
 				vec4 g = texelFetch(emrGiGprevSampler, q, 0);
 				if (g.w <= 0.0 || abs(g.w - d) > 0.5 + 0.25 * d || !(dot(g.xyz, n) >= 0.9)) continue;
+				// and in this surface's plane: an ice sheet (translucent, never a GI surface) took the GI of the iceberg steps
+				// above it and of the sunken ones below, in triangles where one ring sample matched and the next did not
+				vec4 v = gbufferProjectionInverse * vec4((vec2(q) + 0.5) / vec2(size) * 2.0 - 1.0, -1.0, 1.0);
+				vec3 pq = gbufferModelViewInverse[3].xyz + normalize(mat3(gbufferModelViewInverse) * (v.xyz / v.w)) * g.w;
+				if (abs(dot(n, pq - playerPos)) > 0.6 + 0.01 * d) continue;
 				a += texelFetch(emrGiFASampler, q, 0);
 				b += texelFetch(emrGiFBSampler, q, 0);
 				k += texelFetch(emrGiFCSampler, q, 0);
@@ -65,5 +70,7 @@ vec3 emrRtxGi(vec3 packAmbient, vec3 lightCol, vec3 ambientCol, vec3 playerPos, 
 	emrRtxGiBlock = kh * fade * 10.0 * dot(baseCol, vec3(0.2125, 0.7154, 0.0721)) * emrRt_gi_blockStrength;
 	vec3 gi = sqrt(max(ambientCol * ambientCol * (min(a.a * emrRt_gi_sky, 1.0) + b.rgb) + lightCol * lightCol * a.rgb, 0.0)) * emrRt_gi_strength;
 	if (emrRt_gi_debug == 2) return gi * 4.0;
+	if (emrRt_gi_debug == 4) emrRtxGiBlock = vec3(0.0); // without GI block light
+	if (emrRt_gi_debug == 5) { emrRtxGiBlock *= 4.0; return vec3(0.0); } // GI block light only (x4)
 	return mix(packAmbient, gi, fade);
 }

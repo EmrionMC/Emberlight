@@ -29,9 +29,9 @@ import org.lwjgl.vulkan.VK10;
  */
 public final class HitchLog {
 	public static final int GPU_WAIT = 0, ACQUIRE = 1, PRESENT = 2, FG_WAIT = 3, GC = 4, COMPILE = 5, LATE_PIPELINE = 6, PACK_SWAP = 7,
-			TARGETS = 8, VRAM_RETRY = 9, BLAS = 10, BLAS_BATCH = 11, TLAS = 12, ENTITY_BLAS = 13, BUFFER = 14, CHUNKS = 15, UPSCALER = 16, N = 17;
+			TARGETS = 8, VRAM_RETRY = 9, BLAS = 10, BLAS_BATCH = 11, TLAS = 12, ENTITY_BLAS = 13, BUFFER = 14, CHUNKS = 15, UPSCALER = 16, RT_LIGHTS = 17, N = 18;
 	private static final String[] NAMES = {"gpu-wait", "acquire", "present", "fg-wait", "GC", "pipeline compile", "late pipeline", "pack swap",
-			"targets", "vram retry", "BLAS", "BLAS batches", "TLAS", "entity BLAS", "buffer alloc", "chunk upload", "upscaler"};
+			"targets", "vram retry", "BLAS", "BLAS batches", "TLAS", "entity BLAS", "buffer alloc", "chunk upload", "upscaler", "RT lights"};
 	private static final long MS = 1_000_000L;
 	private static final int LAG = UboRing.REGIONS;
 

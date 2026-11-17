@@ -57,6 +57,8 @@ public final class FrameExecutor {
 	private static final boolean DEFER_CLEARS = !"false".equals(System.getProperty("emrion.perf.deferClears")),
 			COMPUTE_CLEARS = !"false".equals(System.getProperty("emrion.perf.computeClears"));
 	private static final long SHADER_STAGES = VK_PIPELINE_STAGE_2_PRE_RASTERIZATION_SHADERS_BIT | FRAGMENT; // VS, TCS, TES, GS
+	/** A RawPass colour attachment: loadOp LOAD reads it (COLOR_ATTACHMENT_READ), then the pass writes it (and blending reads it). */
+	static final long LOADED_WRITE = COLOR_WRITE | COLOR_READ;
 	/** Iris WorldRenderingPhase has 24 ordinals. */
 	private static final int STAGES = 24;
 	/** EmrionPhase blocks per frame at most: FULLSCREEN plus every (WORLD/HAND/SHADOW, renderStage). */
@@ -414,11 +416,12 @@ public final class FrameExecutor {
 							.levelCount(VK_REMAINING_MIP_LEVELS).layerCount(1);
 					if (computeClear(img)) {
 						float[] color = clearColor(op, img.target);
-						vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, img.depth > 1 ? pp.clear3d : pp.clear2d);
+						boolean is3d = img.target.dims() == 3; // the view type, not the depth: an [8, 8, 1] 3D image has a 3D view
+						vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, is3d ? pp.clear3d : pp.clear2d);
 						RawPass.pushImages(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pp.clearLayout, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_NULL_HANDLE, img.attach);
 						vkCmdPushConstants(cb, pp.clearLayout, VK_SHADER_STAGE_ALL, 0,
 								stack.ints((int) color[0], (int) color[1], (int) color[2], (int) color[3]));
-						vkCmdDispatch(cb, ceilDiv(img.width, 8), ceilDiv(img.height, 8), img.depth > 1 ? ceilDiv(img.depth, 4) : 1);
+						vkCmdDispatch(cb, ceilDiv(img.width, 8), ceilDiv(img.height, 8), is3d ? ceilDiv(img.depth, 4) : 1);
 						continue;
 					}
 					if (img.isDepth) {
@@ -437,9 +440,13 @@ public final class FrameExecutor {
 		}
 	}
 
-	/** Raw unsigned-integer images (the voxel volumes) are cleared by a compute pass, which raw-pass barriers do not wait on. */
+	/**
+	 * Raw unsigned-integer 2D/3D images (the voxel volumes) are cleared by a compute pass, which raw-pass barriers do not wait on;
+	 * 1D ones by transfer (no clear shader for that view type).
+	 */
 	private static boolean computeClear(PackRuntime.Img img) {
-		return COMPUTE_CLEARS && dev.emrion.shaders.mod.vk.VulkanContext.get().storageWriteWithoutFormat && img.raw != null && img.target.format().endsWith("UI");
+		return COMPUTE_CLEARS && dev.emrion.shaders.mod.vk.VulkanContext.get().storageWriteWithoutFormat && img.raw != null && img.target.format().endsWith("UI")
+				&& img.target.dims() >= 2;
 	}
 
 	private static List<String> sides(String side) {
@@ -501,15 +508,17 @@ public final class FrameExecutor {
 		declareSet1(p, c.flipState(), SHADER_STAGES);
 		long[] views = new long[c.writes().size()];
 		PackRuntime.Img first = null;
+		int areaW = Integer.MAX_VALUE, areaH = Integer.MAX_VALUE;
 		for (var w : c.writes()) {
 			var img = rt.image(w.target(), w.side());
-			var mode = p.blend() == null ? null : p.blend().perTarget().getOrDefault(w.target(), p.blend().defaultMode());
-			hazards.write(img, COLOR_OUT, COLOR_WRITE | (PackPipelines.blend(mode) != null ? COLOR_READ : 0));
+			hazards.write(img, COLOR_OUT, LOADED_WRITE);
 			views[w.location()] = img.attach;
 			if (first == null) first = img;
+			areaW = Math.min(areaW, img.width); // the render area must fit every attachment (GL: their intersection)
+			areaH = Math.min(areaH, img.height);
 		}
 		hazards.flush(cb);
-		draw(cb, p, c.program(), c.flipState(), first.width, first.height, views);
+		draw(cb, p, c.program(), c.flipState(), first.width, first.height, areaW, areaH, views);
 	}
 
 	private void finalPass(VkCommandBuffer cb, Manifest.Command c) {
@@ -525,10 +534,10 @@ public final class FrameExecutor {
 		}
 		var p = dim.programs().get(c.program());
 		declareSet1(p, c.flipState(), SHADER_STAGES);
-		hazards.write(mcColor, COLOR_OUT, COLOR_WRITE);
+		hazards.write(mcColor, COLOR_OUT, LOADED_WRITE);
 		if (rt.upscaler == null) {
 			hazards.flush(cb);
-			draw(cb, p, c.program(), c.flipState(), mcColor.width, mcColor.height, mcColor.attach);
+			draw(cb, p, c.program(), c.flipState(), mcColor.width, mcColor.height, mcColor.width, mcColor.height, mcColor.attach);
 			return;
 		}
 		hazards.read(rt.upscaled, FRAGMENT, SAMPLED_READ);
@@ -538,7 +547,7 @@ public final class FrameExecutor {
 		dynamicOffsets[0] = finalFrameBlock(frame);
 		setOverride = rt.finalSet;
 		try {
-			draw(cb, p, c.program(), c.flipState(), mcColor.width, mcColor.height, mcColor.attach);
+			draw(cb, p, c.program(), c.flipState(), mcColor.width, mcColor.height, mcColor.width, mcColor.height, mcColor.attach);
 		} finally {
 			setOverride = 0;
 			dynamicOffsets[0] = frame;
@@ -560,14 +569,18 @@ public final class FrameExecutor {
 			hazards.read(rrNormal, COMPUTE, SAMPLED_READ);
 			hazards.read(rrMaterial, COMPUTE, SAMPLED_READ);
 		}
+		if (rt.rrNative != null) for (var g : rt.rrNative) hazards.read(g, COMPUTE, SAMPLED_READ);
 		hazards.write(rt.upscaled, COMPUTE, STORAGE_WRITE);
 		hazards.flush(cb);
 		rt.upscaler.dispatch(cb, rt.upscaleInput.image, rt.upscaleInput.sampled, rt.upscaleInput.vkFormat, depth.image, depth.sampled, behind.sampled,
 				uniforms.gbufferModelView(), rt.masks == null ? null
 						: new dev.emrion.shaders.mod.upscale.Upscaler.Masks(rt.masks.image, rt.masks.vkFormat, rt.masks.sampled, rt.compositionMask),
-				!rt.upscaler.rayReconstruction() ? null : new dev.emrion.shaders.mod.upscale.Upscaler.RrInputs(rt.atlasView(),
+				!rt.upscaler.rayReconstruction() ? null : rt.rrNative != null
+						? new dev.emrion.shaders.mod.upscale.Upscaler.RrInputs(rt.atlasView(), rt.rrNative[2].sampled, rt.rrNative[0].sampled, false,
+								uniforms.gbufferProjection(), uniforms.gbufferModelView(), rt.rrNative[1].sampled)
+						: new dev.emrion.shaders.mod.upscale.Upscaler.RrInputs(rt.atlasView(),
 						rrNormal != null ? rrNormal.sampled : 0, rrMaterial != null ? rrMaterial.sampled : 0, rrNormal != null,
-						uniforms.gbufferProjection(), uniforms.gbufferModelView()));
+						uniforms.gbufferProjection(), uniforms.gbufferModelView(), 0));
 		Profiler.mark(cb, "upscale");
 	}
 
@@ -590,18 +603,17 @@ public final class FrameExecutor {
 
 	private long setOverride;
 
-	private void draw(VkCommandBuffer cb, Manifest.Program p, String program, int flip, int w, int h, long... views) {
-		RawPass.begin(cb, w, h, views);
+	/** {@code w × h}: the first output's size (viewport); {@code areaW × areaH}: the render area, inside every output. */
+	private void draw(VkCommandBuffer cb, Manifest.Program p, String program, int flip, int w, int h, int areaW, int areaH, long... views) {
+		RawPass.begin(cb, areaW, areaH, views);
 		float[] off = p.viewportOffset();
-		if (p.viewportScale() != 1f && p.viewportScale() > 0f || off != null) {
+		if (p.viewportScale() != 1f && p.viewportScale() > 0f || off != null || areaW != w || areaH != h) {
+			int[] v = viewport(w, h, areaW, areaH, p.viewportScale() > 0f ? p.viewportScale() : 1f, off);
 			try (MemoryStack stack = MemoryStack.stackPush()) {
-				// Iris CompositeRenderer: glViewport(size·offset, size·scale); our images keep GL's row order, so y is not mirrored
-				int sw = Math.max(1, (int) (w * p.viewportScale())), sh = Math.max(1, (int) (h * p.viewportScale()));
-				int x = off == null ? 0 : (int) (w * off[0]), y = off == null ? 0 : (int) (h * off[1]);
-				vkCmdSetViewport(cb, 0, VkViewport.calloc(1, stack).x(x).y(y).width(sw).height(sh).maxDepth(1f));
+				vkCmdSetViewport(cb, 0, VkViewport.calloc(1, stack).x(v[0]).y(v[1]).width(v[2]).height(v[3]).maxDepth(1f));
 				var scissor = VkRect2D.calloc(1, stack);
-				scissor.offset().set(Math.max(0, x), Math.max(0, y));
-				scissor.extent().set(sw, sh);
+				scissor.offset().set(v[4], v[5]);
+				scissor.extent().set(v[6], v[7]);
 				vkCmdSetScissor(cb, 0, scissor);
 			}
 		}
@@ -611,12 +623,23 @@ public final class FrameExecutor {
 		RawPass.end(cb);
 	}
 
+	/**
+	 * {viewport x, y, width, height, scissor x, y, width, height}. Iris CompositeRenderer: glViewport(size·offset, size·scale) of
+	 * the first output; our images keep GL's row order, so y is not mirrored. The scissor stays inside the render area.
+	 */
+	static int[] viewport(int w, int h, int areaW, int areaH, float scale, float @org.jspecify.annotations.Nullable [] off) {
+		int sw = Math.max(1, (int) (w * scale)), sh = Math.max(1, (int) (h * scale));
+		int x = off == null ? 0 : (int) (w * off[0]), y = off == null ? 0 : (int) (h * off[1]);
+		int sx = Math.min(Math.max(0, x), areaW), sy = Math.min(Math.max(0, y), areaH);
+		return new int[] {x, y, sw, sh, sx, sy, Math.min(sw, areaW - sx), Math.min(sh, areaH - sy)};
+	}
+
 	/** Texel copy through a fullscreen pass (converts formats, e.g. MC's RGBA8 → colortex0's R11G11B10F). */
 	private void blit(VkCommandBuffer cb, PackRuntime.Img src, PackRuntime.Img dst) {
 		Long pipeline = pp.blit.get(dst.vkFormat);
 		if (pipeline == null) throw new IllegalStateException("no blit pipeline for format " + dst.vkFormat);
 		hazards.read(src, FRAGMENT, SAMPLED_READ);
-		hazards.write(dst, COLOR_OUT, COLOR_WRITE);
+		hazards.write(dst, COLOR_OUT, LOADED_WRITE);
 		hazards.flush(cb);
 		RawPass.begin(cb, dst.width, dst.height, dst.attach);
 		helper(cb, pipeline, src.sampled);
@@ -659,7 +682,7 @@ public final class FrameExecutor {
 
 	/** Mip chain with glGenerateMipmap's box filter over each texel's full footprint (odd sizes included), level i-1 -> i. */
 	private void areaMipmaps(VkCommandBuffer cb, PackRuntime.Img img, long pipeline) {
-		hazards.write(img, COLOR_OUT | FRAGMENT, COLOR_WRITE | SAMPLED_READ);
+		hazards.write(img, COLOR_OUT | FRAGMENT, LOADED_WRITE | SAMPLED_READ);
 		hazards.flush(cb);
 		for (int level = 1; level < img.mips; level++) {
 			if (level > 1) memory(cb, COLOR_OUT, COLOR_WRITE, FRAGMENT, SAMPLED_READ); // previous level written

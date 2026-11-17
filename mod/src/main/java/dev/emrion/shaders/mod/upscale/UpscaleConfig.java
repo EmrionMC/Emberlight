@@ -69,10 +69,16 @@ public final class UpscaleConfig {
 	 */
 	private static final int RR_FRAMES = Integer.getInteger("emrion.upscale.rrFrames", 4);
 
-	/** Why Ray Reconstruction cannot run with the current settings (null: it runs while selected). */
+	/** Why Ray Reconstruction cannot run with the current settings and pack (null: it runs while selected). */
 	public static String rrUnavailable() {
+		var s = dev.emrion.shaders.mod.pack.PackManager.rtSupport();
+		return rrUnavailable(s != null && s.nativePack());
+	}
+
+	/** A native pack traces its own rays (docs/NATIVE_FORMAT.md §14.4): Emberlight's RT switch does not matter for it. */
+	public static String rrUnavailable(boolean nativePack) {
 		if (effective() != Mode.DLSS) return "needs NVIDIA DLSS as the upscaler";
-		if (!dev.emrion.shaders.mod.rt.RtConfig.enabled || !dev.emrion.shaders.mod.rt.RtCapability.enabled) return "needs ray tracing on";
+		if (!dev.emrion.shaders.mod.rt.RtCapability.enabled || !nativePack && !dev.emrion.shaders.mod.rt.RtConfig.enabled) return "needs ray tracing on";
 		return Dlss.rrUnavailable();
 	}
 
@@ -85,9 +91,10 @@ public final class UpscaleConfig {
 	 * Adds the converter effect that removes the pack's own TAA (empty when off, so Off converts exactly as without upscaling),
 	 * and with Ray Reconstruction the options that turn our GI and block-light denoisers off (RR wants the noisy signal).
 	 */
-	public static void addRequest(java.util.Set<String> request) {
+	public static void addRequest(java.util.Set<String> request, boolean nativePack) {
 		if (effective() != Mode.OFF) request.add("upscale");
-		if (!rrActive()) return;
+		if (!rayReconstruction || rrUnavailable(nativePack) != null) return;
+		if (nativePack) request.add("rr"); // the pack compiles its guide passes and skips its own denoisers
 		if (request.contains("gi")) {
 			request.add("gi:frames=" + RR_FRAMES); // a short temporal history instead of 24 frames
 			request.add("gi:boost=1"); // no extra rays for young history

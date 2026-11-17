@@ -41,6 +41,11 @@ vec2 emrRtCaLand(vec2 xz, float y, float depth, vec3 inc) {
 	return xz + r.xz * depth / max(-r.y, 0.05);
 }
 
+// The receiver's geometric N.L, set by the pack's DoLighting (1 where SampleShadow runs outside it). The pack still lights a
+// face the light grazes (its side shading), but the caustic there is the pattern smeared along the light: diagonal stripes cut
+// across the walls of a riverbed seen from the side. Its contrast fades out on such faces.
+float emrRtCaNdotL = 1.0;
+
 // Caustic intensity at receiver p (1 = flat water), or -1 when no water lies between p and the light.
 float emrRtCaIntensity(vec3 p) {
 	vec3 l = normalize(shadowModelViewInverse[2].xyz);
@@ -58,7 +63,7 @@ float emrRtCaIntensity(vec3 p) {
 	vec2 dz = emrRtCaLand(x + vec2(0.0, e), y, depth, inc) - emrRtCaLand(x - vec2(0.0, e), y, depth, inc);
 	float det = abs(dx.x * dz.y - dx.y * dz.x) / (4.0 * e * e);
 	float c = min(1.0 / max(det, 0.01), emrRt_caustics_max);
-	return mix(1.0, c, emrRt_caustics_strength * (1.0 - smoothstep(32.0, 64.0, length(p.xz))));
+	return mix(1.0, c, emrRt_caustics_strength * (1.0 - smoothstep(32.0, 64.0, length(p.xz))) * smoothstep(0.15, 0.5, emrRtCaNdotL));
 }
 
 // The water's light colour without the pack's pattern: mean shadowcolor0 on a 1.5-block ring (clear texels left out).

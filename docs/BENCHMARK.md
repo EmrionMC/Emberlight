@@ -931,3 +931,161 @@ queries around `GameRenderer.render`, the same span as the Vulkan profiler's fra
 - Image check (run 1, RT off, against Iris): vanilla MAE 0.26–0.61 / SSIM ≥ 0.988, Sodium 0.24–0.70 / ≥ 0.991.
 
 Scripts: `fpsbench/run.sh`, `batch.sh`, `summ.py` in a scratch folder (not in the repo).
+
+## Shader compile stutter (2026-11-16, `feat/precompile`)
+
+Target pack (Complementary Unbound r5.9.3 + EP 1.10.5, user settings), RT on (`rt.style=rtx`), Sodium 0.9.3-beta.5, 2560×1440,
+`-PpipelineCacheDir` pointing at a run-private directory. One script per run (about 3 min after the world join): place a
+plains village, summon ~30 kinds of mobs and entities (charged creeper, armour stand with enchanted armour, end crystal,
+displays, lightning), place block entities, end portal/gateway, beacon, nether portal, water/lava, a dozen particle types,
+open the inventory, thunder, night, under water, fly 20 s over new terrain, then the Nether (fly 8 s) and the End.
+"cold" = empty VkPipelineCache directory *and* empty NVIDIA shader disk cache (`__GL_SHADER_DISK_CACHE_PATH`); "warm" =
+both from the previous run; "vk only" = VkPipelineCache kept, NVIDIA disk cache emptied. Counted from
+`logs/emberlight-hitches.log` (frames > 25 ms and well above the median); "compile" = a hitch whose top entries include
+`pipeline compile` or `late pipeline`.
+
+| Run | compile hitches (all at the world join, before the pack renders) | gbuffers pipelines built in a frame | pack renders after join | first Nether / End switch | gameplay hitches (village to Nether) |
+|---|---|---|---|---|---|
+| before, cold | 2: 39, 499 ms | 0 | 20.2 s (12.0 s conversion, 11.3 s pipelines) | 11.9 s / 21.7 s of vanilla | 14 (837 ms total, worst 102) |
+| before, warm | 2: 152, 150 ms | 0 | 3.7 s | 0.20 s / 0.23 s | 15 (647 ms, worst 102) |
+| after, cold | 4: 43, 145, 115, 126 ms | 0 | 18.5 s (conversion cached, 15.1 s pipelines) | **0.15 s / 0.28 s** | 17 (755 ms, worst 102) |
+| after, warm | 3: 34, 145, 117 ms | 0 | 3.8 s | 0.16 s / 0.20 s | 16 (660 ms, worst 92) |
+| after, vk only (2 runs) | 3 / 2 | 0 | 4.5 s (world0 pipelines 1.4-1.6 s) | 0.41 s / 0.36 s | 25 / 18 (mostly gpu-wait and acquire) |
+
+- No pipeline is compiled in a frame during play: every gbuffers variant of every known vanilla and Sodium world pipeline
+  (303 here) is built at pack load, so new blocks, entities and render types never compile. The only `pipeline compile`
+  hitches are MC's own vanilla compiles at the world join (6-7 pipelines, 140-370 ms), the same before and after.
+- The real cost was the first trip to another dimension with a cold cache: 12-22 s of vanilla rendering while that
+  dimension's pipelines were built. They are now built in the background after the first activation (2 threads, 23 s +
+  33 s cold, 0.4 s warm) and the switch takes 0.15-0.28 s. No extra compile hitches; the gameplay hitch counts stay within
+  the run-to-run spread (all GPU-bound `gpu-wait`/`acquire` frames at a 27 ms median).
+- The VkPipelineCache is hit: with the NVIDIA disk cache emptied the startup dimension builds in 1.4-1.6 s instead of 15 s.
+  But the saved file did not grow when the other dimensions were compiled in a session (55,569,556 bytes before and after
+  two vk-only sessions), and their background builds stayed cold (22-36 s). In normal use the NVIDIA disk cache covers
+  them; why the driver does not write them into the application cache is open.
+- Reproduce: `runClient -Pcompare -Psodium -PpipelineCacheDir=<dir>` with the steps above as `-Demrion.autotest.script`
+  (`cmd place structure minecraft:village_plains ...`, `cmd execute at @p run summon ...`, `move 0 0 -25 20`, ...).
+
+## No vanilla frames on a dimension switch (2026-11-17, `fix/dim-switch`)
+
+When a portal comes before the background precompile of that dimension is done (cold caches, right after the
+join), the pack used to render vanilla until the dimension's pipelines were built. Now MC's level loading screen stays
+open until the pack renders (`LevelLoadingScreenMixin`, at most 30 s), with the loading panel on it. Only the screen
+waits: the player-loaded packet goes to the server on vanilla timing (on a server the client would otherwise stay
+"not loaded" after the server's own 3 s timeout).
+Recorded with the new `frames SECONDS NAME` step (every presented frame, quarter size, GUI included); 2560×1440, RT
+`rtx`, Sodium. Cold = empty VkPipelineCache and NVIDIA disk cache, portal 1-2 s after the pack renders; warm = Nether
+portal, Nether portal back, `execute in minecraft:the_end run tp`, `execute in minecraft:overworld run tp`.
+
+| Run | before | after |
+|---|---|---|
+| Complementary U + EP, cold, Overworld → Nether | 7.7 s of vanilla Nether | 7.9 s portal screen with "Preparing shaders… x/323", then shaded |
+| Complementary, warm (Nether / back / End / back) | 0.45 / 0.27 s, no vanilla frames | 0.44 / 0.24 / 0.33 / 0.26 s, no vanilla frames |
+| Eclipse (Merlin), cold / warm | — | 1.1 s / 0.7-0.8 s, no vanilla frames |
+| packs/template, cold / warm | — | 0.06 s / 0.17-0.26 s, no vanilla frames |
+| LAN test server, Complementary cold / warm, `execute in` | — | 5.9 s held / 0.19-0.20 s, no vanilla frames, no kick or timeout |
+
+The times are "pack renders N ms after the switch" from the log (the level renders behind the screen, so the hold does
+not lengthen the build). The first world join waits the same way behind its loading screen (pack renders 15-16 s after
+the join cold, 0.8-0.9 s warm; not recorded frame by frame).
+
+## RT stutter after teleports and dimension switches (2026-11-16, `fix/tlas-stutter`)
+
+Same setup as above (target pack, RT `rtx` with GI high, Sodium, 2560×1440, warm caches). One script per run, every phase
+recorded with the new `trace start` / `trace stop NAME` steps (every frame time -> `emrion-trace-NAME.csv`, VSync and cap
+unchanged): world join and settle at 600 110 600, a 10 s idle bench, `/tp` 2000 blocks into fresh terrain, 15 s of flight
+at 40 blocks/s, the Nether (settle, then 8 s moving), the End, back to the overworld, another idle bench. Spectator mode.
+
+**Cause.** Not the acceleration structures: the TLAS build is 0.1-1 ms and BLAS builds are 1-4 ms per frame there. The
+hitch log (which now splits `RT lights` from `TLAS`) put 60-150 ms per frame into `RtLights.rebuild`, the block-light lists,
+which run whenever a section with lights recompiles or the camera crosses an 8-block cell. Next to a Nether lava sea the
+grid holds ~16 k sources and ~1 M (cell, source) entries; most cells exceed 512 sources, and that "rare" path sorted boxed
+`Integer` lists with a comparator (80 % of the time, JFR). While the Nether loaded this ran every frame.
+
+**Changes.** (1) The overfull cells are sorted as primitive `long` keys (weight bits, pair index) in reused arrays: the
+same order, unit-tested against the old comparator; 100-150 ms -> 60-80 ms. (2) A rebuild that took more than 4 ms makes
+the next one run on a worker into a second set of lists, swapped in when done (the frame keeps the last complete lists).
+Normal scenes (a rebuild of ~1600 lights: 2.3 ms) stay synchronous, so a placed torch still lights in the same frame.
+(3) A recompile with the same lights no longer triggers a rebuild. (4) At most 400 BLAS per frame (each ~25 µs CPU): the
+world join had one 62 ms frame of 2253 BLAS.
+
+| Phase | before: frames > 50 ms / > 100 ms, max, avg FPS | after, run 1 | after, run 2 |
+|---|---|---|---|
+| world join + settle | 4 / 0, 67 ms, 49.8 | 3 / 0, 89 ms, 50.8 | 4 / 0, 92 ms, 50.5 |
+| `/tp` 2000 blocks | 3 / 0, 86 ms, 48.7 | 1 / 0, 51 ms, 51.0 | 4 / 0, 76 ms, 47.9 |
+| flight 40 blocks/s | 3 / 0, 95 ms, 35.7 | 5 / 0, 62 ms, 35.4 | 3 / 0, 76 ms, 36.0 |
+| **Nether** | **398 / 30, 157 ms, 18.2** | 4 / 1, 124 ms, 73.5 | 4 / 0, 92 ms, 73.2 |
+| End | 5 / 2, 166 ms, 94.5 | 2 / 0, 78 ms, 97.5 | 1 / 0, 97 ms, 98.9 |
+| back to the overworld | 3 / 0, 68 ms, 43.7 | 3 / 0, 72 ms, 41.8 | 3 / 0, 77 ms, 46.8 |
+| idle bench (2 × 10 s) | 35.5 / 35.2 FPS | 36.6 / 35.4 | 36.0 / 35.3 |
+
+- `RT lights` in a hitch line: up to 147 ms before, at most 1.3 ms after. The remaining > 50 ms frames are the dimension
+  switch itself (`targets`: the pack's render targets for the new dimension, 20-35 ms, one frame), GC pauses and GPU-bound
+  `gpu-wait`/`present` frames, the same in every run.
+- Image: the settled shots after the teleport, in the Nether and in the End match the old ones within run-to-run noise
+  (MAE 0.5-1.1 against before, 0.4-0.9 between two runs after). Shots right after the teleport differ only by when the
+  chunks arrived.
+- Missing geometry: the RT log line now reports `longest wait N frames` (Sodium path: from a section's upload to its BLAS).
+  It was 0 in every 5 s window of all runs, also with `-Demrion.rt.blasPerFrame=1000000`: a section is in the TLAS in the
+  frame its mesh is uploaded. What is missing right after a teleport is missing for the raster path too (chunks not yet
+  generated or meshed).
+- The 400 BLAS cap did not bind in these runs after the join (at most ~300 per frame while loading the Nether); with it
+  off the numbers were the same (Nether 6 / 0, max 97 ms).
+- Files: `run.sh`, `sum.py` and all outputs in a local test folder (not in the repo).
+
+## Async compute and variable rate shading: tried, dropped (2026-11-16, `perf/async-vrs`)
+
+Goal: more FPS with RT on, kept only if the image is not worse. Setup: target pack, the user's RT settings (`rtx`, full
+shadows with 4 rays, GI high, block light 2 rays, reflections, AO), Sodium, 2560×1440, pinned `frameTimeCounter=100`,
+20 s per scene, no upscaling unless noted. Two baseline runs give the noise: FPS ±3 %, image floor (MAE between the two)
+overview 0.38, forest 0.57, cave 0.23, water 0.65, night 0.20.
+
+| Scene | baseline FPS (2 runs) | GPU: gbuffers opaque / translucent ms | prepare (GI + ReSTIR) ms |
+|---|---|---|---|
+| overview | 36.5 / 36.9 | 13.16 / 2.64 | 4.74 |
+| forest | 53.0 / 51.2 | 6.49 / 0.07 | 6.22 |
+| cave | 68.6 / 70.0 | 1.82 / 0.01 | 7.89 |
+| water | 32.2 / 33.3 | 12.12 / 4.92 | 6.89 |
+| night | 159 / 169 | 0.01 / 0.01 | 1.04 |
+
+**Async compute: not built.** The 4070 Ti has a compute-only family (8 queues) and 16 graphics queues; a second queue of
+the graphics family would even avoid ownership transfers (all our images are in GENERAL, EXCLUSIVE). But the frame has
+almost nothing to overlap. The only big compute work is `prepare_a..i` (RTX GI and ReSTIR block light, 4.7-7.9 ms). It
+reads no colortex, depth or shadow map, only its own images, the atlases and the TLAS, so in principle it could run
+beside the shadow pass. However its primary rays use mask 0x05, i.e. the entities, and the entity BLAS/TLAS is built
+from the shadow pass's entity capture (`RtScene.refreshEntities`, after `shadow_translucent`). Everything after it needs
+the GI result (`gbuffers opaque` applies it in `DoLighting`), the AO trace needs depth, the composites are fragment work
+on the same images. The window left is `shadowcomp` (0.72 ms, itself compute) plus 0.13 ms of translucent shadow
+geometry: < 3 % even with perfect overlap, for a split of MC's single per-frame submit into cross-queue timeline waits.
+Moving the entity capture before the shadow pass, or a second TLAS without entities for `prepare`, would change what GI
+sees (an image change) and would still only open the 0.83 ms shadow-raster window (≈ 1 ms ceiling, ~3 %).
+
+**Variable rate shading (VK_KHR_fragment_shading_rate): prototyped, dropped.** Supported here with 16×16 attachment
+texels. Prototype: a compute pass after `final` writes an R8_UINT rate image (1×1/2×1/1×2/2×2 per tile) from the contrast
+of the finished image; the world's `opaque` (and optionally `translucent`) gbuffers passes begin with it as their
+fragment-shading-rate attachment (mixin on `VulkanCommandEncoder.createRenderPass`, all non-shadow gbuffers pipelines
+built with `RENDERING_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT` and combiner KEEP/REPLACE). The rate pass costs 0.04 ms;
+building the pipelines with the flag but no attachment cost nothing measurable. Variants (thresholds on sRGB luma 0-255,
+mean / max of neighbouring pixel pairs per tile):
+
+| Variant | overview | forest | cave | water | Image (MAE vs baseline; floor above) |
+|---|---|---|---|---|---|
+| uniform 2×2 on all terrain (upper bound) | 44.4 FPS (+21 %) | 67.5 (+30 %) | 75.8 (+9 %) | 42.9 (+31 %) | 2.81 / 2.75 / 0.83 / 3.11: blocky leaves, textures at half resolution |
+| adaptive, mean 2 / max 12, opaque + translucent | 38.7 (+5.5 %) | 55.2 (+6 %) | 69.9 (+1 %) | 34.0 (+4 %) | 0.62 / 0.73 / 0.52 / 1.18: sand grain blurred, 16 px tile pattern on water |
+| same, pairs across 2×2 borders (no lock-in) | 38.6 (+5 %) | 53.7 (+3 %) | 70.2 (+1 %) | 33.0 (+1 %) | 0.52 / 0.69 / 0.44 / 1.08: seagrass under water loses detail, tile pattern on water |
+| adaptive, mean 1 / max 6, opaque only | 37.2 (+1 %) | 54.0 (+4 %, noise) | 70.0 (0) | 31.7 (-3 %, noise) | 0.39 / 0.62 / 0.31 / 0.66: at the floor; gbuffers opaque 13.16 → 13.03 ms |
+
+- Coarse shading saves less than its pixel share: uniform 2×2 cut `gbuffers opaque` only 13.2 → 9.9 ms, so about two
+  thirds of that pass is not fragment-shading bound.
+- Low contrast in the final image does not mean coarse shading is invisible here: the water and the shadows/GI are
+  dithered per pixel and TAA resolves the noise; shaded per 2×2 block the dither turns into a visible checker inside
+  the tile. And with pairs inside the 2×2 blocks as the metric, a coarse tile measures its own blur and stays coarse
+  (the sand); pairs across block borders fix that but lower the gain.
+- Under DLSS Quality (1706×960) the variant "pairs across borders" saved 0.3 ms in `gbuffers opaque` (overview) and
+  1.3 ms opaque + translucent in water; DLSS hides the tile pattern but the underwater seagrass is washed out (water MAE
+  1.07). The DLSS FPS runs were too noisy to quote (cave 107 vs 123 FPS for a 0.3 ms pass difference).
+- Not tested: motion (the rates come from last frame without reprojection).
+
+So: the settings that gain ≥ 3 % change the image visibly, the settings that keep it identical gain nothing. The
+prototype is kept as `vrs-prototype.patch` next to the run scripts and outputs in
+a local test folder (not in the repo).

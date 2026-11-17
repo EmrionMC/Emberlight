@@ -23,11 +23,13 @@ layout(set = 0, binding = 10, rgba16f) uniform writeonly image2D colorOut;
 layout(set = 0, binding = 11) uniform sampler2D compositionTex; // upscaler composition mask (r: 0.75 water), when params.w bit 2
 layout(set = 0, binding = 12) uniform sampler2D reactiveTex;    // upscaler reactive mask (r), when params.w bit 2
 layout(set = 0, binding = 13, rgba16f) uniform writeonly image2D biasOut; // RR's bias-current-colour mask (r)
-layout(set = 0, binding = 14, rgba16f) uniform writeonly image2D particleOut; // RR's particle mask (r): pack ids 254 and entities // RR's colour input: the input without NaN/Inf
+layout(set = 0, binding = 14, rgba16f) uniform writeonly image2D particleOut; // RR's particle mask (r): pack ids 254 and entities
+// params.w bit 3: a native pack's own guides (NATIVE_FORMAT.md §14.4): normalTex = el_rrNormal, materialTex = el_rrDiffuse, and
+layout(set = 0, binding = 15) uniform sampler2D specularTex; // el_rrSpecular
 layout(push_constant) uniform Push {
     mat4 invViewProj; // inverse(gbufferProjection * gbufferModelView), jittered like the depth
     vec4 params;      // xy: render size, z: radians per pixel (vertical), w: bit 1 = colortex4/6 hold Complementary's normal/smoothness,
-                      // bit 2 = the upscaler masks are bound (else those bindings hold depth)
+                      // bit 2 = the upscaler masks are bound (else those bindings hold depth), bit 3 = native guides (binding 15)
 } pc;
 layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Verts { uint d[]; };
 
@@ -123,6 +125,17 @@ void main() {
     imageStore(colorOut, px, vec4(raw, 1.0));
     vec3 color = clamp(raw, 0.0, 1.0);
     bool packIn = (int(pc.params.w) & 1) != 0, masks = (int(pc.params.w) & 2) != 0;
+    if ((int(pc.params.w) & 4) != 0) { // the pack wrote every guide itself: copy, with NaN/Inf made harmless
+        vec3 d = texelFetch(materialTex, px, 0).rgb, s = texelFetch(specularTex, px, 0).rgb;
+        vec4 nr = texelFetch(normalTex, px, 0);
+        bool bad = any(isnan(nr)) || any(isinf(nr)) || dot(nr.xyz, nr.xyz) < 1e-6;
+        imageStore(diffuseOut, px, vec4(any(isnan(d)) || any(isinf(d)) ? color : d, 1.0));
+        imageStore(specularOut, px, vec4(any(isnan(s)) || any(isinf(s)) ? vec3(0.0) : s, 1.0));
+        imageStore(normalOut, px, bad ? vec4(0.0) : vec4(normalize(nr.xyz), clamp(nr.w, 0.0, 1.0)));
+        imageStore(biasOut, px, vec4(masks ? texelFetch(reactiveTex, px, 0).r : 0.0));
+        imageStore(particleOut, px, vec4(0.0));
+        return;
+    }
     float bias = masks ? texelFetch(reactiveTex, px, 0).r : 0.0;
     // Complementary's composition mask is 0.25 on particles and entities (upscale_masks.glsl): RR smeared the redstone and
     // flame particles into a haze. Entities ride along; their albedo is their colour anyway, so RR does not denoise them.

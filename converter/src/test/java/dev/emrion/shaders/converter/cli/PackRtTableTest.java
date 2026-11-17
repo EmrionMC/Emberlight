@@ -125,6 +125,19 @@ class PackRtTableTest {
 	}
 
 	@Test
+	void tableEffectsForTheRtPage(@TempDir Path tmp) throws Exception {
+		Map<String, String> noTable = pack(TABLE);
+		noTable.remove("shaders/emberlight/rt.json");
+		try (var own = dev.emrion.shaders.converter.pack.PackSource.open(folder(tmp.resolve("own"), pack(TABLE)));
+				var none = dev.emrion.shaders.converter.pack.PackSource.open(folder(tmp.resolve("none"), noTable));
+				var broken = dev.emrion.shaders.converter.pack.PackSource.open(folder(tmp.resolve("broken"), pack("{")))) {
+			assertEquals(Set.of("shadows"), dev.emrion.shaders.converter.glsl.RtPatcher.tableEffects(own));
+			assertEquals(Set.of(), dev.emrion.shaders.converter.glsl.RtPatcher.tableEffects(none));
+			assertEquals(Set.of(), dev.emrion.shaders.converter.glsl.RtPatcher.tableEffects(broken));
+		}
+	}
+
+	@Test
 	void rtOffIgnoresTheTable(@TempDir Path tmp) throws Exception {
 		var with = convert(folder(tmp.resolve("a/Tiny"), pack(TABLE)), tmp.resolve("o1"), Set.of());
 		assertNull(with.manifest().rt());

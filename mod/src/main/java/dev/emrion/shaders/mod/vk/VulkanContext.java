@@ -15,7 +15,7 @@ import org.lwjgl.vulkan.VkPhysicalDeviceProperties;
 
 /** Raw Vulkan handles of MC's device. Created lazily on the render thread, only on the Vulkan backend. */
 public final class VulkanContext {
-	private static @Nullable VulkanContext instance;
+	private static volatile @Nullable VulkanContext instance;
 
 	public final VulkanDevice device;
 	public final VkDevice vk;
@@ -52,7 +52,14 @@ public final class VulkanContext {
 		return instance;
 	}
 
-	private @Nullable PipelineCacheStore pipelineCache;
+	private volatile @Nullable PipelineCacheStore pipelineCache;
+
+	/** The persisted cache's handle for MC's own pipelines (any thread); 0 before it exists and after shutdown. */
+	public static long pipelineCacheHandle() {
+		VulkanContext c = instance;
+		PipelineCacheStore s = c == null ? null : c.pipelineCache;
+		return s == null ? 0 : s.handle;
+	}
 
 	/** The shared, persisted VkPipelineCache (created on first use). */
 	public PipelineCacheStore pipelineCache() {

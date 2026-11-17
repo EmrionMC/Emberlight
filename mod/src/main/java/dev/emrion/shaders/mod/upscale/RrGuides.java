@@ -39,7 +39,7 @@ final class RrGuides {
 				.add(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, cs);
 		for (int i = 2; i <= 6; i++) b.add(i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, cs);
 		b.add(11, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, cs).add(12, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, cs).add(13, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, cs)
-				.add(14, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, cs);
+				.add(14, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, cs).add(15, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, cs);
 		for (int i = 7; i <= 10; i++) b.add(i, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, cs);
 		try { // a failure (VRAM full) frees what was made so far: destroyLater skips the fields still unset
 			setLayout = b.build(ctx, true);
@@ -71,13 +71,17 @@ final class RrGuides {
 		in.projection().mul(in.modelView(), inv).invert();
 		float pixelAngle = 2f * (float) Math.atan(1.0 / in.projection().m11()) / height;
 		try (MemoryStack stack = MemoryStack.stackPush()) {
-			var writes = VkWriteDescriptorSet.calloc(15, stack);
+			var writes = VkWriteDescriptorSet.calloc(16, stack);
+			boolean nativeGuides = in.specularView() != 0;
 			var as = VkWriteDescriptorSetAccelerationStructureKHR.calloc(stack).sType$Default().pAccelerationStructures(stack.longs(scene.tlasHandle()));
 			writes.get(0).sType$Default().pNext(as.address()).dstBinding(0).descriptorType(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR).descriptorCount(1);
 			writes.get(1).sType$Default().dstBinding(1).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1)
 					.pBufferInfo(VkDescriptorBufferInfo.calloc(1, stack).buffer(scene.sectionTable().handle).offset(0).range(VK_WHOLE_SIZE));
-			long[] sampled = {in.atlasView(), depthView, colorView, in.pack() ? in.normalView() : depthView, in.pack() ? in.materialView() : depthView};
-			for (int i = 0; i < 5; i++) Upscaler.image(writes.get(2 + i), stack, 2 + i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, nearest, sampled[i]);
+			boolean packViews = in.pack() || nativeGuides;
+			long[] sampled = {in.atlasView(), depthView, colorView, packViews ? in.normalView() : depthView, packViews ? in.materialView() : depthView};
+			// the atlas: MC's mipmapped sampler, the plain one clamps to mip 0 and would ignore the shader's footprint LOD
+			long mipped = ((VulkanGpuSampler) RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST, true)).vkSampler();
+			for (int i = 0; i < 5; i++) Upscaler.image(writes.get(2 + i), stack, 2 + i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, i == 0 ? mipped : nearest, sampled[i]);
 			long[] out = {diffuse.view, specular.view, normals.view, color.view};
 			for (int i = 0; i < 4; i++) Upscaler.image(writes.get(7 + i), stack, 7 + i, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_NULL_HANDLE, out[i]);
 			// without masks the bindings still need a view; params.w bit 2 tells the shader not to read it
@@ -86,11 +90,12 @@ final class RrGuides {
 			Upscaler.image(writes.get(12), stack, 12, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, nearest, masks ? reactiveView : depthView);
 			Upscaler.image(writes.get(13), stack, 13, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_NULL_HANDLE, bias.view);
 			Upscaler.image(writes.get(14), stack, 14, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_NULL_HANDLE, particles.view);
+			Upscaler.image(writes.get(15), stack, 15, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, nearest, nativeGuides ? in.specularView() : depthView);
 			vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
 			KHRPushDescriptor.vkCmdPushDescriptorSetKHR(cb, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, writes);
 			var pc = stack.malloc(80);
 			inv.get(0, pc);
-			pc.putFloat(64, width).putFloat(68, height).putFloat(72, pixelAngle).putFloat(76, (in.pack() ? 1 : 0) | (masks ? 2 : 0));
+			pc.putFloat(64, width).putFloat(68, height).putFloat(72, pixelAngle).putFloat(76, (in.pack() ? 1 : 0) | (masks ? 2 : 0) | (nativeGuides ? 4 : 0));
 			vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_ALL, 0, pc);
 			vkCmdDispatch(cb, (width + 7) / 8, (height + 7) / 8, 1);
 		}

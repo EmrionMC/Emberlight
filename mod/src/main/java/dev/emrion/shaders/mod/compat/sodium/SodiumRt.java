@@ -63,7 +63,7 @@ public final class SodiumRt {
 	private final ArrayDeque<RtScene.Entry> batch = new ArrayDeque<>();
 	private final RawBuffer positions;
 	private final long layout, pipeline;
-	private int frame;
+	private int frame, maxWait;
 	private boolean wrongFormatWarned;
 
 	public SodiumRt(RtScene scene) {
@@ -88,6 +88,18 @@ public final class SodiumRt {
 			vkDestroyPipeline(ctx.vk, p, null);
 			vkDestroyPipelineLayout(ctx.vk, l, null);
 		});
+	}
+
+	/** Section layers waiting for their BLAS. */
+	public int pendingCount() {
+		return pending.size();
+	}
+
+	/** The most frames a section layer waited for its BLAS since the last call (it is out of the TLAS meanwhile). */
+	public int takeMaxWait() {
+		int w = maxWait;
+		maxWait = 0;
+		return w;
 	}
 
 	/** Section layers with a BLAS in this frame's TLAS set. */
@@ -166,6 +178,7 @@ public final class SodiumRt {
 							entries[id] = new RtScene.Entry(LAYERS[p], (region.getChunkX() + LocalSectionIndex.unpackX(id)) << 4,
 									(region.getChunkY() + LocalSectionIndex.unpackY(id)) << 4, (region.getChunkZ() + LocalSectionIndex.unpackZ(id)) << 4, quads);
 							// a changed section (a redstone clock rebuilds it every few ticks) goes first, so it is never out of the TLAS for a frame
+							entries[id].queued = frame;
 							if (replaced) pending.addFirst(entries[id]);
 							else pending.add(entries[id]);
 						}
@@ -191,7 +204,7 @@ public final class SodiumRt {
 		vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
 		try (MemoryStack stack = MemoryStack.stackPush()) {
 			var push = stack.malloc(20);
-			while (!pending.isEmpty() && tris < RtScene.BUDGET) {
+			while (!pending.isEmpty() && tris < RtScene.BUDGET && batch.size() < RtScene.MAX_BUILDS) {
 				RtScene.Entry e = pending.peek();
 				long bytes = e.quads * 4L * 12;
 				if (e.removed || e.vertexAddr == 0) { // dropped, or outside its buffer (cannot happen for a well-formed arena)
@@ -205,6 +218,7 @@ public final class SodiumRt {
 				}
 				if (offset + bytes > POSITIONS) break;
 				pending.poll();
+				maxWait = Math.max(maxWait, frame - e.queued);
 				e.posAddr = posBase + offset;
 				e.posStride = 12;
 				push.putLong(0, e.vertexAddr).putLong(8, e.posAddr).putInt(16, e.quads * 4);
@@ -216,7 +230,7 @@ public final class SodiumRt {
 			}
 		}
 		Barriers.memory(cb, Barriers.COMPUTE, Barriers.STORAGE_WRITE, AS_BUILD, AS_READ | AS_WRITE | VK13.VK_ACCESS_2_SHADER_READ_BIT);
-		scene.buildPending(cb, batch, Long.MAX_VALUE);
+		scene.buildPending(cb, batch, Long.MAX_VALUE, Integer.MAX_VALUE);
 	}
 
 	private void dropAll(Region r) {

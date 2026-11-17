@@ -131,9 +131,10 @@ public final class VanillaUpscale {
 		try (MemoryStack stack = MemoryStack.stackPush()) {
 			VulkanCommandEncoder.memoryBarrier(cb, stack);
 		}
-		depthPass(cb, view(main.getDepthTextureView()), rw, rh, 0, dummyMotion.view);
 		Upscaler u = upscaler;
 		boolean upscaled = swapped && u != null;
+		// paused frame generation does not read the forward depth (bypass only changes at the blit, after FrameGen.beforeGui)
+		if (upscaled || !FrameGen.bypassed()) depthPass(cb, view(main.getDepthTextureView()), rw, rh, 0, dummyMotion.view);
 		if (upscaled) {
 			long colorImage = ((VulkanGpuTexture) main.getColorTexture()).vkImage();
 			u.dispatch(cb, colorImage, view(main.getColorTextureView()), VK_FORMAT_R8G8B8A8_UNORM, depth.image, depth.view, depth.view, modelView, null, null); // no Ray Reconstruction without a pack (no RT)
@@ -147,7 +148,7 @@ public final class VanillaUpscale {
 
 	/** renderLevel TAIL (after the hand): hand pixels get hand depth and no motion, so frame generation does not drag the hand. */
 	public static void afterHand() {
-		if (!frame || !FrameGen.wantsHudless() || depth == null) return;
+		if (!frame || !FrameGen.wantsHudless() || depth == null || FrameGen.bypassed()) return;
 		RenderTarget main = Minecraft.getInstance().gameRenderer.mainRenderTarget();
 		VulkanContext ctx = VulkanContext.get();
 		VkCommandBuffer cb = RawCommands.begin(ctx);

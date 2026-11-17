@@ -2,7 +2,8 @@ package dev.emrion.shaders.mod.debug;
 
 /**
  * Dev-only fault injection: {@code emrion.debug.throwIn=levelStart,phase,shadow,finish} throws once in those entry points,
- * {@code throwAfter=N} after N level frames, {@code failAlloc=N} fails the N-th raw image allocation with OUT_OF_DEVICE_MEMORY.
+ * {@code throwAfter=N} after N level frames, {@code failAlloc=N} fails the N-th raw image allocation with OUT_OF_DEVICE_MEMORY,
+ * {@code failAllocAbove=PIXELS} every raw image larger than that while a photo renders (the 2× fallback).
  */
 public final class FaultInjection {
 	private FaultInjection() {}
@@ -10,6 +11,7 @@ public final class FaultInjection {
 	private static final java.util.Set<String> THROW_IN = new java.util.HashSet<>(java.util.Arrays.asList(System.getProperty("emrion.debug.throwIn", "").split(",")));
 	private static final int THROW_AFTER = Integer.getInteger("emrion.debug.throwAfter", 200);
 	private static final int FAIL_ALLOC = Integer.getInteger("emrion.debug.failAlloc", 0);
+	private static final long FAIL_ABOVE = Long.getLong("emrion.debug.failAllocAbove", 0);
 	private static int frames, allocs;
 
 	/** Called once per level frame by the FrameExecutor. */
@@ -23,7 +25,7 @@ public final class FaultInjection {
 	}
 
 	/** True if this raw image allocation should fail. */
-	public static boolean failAlloc() {
-		return FAIL_ALLOC > 0 && ++allocs == FAIL_ALLOC;
+	public static boolean failAlloc(long pixels) {
+		return FAIL_ALLOC > 0 && ++allocs == FAIL_ALLOC || FAIL_ABOVE > 0 && pixels > FAIL_ABOVE && dev.emrion.shaders.mod.photo.PhotoMode.frozen();
 	}
 }

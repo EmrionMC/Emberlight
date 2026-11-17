@@ -82,6 +82,7 @@ All keys are in the **Emberlight** category of *Options → Controls* and can be
 | F7 | Profiler overlay (GPU and CPU time per pass) |
 | unbound | Ray tracing on/off |
 | unbound | Wireframe (debug mode and singleplayer only, as in Iris) |
+| unbound | Photo mode (see below) |
 
 In the shader pack screen, as in Iris: **Tab** opens the pack's options (Tab again applies and goes back), **F1** hides the
 screen, **Ctrl+D** toggles debug mode (every shader error in chat, profiler on), and pack zips or folders can be dropped onto
@@ -123,6 +124,23 @@ Patches); other packs show *"unavailable: no RT patch table"*.
 
 Ray tracing costs a lot: expect roughly 0.85 GB of extra VRAM, and in the RTX style with everything on about half the frame
 rate at 1440p. Upscaling and frame generation make up for much of it.
+
+### Photo mode
+
+A noise-free screenshot: the game freezes (entities, particles, water, clouds, the sun; in multiplayer too, on your screen
+only), Emberlight renders the same view many times with a different sample pattern each time and saves the average to
+`screenshots/emberlight-photo-<time>.png`. During the photo every frame stands on its own (the ray-traced GI, block light
+and upscaler histories restart each frame, and an upscaler renders at native size), so more samples converge to the clean
+image. The photo can be a little brighter than the live picture (1–4 % in our tests, most in foliage): the upscaler's
+history darkens fine detail while you play.
+
+- Start it from the shader pack screen (*Photo mode → Take photo*), with the Photo mode key, or with
+  `/emberlight photo [scale] [samples]`. Esc cancels; a toast shows the progress, chat links the file.
+- **Samples**: 16, 64 (default) or 256. At 2560×1440 with full RT, 64 take about 3 s and 256 about 7 s; 256 is visibly
+  cleaner in dark, torch-lit scenes.
+- **Resolution**: 1× or 2× (renders at twice the window size and scales down: sharper edges and textures, four times the
+  pixels and more VRAM). If 2× does not fit into GPU memory the photo is taken at 1× and chat says so.
+- The photo has no HUD and no frame generation. Without an upscaler the pack's own TAA still runs, so take more samples.
 
 ## FAQ
 

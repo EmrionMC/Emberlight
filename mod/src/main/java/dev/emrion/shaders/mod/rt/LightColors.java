@@ -160,6 +160,17 @@ public final class LightColors {
 		return (int) Math.clamp(Math.round(LEVEL_AT_ORE + 2.0 * Math.log(a / 0.05) / Math.log(2.0)), 3, 15);
 	}
 
+	/**
+	 * A vanilla emitter the pack also gives extra coloured light (blocklightColorsACT.glsl: lava LAVA_ACT_ALPHA 0.8, magma 0.1;
+	 * glowstone, sea lanterns, lamps, torches have 0). The pack's floodfill sums that light over every block, so a lava pool adds
+	 * up where a glowstone wall lights like its brightest block (RTX GI's cluster rule, rtx/gi_common.glsl). RAYTRACING.md §37.
+	 */
+	public static boolean packSums(int type) {
+		return type == LAVA || type == MAGMA;
+	}
+
+	static final int LAVA = vanilla("lava"), MAGMA = vanilla("magma");
+
 	/** Brightness of a source relative to a vanilla source of the same level: 1 for vanilla, from the pack's alpha otherwise. */
 	public static float power(int type, float oreMult) {
 		if (type < PACK0) return 1f;

@@ -73,7 +73,7 @@ public final class GbufferPipelines {
 
 	@SuppressWarnings("unchecked")
 	public GbufferPipelines(VulkanContext ctx, Path cacheDir, Manifest manifest, Manifest.Dimension dim, long set1Layout,
-			Map<RenderPipeline, FrontendRenderPipeline> vanilla, ExecutorService pool) {
+			Map<RenderPipeline, FrontendRenderPipeline> vanilla, ExecutorService pool, PackPipelines owner) {
 		targets = outputUnion(dim, "gbuffers", "colortex");
 		shadowTargets = outputUnion(dim, "shadow", "shadowcolor");
 		Map<String, GpuFormat> formats = new HashMap<>();
@@ -109,7 +109,15 @@ public final class GbufferPipelines {
 			for (var raw : vanilla.entrySet()) {
 				Resolved r = resolve(c, raw.getKey(), raw.getValue());
 				keys[c.ordinal()].put(raw.getKey(), r.key());
-				jobs.computeIfAbsent(r.key(), kk -> CompletableFuture.supplyAsync(() -> build(kk, r.entry(), r.compiled()), pool));
+				jobs.computeIfAbsent(r.key(), kk -> {
+					owner.counted(PackPipelines.TOTAL);
+					return CompletableFuture.supplyAsync(() -> {
+						owner.checkCancelled();
+						var f = build(kk, r.entry(), r.compiled());
+						owner.counted(PackPipelines.BUILT);
+						return f;
+					}, pool);
+				});
 				if (r.line() != null) table.add(r.line());
 			}
 		}

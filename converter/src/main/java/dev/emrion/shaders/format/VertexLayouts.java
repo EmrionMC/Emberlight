@@ -54,6 +54,8 @@ public final class VertexLayouts {
 			// vanilla BLOCK format outside chunk meshes (block in hand/moving blocks, crumbling, beacon beam): DynamicTransforms
 			Map.entry("block", List.of("Position", "Color", "UV0", "UV2")),
 			Map.entry("position_color", List.of("Position", "Color")),
+			// leads (POSITION_COLOR_LIGHTMAP): without UV2 they got the full-bright default lightmap
+			Map.entry("position_color_lightmap", List.of("Position", "Color", "UV2")),
 			Map.entry("position_tex", List.of("Position", "UV0")),
 			Map.entry("position_tex_color", List.of("Position", "UV0", "Color")),
 			Map.entry("position", List.of("Position")),

@@ -9,6 +9,7 @@ import dev.emrion.shaders.mod.vk.UboRing;
 import dev.emrion.shaders.mod.vk.VulkanContext;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import net.minecraft.core.BlockPos;
@@ -16,6 +17,7 @@ import net.minecraft.core.Direction;
 import net.minecraft.core.SectionPos;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
+import org.jspecify.annotations.Nullable;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VkBufferCopy;
@@ -35,7 +37,8 @@ import org.lwjgl.vulkan.VkCommandBuffer;
  * lights); the remap table (last list's index -> this one's, ~0 = gone); per cell the first index into the index list (plus
  * one end entry); the index list (every source whose range reaches the cell, at most {@link #CELL_CAP} per cell).
  * <p>The buffer is device-local and filled by copies from a host ring at levelStart, so one static descriptor serves every frame.
- * The full list is copied only when it was rebuilt; its positions are grid-relative, so they stay valid while the camera moves.
+ * Only the header and the capped grid's light positions (camera-relative) are copied every frame; the cells, colours and full
+ * list only when the lists were rebuilt (the full list's positions are grid-relative, so they stay valid while the camera moves).
  */
 public final class RtLights {
 	static final int CELL = 8, GX = 16, GY = 16, GZ = 16, CELLS = GX * GY * GZ, SLOTS = 32, MAX_LIGHTS = 4096;
@@ -63,6 +66,13 @@ public final class RtLights {
 	/** A powered repeater's or comparator's level in the capped grid (Faithful block light), as it was before the full list. */
 	static final int DIODE_LEVEL = 7;
 	private static final ThreadLocal<int[]> FOUND = ThreadLocal.withInitial(() -> new int[17]); // [0] = count
+	/** When this worker's compile began (System.nanoTime), and when each section was last emptied or everything cleared: a compile older than either is stale. */
+	private static final ThreadLocal<long[]> STARTED = ThreadLocal.withInitial(() -> new long[1]);
+	private static final Map<Long, Long> EMPTIED = new ConcurrentHashMap<>();
+	private static volatile long clearedAt = Long.MIN_VALUE;
+	/** How long emptied marks are kept: far longer than any compile runs. */
+	private static final long EMPTIED_KEEP_NS = 60_000_000_000L;
+	private static int pruneAt = 4096; // client thread (emptied)
 
 	/** Which pack-only source groups the pack lights with its settings (LightColors.Kind order), and its ore brightness. */
 	private static volatile boolean[] enabled = defaults();
@@ -71,25 +81,21 @@ public final class RtLights {
 	private final VulkanContext ctx = VulkanContext.get();
 	final RawBuffer buffer;
 	private final RawBuffer staging;
-	private final int[] cells = new int[CELL_WORDS];
 	private final float[] cellWeight = new float[CELL_WORDS];
 	private static final float REDUNDANT = 8f;
 	private final java.util.HashSet<Long> positions = new java.util.HashSet<>(); // rebuild: every listed light's block
-	private final int[] lights = new int[MAX_LIGHTS]; // level | fullBlock << 4
-	private final int[] lightColor = new int[MAX_LIGHTS]; // RGB555
-	private final int[] lightX = new int[MAX_LIGHTS], lightY = new int[MAX_LIGHTS], lightZ = new int[MAX_LIGHTS];
-	private int lightCount, builtVersion = -1, ox, oy, oz;
-	// the full list, its cells and the last one's keys (remap)
-	private final float[] allPos = new float[MAX_ALL * 4], allCol = new float[MAX_ALL * 4];
-	private final long[] allKey = new long[MAX_ALL];
-	private final long[] prevKey = new long[MAX_ALL];
-	private final int[] remap = new int[MAX_ALL];
-	private final int[] cellStart = new int[CELLS + 1], index = new int[INDEX_MAX];
-	private final int[] block = new int[BLOCK_SLOTS]; // open addressing by grid-relative block position: source index + 1, 0 = empty
+	/** Uploaded every frame; {@code back} is rebuilt (on the render thread or a worker, see {@link #upload}) and then swapped in. */
+	private Lists front = new Lists(), back = new Lists();
+	private @Nullable CompletableFuture<Void> building;
+	/** The last rebuild's duration: a slower one runs on a worker, so a lava sea never stalls a frame. */
+	private volatile long rebuildNs;
+	private static final long SYNC_REBUILD_NS = 4_000_000L;
+	private int builtVersion = -1, wantX, wantY, wantZ;
 	private int[] pairCell = new int[1 << 16], pairLight = new int[1 << 16];
 	private float[] pairWeight = new float[1 << 16];
 	private final int[] cellCount = new int[CELLS];
-	private int allCount, prevCount, indexCount;
+	private final int[] extraAt = new int[CELLS], extraFill = new int[CELLS]; // buildIndex: overfull cells' ranges in sortKeys
+	private long[] sortKeys = new long[0];
 	private boolean firstBuild = true;
 	private int changeFrames, bx0, by0, bz0, bx1, by1, bz1;
 	private boolean overflowWarned, allOverflowWarned, indexOverflowWarned, blockOverflowWarned;
@@ -107,7 +113,9 @@ public final class RtLights {
 	}
 
 	static void clear() {
+		clearedAt = System.nanoTime();
 		SECTIONS.clear();
+		EMPTIED.clear();
 		VERSION.incrementAndGet();
 	}
 
@@ -156,6 +164,7 @@ public final class RtLights {
 
 	public static void begin() {
 		FOUND.get()[0] = 0;
+		STARTED.get()[0] = System.nanoTime();
 	}
 
 	/**
@@ -185,9 +194,14 @@ public final class RtLights {
 
 	public static void end(SectionPos section) {
 		if (!collecting) return;
+		long start = STARTED.get()[0];
+		Long gone = EMPTIED.get(section.asLong());
+		// shortcut: the snapshot a compile reads is taken before it begins; a section emptied in between still publishes (rare: queue latency)
+		if (start <= clearedAt || gone != null && gone >= start) return; // began before the world was cleared or the section emptied: its lights are gone
 		int[] f = FOUND.get();
 		int[] prev = f[0] == 0 ? SECTIONS.remove(section.asLong()) : SECTIONS.put(section.asLong(), java.util.Arrays.copyOfRange(f, 1, f[0] + 1));
-		if (prev != null || f[0] > 0) {
+		// a recompile with the same lights (most of them: a block edit, a neighbour's change) needs no rebuild
+		if ((prev != null || f[0] > 0) && !(prev != null && java.util.Arrays.equals(prev, 0, prev.length, f, 1, f[0] + 1))) {
 			VERSION.incrementAndGet();
 			int[] now = java.util.Arrays.copyOfRange(f, 1, f[0] + 1);
 			diff(section, prev == null ? new int[0] : prev, now);
@@ -197,10 +211,15 @@ public final class RtLights {
 
 	/**
 	 * A section that became all air or was unloaded (ClientChunkCacheStorageMixin, client thread): neither vanilla nor Sodium
-	 * compiles an empty section, so its lights leave the list here.
-	 * shortcut: a compile of the section still in flight can put them back; a recompile or the next edit nearby fixes it.
+	 * compiles an empty section, so its lights leave the list here; a compile of it already running is dropped at {@link #end}.
 	 */
 	public static void emptied(long section) {
+		long now = System.nanoTime();
+		EMPTIED.put(section, now);
+		if (EMPTIED.size() > pruneAt) { // amortized: a teleport empties thousands of sections at once
+			EMPTIED.values().removeIf(t -> now - t > EMPTIED_KEEP_NS);
+			pruneAt = Math.max(4096, EMPTIED.size() * 2);
+		}
 		int[] prev = SECTIONS.remove(section);
 		if (prev == null) return;
 		VERSION.incrementAndGet();
@@ -220,7 +239,8 @@ public final class RtLights {
 	private void collectChanges() {
 		for (int[] c; (c = CHANGED.poll()) != null; ) {
 			int r = c[3] + CHANGE_REACH;
-			if (c[0] + r < ox || c[0] - r > ox + GX * CELL || c[1] + r < oy || c[1] - r > oy + GY * CELL || c[2] + r < oz || c[2] - r > oz + GZ * CELL) continue;
+			Lists f = front;
+			if (c[0] + r < f.ox || c[0] - r > f.ox + GX * CELL || c[1] + r < f.oy || c[1] - r > f.oy + GY * CELL || c[2] + r < f.oz || c[2] - r > f.oz + GZ * CELL) continue;
 			if (changeFrames == 0) {
 				bx0 = by0 = bz0 = Integer.MAX_VALUE;
 				bx1 = by1 = bz1 = Integer.MIN_VALUE;
@@ -244,36 +264,51 @@ public final class RtLights {
 		int nz = Math.floorDiv((int) Math.floor(cam.z), CELL) * CELL - GZ * CELL / 2;
 		int v = VERSION.get();
 		boolean rebuilt = false;
-		if (v != builtVersion || nx != ox || ny != oy || nz != oz) {
-			builtVersion = v;
-			ox = nx;
-			oy = ny;
-			oz = nz;
-			rebuild();
+		if (building != null && building.isDone()) {
+			building.join();
+			building = null;
+			swap();
 			rebuilt = true;
 		}
+		// one rebuild in flight, and none right after a swap: each list's remap must map the list uploaded before it
+		if (building == null && !rebuilt && (v != builtVersion || nx != wantX || ny != wantY || nz != wantZ)) {
+			builtVersion = v;
+			Lists next = back, prev = front;
+			next.ox = wantX = nx;
+			next.oy = wantY = ny;
+			next.oz = wantZ = nz;
+			if (rebuildNs < SYNC_REBUILD_NS) {
+				next.rebuild(prev);
+				swap();
+				rebuilt = true;
+			} else building = CompletableFuture.runAsync(() -> next.rebuild(prev));
+		}
+		Lists f = front;
+		int ox = f.ox, oy = f.oy, oz = f.oz, lightCount = f.lightCount, allCount = f.allCount, prevCount = f.prevCount, indexCount = f.indexCount;
+		int[] lights = f.lights, lightColor = f.lightColor, lightX = f.lightX, lightY = f.lightY, lightZ = f.lightZ;
 		collectChanges();
 		long base = staging.mapped + frame * SIZE;
 		MemoryUtil.memPutFloat(base, (float) (ox - cam.x));
 		MemoryUtil.memPutFloat(base + 4, (float) (oy - cam.y));
 		MemoryUtil.memPutFloat(base + 8, (float) (oz - cam.z));
 		MemoryUtil.memPutFloat(base + 12, allCount);
-		MemoryUtil.memPutFloat(base + 32, (float) (bx0 - cam.x));
-		MemoryUtil.memPutFloat(base + 36, (float) (by0 - cam.y));
-		MemoryUtil.memPutFloat(base + 40, (float) (bz0 - cam.z));
-		MemoryUtil.memPutFloat(base + 44, changeFrames > 0 ? CHANGE_CAP : 0);
-		MemoryUtil.memPutFloat(base + 48, (float) (bx1 - cam.x));
-		MemoryUtil.memPutFloat(base + 52, (float) (by1 - cam.y));
-		MemoryUtil.memPutFloat(base + 56, (float) (bz1 - cam.z));
+		boolean photo = dev.emrion.shaders.mod.photo.PhotoMode.independentRt(); // the whole view counts as changed, history cap 1: every frame stands alone
+		MemoryUtil.memPutFloat(base + 32, photo ? -1e9f : (float) (bx0 - cam.x));
+		MemoryUtil.memPutFloat(base + 36, photo ? -1e9f : (float) (by0 - cam.y));
+		MemoryUtil.memPutFloat(base + 40, photo ? -1e9f : (float) (bz0 - cam.z));
+		MemoryUtil.memPutFloat(base + 44, photo ? 1 : changeFrames > 0 ? CHANGE_CAP : 0);
+		MemoryUtil.memPutFloat(base + 48, photo ? 1e9f : (float) (bx1 - cam.x));
+		MemoryUtil.memPutFloat(base + 52, photo ? 1e9f : (float) (by1 - cam.y));
+		MemoryUtil.memPutFloat(base + 56, photo ? 1e9f : (float) (bz1 - cam.z));
 		MemoryUtil.memPutFloat(base + 60, rebuilt && !firstBuild ? 1f : 0f); // the remap table maps last frame's indices
 		firstBuild &= !rebuilt;
-		if (changeFrames > 0) changeFrames--;
+		if (changeFrames > 0 && building == null) changeFrames--; // a list still being built may bring the change later
 		MemoryUtil.memPutInt(base + 16, GX);
 		MemoryUtil.memPutInt(base + 20, GY);
 		MemoryUtil.memPutInt(base + 24, GZ);
 		MemoryUtil.memPutInt(base + 28, CELL);
 		long c = base + HEADER * 4;
-		MemoryUtil.memIntBuffer(c, CELL_WORDS).put(cells); // bulk copy: 512 KiB every frame
+		if (rebuilt) MemoryUtil.memIntBuffer(c, CELL_WORDS).put(f.cells); // 512 KiB, only when the lists changed: the device copy stays valid
 		long l = c + CELL_WORDS * 4L;
 		for (int i = 0; i < lightCount; i++, l += 16) {
 			MemoryUtil.memPutFloat(l, (float) (lightX[i] + 0.5 - cam.x));
@@ -282,7 +317,7 @@ public final class RtLights {
 			MemoryUtil.memPutFloat(l + 12, (lights[i] & 15) + ((lights[i] & 16) != 0 ? 0.45f : 0.15f));
 		}
 		long col = base + COLORS;
-		for (int i = 0; i < lightCount; i++, col += 16) {
+		for (int i = 0; rebuilt && i < lightCount; i++, col += 16) {
 			int rgb = lightColor[i];
 			MemoryUtil.memPutFloat(col, (rgb >> 10 & 31) / 31f);
 			MemoryUtil.memPutFloat(col + 4, (rgb >> 5 & 31) / 31f);
@@ -290,21 +325,23 @@ public final class RtLights {
 			MemoryUtil.memPutFloat(col + 12, 1f);
 		}
 		if (rebuilt) { // the full list: written only when it changed (grid-relative, the device copy stays valid)
-			MemoryUtil.memFloatBuffer(base + ALL_POS, allCount * 4).put(allPos, 0, allCount * 4);
-			MemoryUtil.memFloatBuffer(base + ALL_COL, allCount * 4).put(allCol, 0, allCount * 4);
-			MemoryUtil.memIntBuffer(base + REMAP, Math.max(prevCount, 1)).put(remap, 0, Math.max(prevCount, 1));
-			MemoryUtil.memIntBuffer(base + START, CELLS + 1).put(cellStart);
-			MemoryUtil.memIntBuffer(base + BLOCK, BLOCK_SLOTS).put(block);
-			MemoryUtil.memIntBuffer(base + INDEX, Math.max(indexCount, 1)).put(index, 0, Math.max(indexCount, 1));
+			MemoryUtil.memFloatBuffer(base + ALL_POS, allCount * 4).put(f.allPos, 0, allCount * 4);
+			MemoryUtil.memFloatBuffer(base + ALL_COL, allCount * 4).put(f.allCol, 0, allCount * 4);
+			MemoryUtil.memIntBuffer(base + REMAP, Math.max(prevCount, 1)).put(f.remap, 0, Math.max(prevCount, 1));
+			MemoryUtil.memIntBuffer(base + START, CELLS + 1).put(f.cellStart);
+			MemoryUtil.memIntBuffer(base + BLOCK, BLOCK_SLOTS).put(f.block);
+			MemoryUtil.memIntBuffer(base + INDEX, Math.max(indexCount, 1)).put(f.index, 0, Math.max(indexCount, 1));
 		}
-		long used = (HEADER + CELL_WORDS + lightCount * 4L) * 4;
 		Barriers.memory(cb, Barriers.FRAGMENT | Barriers.COMPUTE, Barriers.STORAGE_READ, Barriers.TRANSFER, Barriers.TRANSFER_WRITE);
 		try (MemoryStack stack = MemoryStack.stackPush()) {
-			VkBufferCopy.Buffer regions = VkBufferCopy.calloc(8, stack);
+			VkBufferCopy.Buffer regions = VkBufferCopy.calloc(10, stack);
 			int n = 0;
-			regions.get(n++).srcOffset(frame * SIZE).dstOffset(0).size(used);
-			if (lightCount > 0) regions.get(n++).srcOffset(frame * SIZE + COLORS).dstOffset(COLORS).size(lightCount * 16L);
+			long lightsAt = (HEADER + CELL_WORDS) * 4L;
+			// every frame the header and the camera-relative light positions; the cells and colours change only with the lists
+			regions.get(n++).srcOffset(frame * SIZE).dstOffset(0).size(rebuilt ? lightsAt : HEADER * 4L);
+			if (lightCount > 0) regions.get(n++).srcOffset(frame * SIZE + lightsAt).dstOffset(lightsAt).size(lightCount * 16L);
 			if (rebuilt) {
+				if (lightCount > 0) regions.get(n++).srcOffset(frame * SIZE + COLORS).dstOffset(COLORS).size(lightCount * 16L);
 				if (allCount > 0) {
 					regions.get(n++).srcOffset(frame * SIZE + ALL_POS).dstOffset(ALL_POS).size(allCount * 16L);
 					regions.get(n++).srcOffset(frame * SIZE + ALL_COL).dstOffset(ALL_COL).size(allCount * 16L);
@@ -320,84 +357,246 @@ public final class RtLights {
 		Barriers.memory(cb, Barriers.TRANSFER, Barriers.TRANSFER_WRITE, Barriers.FRAGMENT | Barriers.COMPUTE, Barriers.STORAGE_READ);
 	}
 
-	/** Both lists for the grid at (ox, oy, oz): a light enters every cell its range (level blocks) reaches. */
-	private void rebuild() {
-		lightCount = 0;
-		java.util.Arrays.fill(cells, 0);
-		int r = 15;
-		int sx0 = (ox - r) >> 4, sx1 = (ox + GX * CELL + r) >> 4;
-		int sy0 = (oy - r) >> 4, sy1 = (oy + GY * CELL + r) >> 4;
-		int sz0 = (oz - r) >> 4, sz1 = (oz + GZ * CELL + r) >> 4;
-		boolean[] on = enabled;
-		positions.clear();
-		for (int sx = sx0; sx <= sx1; sx++)
-			for (int sy = sy0; sy <= sy1; sy++)
-				for (int sz = sz0; sz <= sz1; sz++) {
-					int[] list = SECTIONS.get(SectionPos.asLong(sx, sy, sz));
-					if (list != null) for (int packed : list) if (capped(packed) > 0)
-						positions.add(BlockPos.asLong(sx * 16 + (packed & 15), sy * 16 + (packed >> 4 & 15), sz * 16 + (packed >> 8 & 15)));
-				}
-		// the full list starts over; the last one's keys stay for the remap
-		System.arraycopy(allKey, 0, prevKey, 0, allCount);
-		prevCount = allCount;
-		allCount = 0;
-		keyIndex.clear();
-		int pairs = 0;
-		for (int sx = sx0; sx <= sx1; sx++)
-			for (int sy = sy0; sy <= sy1; sy++)
-				for (int sz = sz0; sz <= sz1; sz++) {
-					int[] list = SECTIONS.get(SectionPos.asLong(sx, sy, sz));
-					if (list == null) continue;
-					for (int packed : list) {
-						int x = sx * 16 + (packed & 15), y = sy * 16 + (packed >> 4 & 15), z = sz * 16 + (packed >> 8 & 15);
-						int type = packed >>> 17, level = packed >> 12 & 15;
-						LightColors.Kind kind = LightColors.kind(type);
-						float lx = (x - ox) + 0.5f, ly = (y - oy) + 0.5f, lz = (z - oz) + 0.5f; // int difference first: exact at any distance from 0
-						int old = capped(packed);
-						if (old > 0) {
-							if (lightCount == MAX_LIGHTS) {
-								// shortcut: the first MAX_LIGHTS in section order win, not the nearest; sort by distance if this shows up
-								if (!overflowWarned) EmrionShadersClient.LOG.warn("RT block light: more than {} light sources near the camera", MAX_LIGHTS);
-								overflowWarned = true;
-							} else if (addToCells(lightCount, lx, ly, lz, old, clustered(x, y, z) ? REDUNDANT : 0f)) {
-								lights[lightCount] = old | (packed >> 12 & 16);
-								lightColor[lightCount] = LightColors.rgb555(LightColors.rgb(type));
-								lightX[lightCount] = x;
-								lightY[lightCount] = y;
-								lightZ[lightCount] = z;
-								lightCount++;
+	private void swap() {
+		Lists t = front;
+		front = back;
+		back = t;
+	}
+
+	/** One rebuild's output for the grid at (ox, oy, oz): the capped grid and the full list. Scratch arrays are the outer class's (one rebuild at a time). */
+	private final class Lists {
+		final int[] cells = new int[CELL_WORDS];
+		final int[] lights = new int[MAX_LIGHTS]; // level | fullBlock << 4
+		final int[] lightColor = new int[MAX_LIGHTS]; // RGB555
+		final int[] lightX = new int[MAX_LIGHTS], lightY = new int[MAX_LIGHTS], lightZ = new int[MAX_LIGHTS];
+		int lightCount, ox, oy, oz;
+		// the full list, its cells, and the remap from the list uploaded before it
+		final float[] allPos = new float[MAX_ALL * 4], allCol = new float[MAX_ALL * 4];
+		final long[] allKey = new long[MAX_ALL];
+		final int[] remap = new int[MAX_ALL];
+		final int[] cellStart = new int[CELLS + 1], index = new int[INDEX_MAX];
+		final int[] block = new int[BLOCK_SLOTS]; // open addressing by grid-relative block position: source index + 1, 0 = empty
+		int allCount, prevCount, indexCount;
+
+		/** Both lists for the grid at (ox, oy, oz): a light enters every cell its range (level blocks) reaches. */
+		void rebuild(Lists prev) {
+			long t0 = System.nanoTime();
+			lightCount = 0;
+			java.util.Arrays.fill(cells, 0);
+			int r = 15;
+			int sx0 = (ox - r) >> 4, sx1 = (ox + GX * CELL + r) >> 4;
+			int sy0 = (oy - r) >> 4, sy1 = (oy + GY * CELL + r) >> 4;
+			int sz0 = (oz - r) >> 4, sz1 = (oz + GZ * CELL + r) >> 4;
+			boolean[] on = enabled;
+			positions.clear();
+			for (int sx = sx0; sx <= sx1; sx++)
+				for (int sy = sy0; sy <= sy1; sy++)
+					for (int sz = sz0; sz <= sz1; sz++) {
+						int[] list = SECTIONS.get(SectionPos.asLong(sx, sy, sz));
+						if (list != null) for (int packed : list) if (capped(packed) > 0)
+							positions.add(BlockPos.asLong(sx * 16 + (packed & 15), sy * 16 + (packed >> 4 & 15), sz * 16 + (packed >> 8 & 15)));
+					}
+			// the full list starts over; the last one's keys stay for the remap
+			prevCount = prev.allCount;
+			allCount = 0;
+			keyIndex.clear();
+			int pairs = 0;
+			for (int sx = sx0; sx <= sx1; sx++)
+				for (int sy = sy0; sy <= sy1; sy++)
+					for (int sz = sz0; sz <= sz1; sz++) {
+						int[] list = SECTIONS.get(SectionPos.asLong(sx, sy, sz));
+						if (list == null) continue;
+						for (int packed : list) {
+							int x = sx * 16 + (packed & 15), y = sy * 16 + (packed >> 4 & 15), z = sz * 16 + (packed >> 8 & 15);
+							int type = packed >>> 17, level = packed >> 12 & 15;
+							LightColors.Kind kind = LightColors.kind(type);
+							float lx = (x - ox) + 0.5f, ly = (y - oy) + 0.5f, lz = (z - oz) + 0.5f; // int difference first: exact at any distance from 0
+							int old = capped(packed);
+							if (old > 0) {
+								if (lightCount == MAX_LIGHTS) {
+									// shortcut: the first MAX_LIGHTS in section order win, not the nearest; sort by distance if this shows up
+									if (!overflowWarned) EmrionShadersClient.LOG.warn("RT block light: more than {} light sources near the camera", MAX_LIGHTS);
+									overflowWarned = true;
+								} else if (addToCells(lightCount, lx, ly, lz, old, clustered(x, y, z) ? REDUNDANT : 0f)) {
+									lights[lightCount] = old | (packed >> 12 & 16);
+									lightColor[lightCount] = LightColors.rgb555(LightColors.rgb(type));
+									lightX[lightCount] = x;
+									lightY[lightCount] = y;
+									lightZ[lightCount] = z;
+									lightCount++;
+								}
 							}
+							if (!on[kind.ordinal()] || level == 0) continue;
+							if (allCount == MAX_ALL) {
+								if (!allOverflowWarned) EmrionShadersClient.LOG.warn("RT block light: more than {} sources near the camera, the rest stay unlit", MAX_ALL);
+								allOverflowWarned = true;
+								continue;
+							}
+							int before = pairs;
+							pairs = addPairs(allCount, lx, ly, lz, level, pairs);
+							if (pairs == before) continue; // reaches no cell of the grid
+							int i = allCount++;
+							boolean full = (packed & 1 << 16) != 0;
+							float[] rgb = LightColors.rgb(type);
+							float power = LightColors.power(type, oreMult);
+							allPos[i * 4] = lx;
+							allPos[i * 4 + 1] = full && type == LightColors.LAVA ? ly + 0.39f : ly; // lava lights from its surface, 8/9 up its block
+							allPos[i * 4 + 2] = lz;
+							// source radius: 0.45 full blocks (0.44: one the pack's floodfill sums, LightColors.packSums), 0.15 others
+							allPos[i * 4 + 3] = level + (!full ? 0.15f : LightColors.packSums(type) ? 0.44f : 0.45f);
+							allCol[i * 4] = rgb[0];
+							allCol[i * 4 + 1] = rgb[1];
+							allCol[i * 4 + 2] = rgb[2];
+							allCol[i * 4 + 3] = kind == LightColors.Kind.VANILLA ? power : -power;
+							allKey[i] = BlockPos.asLong(x, y, z);
+							keyIndex.put(allKey[i], i);
 						}
-						if (!on[kind.ordinal()] || level == 0) continue;
-						if (allCount == MAX_ALL) {
-							if (!allOverflowWarned) EmrionShadersClient.LOG.warn("RT block light: more than {} sources near the camera, the rest stay unlit", MAX_ALL);
-							allOverflowWarned = true;
-							continue;
+					}
+			buildIndex(pairs);
+			if (fillBlocks(block, allPos, allCount) > 0 && !blockOverflowWarned) {
+				EmrionShadersClient.LOG.warn("RT block light: the block hash table needs more than {} probes, some light blocks are not found", BLOCK_PROBES);
+				blockOverflowWarned = true;
+			}
+			for (int i = 0; i < prevCount; i++) remap[i] = keyIndex.get(prev.allKey[i]); // -1 = ~0: gone
+			rebuildNs = System.nanoTime() - t0;
+		}
+
+
+
+
+		/** Appends (cell, light, weight at the cell centre) for every cell the light's range reaches; returns the new pair count. */
+		private int addPairs(int light, float lx, float ly, float lz, int level, int pairs) {
+			int x0 = Math.max(0, (int) Math.floor((lx - level) / CELL)), x1 = Math.min(GX - 1, (int) Math.floor((lx + level) / CELL));
+			int y0 = Math.max(0, (int) Math.floor((ly - level) / CELL)), y1 = Math.min(GY - 1, (int) Math.floor((ly + level) / CELL));
+			int z0 = Math.max(0, (int) Math.floor((lz - level) / CELL)), z1 = Math.min(GZ - 1, (int) Math.floor((lz + level) / CELL));
+			for (int cy = y0; cy <= y1; cy++)
+				for (int cz = z0; cz <= z1; cz++)
+					for (int cx = x0; cx <= x1; cx++) {
+						float dx = Math.max(0, Math.max(cx * CELL - lx, lx - (cx + 1) * CELL));
+						float dy = Math.max(0, Math.max(cy * CELL - ly, ly - (cy + 1) * CELL));
+						float dz = Math.max(0, Math.max(cz * CELL - lz, lz - (cz + 1) * CELL));
+						if (dx * dx + dy * dy + dz * dz >= level * level) continue;
+						if (pairs == pairCell.length) {
+							if (pairs == 4 * INDEX_MAX) return pairs; // shortcut: absurd scenes lose cells beyond this, warned in buildIndex
+							pairCell = java.util.Arrays.copyOf(pairCell, pairs * 2);
+							pairLight = java.util.Arrays.copyOf(pairLight, pairs * 2);
+							pairWeight = java.util.Arrays.copyOf(pairWeight, pairs * 2);
 						}
-						int before = pairs;
-						pairs = addPairs(allCount, lx, ly, lz, level, pairs);
-						if (pairs == before) continue; // reaches no cell of the grid
-						int i = allCount++;
-						float[] rgb = LightColors.rgb(type);
-						float power = LightColors.power(type, oreMult);
-						allPos[i * 4] = lx;
-						allPos[i * 4 + 1] = ly;
-						allPos[i * 4 + 2] = lz;
-						allPos[i * 4 + 3] = level + ((packed & 1 << 16) != 0 ? 0.45f : 0.15f);
-						allCol[i * 4] = rgb[0];
-						allCol[i * 4 + 1] = rgb[1];
-						allCol[i * 4 + 2] = rgb[2];
-						allCol[i * 4 + 3] = kind == LightColors.Kind.VANILLA ? power : -power;
-						allKey[i] = BlockPos.asLong(x, y, z);
-						keyIndex.put(allKey[i], i);
+						float cdx = (cx + 0.5f) * CELL - lx, cdy = (cy + 0.5f) * CELL - ly, cdz = (cz + 0.5f) * CELL - lz;
+						pairCell[pairs] = (cy * GZ + cz) * GX + cx;
+						pairLight[pairs] = light;
+						pairWeight[pairs] = level - (float) Math.sqrt(cdx * cdx + cdy * cdy + cdz * cdz);
+						pairs++;
+					}
+			return pairs;
+		}
+
+		/** Counting sort of the pairs by cell into cellStart / index; a cell over CELL_CAP keeps its strongest sources. */
+		private void buildIndex(int pairs) {
+			java.util.Arrays.fill(cellCount, 0);
+			for (int p = 0; p < pairs; p++) cellCount[pairCell[p]]++;
+			int total = 0;
+			for (int c = 0; c < CELLS; c++) {
+				cellStart[c] = total;
+				total += Math.min(cellCount[c], CELL_CAP);
+			}
+			boolean over = total > INDEX_MAX;
+			if (over) total = INDEX_MAX;
+			cellStart[CELLS] = total;
+			int[] fill = cellCount; // reused: write position per cell
+			int extra = 0;
+			for (int c = 0; c < CELLS; c++) {
+				extraAt[c] = cellCount[c] > CELL_CAP ? extra : -1;
+				if (cellCount[c] > CELL_CAP) extra += cellCount[c];
+				fill[c] = cellStart[c];
+			}
+			if (extra == 0) {
+				for (int p = 0; p < pairs; p++) {
+					int at = fill[pairCell[p]]++;
+					if (at < INDEX_MAX) index[at] = pairLight[p];
+				}
+			} else { // a lava sea or a glowstone wall: the overfull cells keep their CELL_CAP strongest at the cell centre, strongest first
+				if (sortKeys.length < extra) sortKeys = new long[Math.max(extra, sortKeys.length * 2)];
+				System.arraycopy(extraAt, 0, extraFill, 0, CELLS);
+				for (int p = 0; p < pairs; p++) {
+					int c = pairCell[p];
+					if (extraAt[c] >= 0) sortKeys[extraFill[c]++] = strongestFirst(pairWeight[p], p);
+					else {
+						int at = fill[c]++;
+						if (at < INDEX_MAX) index[at] = pairLight[p];
 					}
 				}
-		buildIndex(pairs);
-		if (fillBlocks(block, allPos, allCount) > 0 && !blockOverflowWarned) {
-			EmrionShadersClient.LOG.warn("RT block light: the block hash table needs more than {} probes, some light blocks are not found", BLOCK_PROBES);
-			blockOverflowWarned = true;
+				for (int c = 0; c < CELLS; c++) {
+					if (extraAt[c] < 0) continue;
+					java.util.Arrays.sort(sortKeys, extraAt[c], extraFill[c]);
+					for (int k = 0; k < CELL_CAP; k++) {
+						int at = fill[c]++;
+						if (at < INDEX_MAX) index[at] = pairLight[(int) sortKeys[extraAt[c] + k]];
+					}
+				}
+				if (!indexOverflowWarned) EmrionShadersClient.LOG.warn("RT block light: a light cell holds more than {} sources, the weakest are left out", CELL_CAP);
+				indexOverflowWarned = true;
+			}
+			if (over && !indexOverflowWarned) {
+				EmrionShadersClient.LOG.warn("RT block light: more than {} cell entries, some cells lose their sources", INDEX_MAX);
+				indexOverflowWarned = true;
+			}
+			// a cell cut by INDEX_MAX ends where the list ends
+			for (int c = 0; c <= CELLS; c++) cellStart[c] = Math.min(cellStart[c], INDEX_MAX);
+			indexCount = total;
 		}
-		for (int i = 0; i < prevCount; i++) remap[i] = keyIndex.get(prevKey[i]); // -1 = ~0: gone
+
+
+		/** Whether another light source touches the block at x y z (diagonals included): a froglight wall, a lava pool, a torch row. */
+		private boolean clustered(int x, int y, int z) {
+			for (int dx = -1; dx <= 1; dx++)
+				for (int dy = -1; dy <= 1; dy++)
+					for (int dz = -1; dz <= 1; dz++)
+						if ((dx | dy | dz) != 0 && positions.contains(BlockPos.asLong(x + dx, y + dy, z + dz))) return true;
+			return false;
+		}
+
+		/**
+		 * Capped grid: enters the light into every cell its range reaches, at most SLOTS - 1 per cell.
+		 * @param penalty levels the light counts less when a full cell picks what it keeps
+		 * @return false when the light reaches no cell of the grid
+		 */
+		private boolean addToCells(int index, float lx, float ly, float lz, int level, float penalty) {
+			boolean any = false;
+			int x0 = Math.max(0, (int) Math.floor((lx - level) / CELL)), x1 = Math.min(GX - 1, (int) Math.floor((lx + level) / CELL));
+			int y0 = Math.max(0, (int) Math.floor((ly - level) / CELL)), y1 = Math.min(GY - 1, (int) Math.floor((ly + level) / CELL));
+			int z0 = Math.max(0, (int) Math.floor((lz - level) / CELL)), z1 = Math.min(GZ - 1, (int) Math.floor((lz + level) / CELL));
+			for (int cy = y0; cy <= y1; cy++)
+				for (int cz = z0; cz <= z1; cz++)
+					for (int cx = x0; cx <= x1; cx++) {
+						// distance from the light to the cell box: beyond the level the light adds nothing there
+						float dx = Math.max(0, Math.max(cx * CELL - lx, lx - (cx + 1) * CELL));
+						float dy = Math.max(0, Math.max(cy * CELL - ly, ly - (cy + 1) * CELL));
+						float dz = Math.max(0, Math.max(cz * CELL - lz, lz - (cz + 1) * CELL));
+						if (dx * dx + dy * dy + dz * dz >= level * level) continue;
+						any = true;
+						float cdx = (cx + 0.5f) * CELL - lx, cdy = (cy + 0.5f) * CELL - ly, cdz = (cz + 0.5f) * CELL - lz;
+						float w = level - (float) Math.sqrt(cdx * cdx + cdy * cdy + cdz * cdz) - penalty;
+						int b = ((cy * GZ + cz) * GX + cx) * SLOTS;
+						int n = cells[b];
+						if (n < SLOTS - 1) {
+							cells[b + 1 + n] = index;
+							cellWeight[b + 1 + n] = w;
+							cells[b] = n + 1;
+							continue;
+						}
+						// Full cell: replace the weakest light if this one is stronger at the cell centre. Lights in a cluster count
+						// REDUNDANT levels less, so dense emitters keep a few representatives instead of crowding out the torches
+						// around them (a hard-edged dark band on the wall, RAYTRACING.md §27).
+						int weakest = 1;
+						for (int s = 2; s < SLOTS; s++) if (cellWeight[b + s] < cellWeight[b + weakest]) weakest = s;
+						if (w > cellWeight[b + weakest]) {
+							cells[b + weakest] = index;
+							cellWeight[b + weakest] = w;
+						}
+					}
+			return any;
+		}
 	}
 
 	/**
@@ -437,135 +636,10 @@ public final class RtLights {
 		return k == LightColors.Kind.VANILLA ? packed >> 12 & 15 : k == LightColors.Kind.DIODE ? DIODE_LEVEL : 0;
 	}
 
-	/** Appends (cell, light, weight at the cell centre) for every cell the light's range reaches; returns the new pair count. */
-	private int addPairs(int light, float lx, float ly, float lz, int level, int pairs) {
-		int x0 = Math.max(0, (int) Math.floor((lx - level) / CELL)), x1 = Math.min(GX - 1, (int) Math.floor((lx + level) / CELL));
-		int y0 = Math.max(0, (int) Math.floor((ly - level) / CELL)), y1 = Math.min(GY - 1, (int) Math.floor((ly + level) / CELL));
-		int z0 = Math.max(0, (int) Math.floor((lz - level) / CELL)), z1 = Math.min(GZ - 1, (int) Math.floor((lz + level) / CELL));
-		for (int cy = y0; cy <= y1; cy++)
-			for (int cz = z0; cz <= z1; cz++)
-				for (int cx = x0; cx <= x1; cx++) {
-					float dx = Math.max(0, Math.max(cx * CELL - lx, lx - (cx + 1) * CELL));
-					float dy = Math.max(0, Math.max(cy * CELL - ly, ly - (cy + 1) * CELL));
-					float dz = Math.max(0, Math.max(cz * CELL - lz, lz - (cz + 1) * CELL));
-					if (dx * dx + dy * dy + dz * dz >= level * level) continue;
-					if (pairs == pairCell.length) {
-						if (pairs == 4 * INDEX_MAX) return pairs; // shortcut: absurd scenes lose cells beyond this, warned in buildIndex
-						pairCell = java.util.Arrays.copyOf(pairCell, pairs * 2);
-						pairLight = java.util.Arrays.copyOf(pairLight, pairs * 2);
-						pairWeight = java.util.Arrays.copyOf(pairWeight, pairs * 2);
-					}
-					float cdx = (cx + 0.5f) * CELL - lx, cdy = (cy + 0.5f) * CELL - ly, cdz = (cz + 0.5f) * CELL - lz;
-					pairCell[pairs] = (cy * GZ + cz) * GX + cx;
-					pairLight[pairs] = light;
-					pairWeight[pairs] = level - (float) Math.sqrt(cdx * cdx + cdy * cdy + cdz * cdz);
-					pairs++;
-				}
-		return pairs;
-	}
-
-	/** Counting sort of the pairs by cell into cellStart / index; a cell over CELL_CAP keeps its strongest sources. */
-	private void buildIndex(int pairs) {
-		java.util.Arrays.fill(cellCount, 0);
-		for (int p = 0; p < pairs; p++) cellCount[pairCell[p]]++;
-		int total = 0;
-		for (int c = 0; c < CELLS; c++) {
-			cellStart[c] = total;
-			total += Math.min(cellCount[c], CELL_CAP);
-		}
-		boolean over = total > INDEX_MAX;
-		if (over) total = INDEX_MAX;
-		cellStart[CELLS] = total;
-		int[] fill = cellCount; // reused: write position per cell
-		int[] full = null;
-		for (int c = 0; c < CELLS; c++) {
-			if (cellCount[c] > CELL_CAP) (full == null ? full = new int[CELLS] : full)[c] = cellCount[c];
-			fill[c] = cellStart[c];
-		}
-		if (full == null) {
-			for (int p = 0; p < pairs; p++) {
-				int at = fill[pairCell[p]]++;
-				if (at < INDEX_MAX) index[at] = pairLight[p];
-			}
-		} else { // rare: gather the overfull cells' pairs, keep the CELL_CAP strongest at the cell centre
-			java.util.Map<Integer, java.util.List<Integer>> extra = new java.util.HashMap<>();
-			for (int p = 0; p < pairs; p++) {
-				int c = pairCell[p];
-				if (full[c] > 0) extra.computeIfAbsent(c, k -> new java.util.ArrayList<>()).add(p);
-				else {
-					int at = fill[c]++;
-					if (at < INDEX_MAX) index[at] = pairLight[p];
-				}
-			}
-			for (var e : extra.entrySet()) {
-				var list = e.getValue();
-				list.sort((a, b) -> Float.compare(pairWeight[b], pairWeight[a]));
-				int c = e.getKey();
-				for (int k = 0; k < CELL_CAP; k++) {
-					int at = fill[c]++;
-					if (at < INDEX_MAX) index[at] = pairLight[list.get(k)];
-				}
-			}
-			if (!indexOverflowWarned) EmrionShadersClient.LOG.warn("RT block light: a light cell holds more than {} sources, the weakest are left out", CELL_CAP);
-			indexOverflowWarned = true;
-		}
-		if (over && !indexOverflowWarned) {
-			EmrionShadersClient.LOG.warn("RT block light: more than {} cell entries, some cells lose their sources", INDEX_MAX);
-			indexOverflowWarned = true;
-		}
-		// a cell cut by INDEX_MAX ends where the list ends
-		for (int c = 0; c <= CELLS; c++) cellStart[c] = Math.min(cellStart[c], INDEX_MAX);
-		indexCount = total;
-	}
-
-	/** Whether another light source touches the block at x y z (diagonals included): a froglight wall, a lava pool, a torch row. */
-	private boolean clustered(int x, int y, int z) {
-		for (int dx = -1; dx <= 1; dx++)
-			for (int dy = -1; dy <= 1; dy++)
-				for (int dz = -1; dz <= 1; dz++)
-					if ((dx | dy | dz) != 0 && positions.contains(BlockPos.asLong(x + dx, y + dy, z + dz))) return true;
-		return false;
-	}
-
-	/**
-	 * Capped grid: enters the light into every cell its range reaches, at most SLOTS - 1 per cell.
-	 * @param penalty levels the light counts less when a full cell picks what it keeps
-	 * @return false when the light reaches no cell of the grid
-	 */
-	private boolean addToCells(int index, float lx, float ly, float lz, int level, float penalty) {
-		boolean any = false;
-		int x0 = Math.max(0, (int) Math.floor((lx - level) / CELL)), x1 = Math.min(GX - 1, (int) Math.floor((lx + level) / CELL));
-		int y0 = Math.max(0, (int) Math.floor((ly - level) / CELL)), y1 = Math.min(GY - 1, (int) Math.floor((ly + level) / CELL));
-		int z0 = Math.max(0, (int) Math.floor((lz - level) / CELL)), z1 = Math.min(GZ - 1, (int) Math.floor((lz + level) / CELL));
-		for (int cy = y0; cy <= y1; cy++)
-			for (int cz = z0; cz <= z1; cz++)
-				for (int cx = x0; cx <= x1; cx++) {
-					// distance from the light to the cell box: beyond the level the light adds nothing there
-					float dx = Math.max(0, Math.max(cx * CELL - lx, lx - (cx + 1) * CELL));
-					float dy = Math.max(0, Math.max(cy * CELL - ly, ly - (cy + 1) * CELL));
-					float dz = Math.max(0, Math.max(cz * CELL - lz, lz - (cz + 1) * CELL));
-					if (dx * dx + dy * dy + dz * dz >= level * level) continue;
-					any = true;
-					float cdx = (cx + 0.5f) * CELL - lx, cdy = (cy + 0.5f) * CELL - ly, cdz = (cz + 0.5f) * CELL - lz;
-					float w = level - (float) Math.sqrt(cdx * cdx + cdy * cdy + cdz * cdz) - penalty;
-					int b = ((cy * GZ + cz) * GX + cx) * SLOTS;
-					int n = cells[b];
-					if (n < SLOTS - 1) {
-						cells[b + 1 + n] = index;
-						cellWeight[b + 1 + n] = w;
-						cells[b] = n + 1;
-						continue;
-					}
-					// Full cell: replace the weakest light if this one is stronger at the cell centre. Lights in a cluster count
-					// REDUNDANT levels less, so dense emitters keep a few representatives instead of crowding out the torches
-					// around them (a hard-edged dark band on the wall, RAYTRACING.md §27).
-					int weakest = 1;
-					for (int s = 2; s < SLOTS; s++) if (cellWeight[b + s] < cellWeight[b + weakest]) weakest = s;
-					if (w > cellWeight[b + weakest]) {
-						cells[b + weakest] = index;
-						cellWeight[b + weakest] = w;
-					}
-				}
-		return any;
+	/** Sort key of pair {@code p} with weight {@code w}: ascending keys = descending weight (Float.compare order), ties in pair order. */
+	static long strongestFirst(float w, int p) {
+		int bits = Float.floatToIntBits(w);
+		bits ^= (bits >> 31) & 0x7fffffff; // ascending as ints = ascending as floats
+		return (long) ~bits << 32 | p;
 	}
 }

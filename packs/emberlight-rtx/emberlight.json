@@ -1,0 +1,280 @@
+// Emberlight RTX: a deliberately over-the-top "path-traced" look for Emberlight's native format (docs/NATIVE_FORMAT.md).
+// Frame: opaque gbuffer -> ray-traced sun/moon shadows + reflections (full res) -> diffuse GI + emissive block lights
+// (half res) -> temporal/spatial denoise -> deferred lighting -> translucent gbuffer -> volumetrics -> water/glass
+// resolve (ray-traced reflections, refraction) -> bloom -> auto exposure + tonemap -> final.
+{
+  "format": 1,
+  "id": "emberlight-rtx",
+  "name": "Emberlight RTX",
+  "version": "0.1.0-alpha",
+  "authors": ["Emberlight"],
+  "description": "Ray-traced shadows, GI, reflections, emissive area lights and god rays. Subtle it is not.",
+  "license": "MIT",
+  "requires": ["ray_query"],
+
+  "settings": { "clouds": "off", "sun": false, "moon": false, "stars": false, "separateAo": true,
+                "rayTracedEntities": true, "underwaterOverlay": false, "vignette": false, "rayReconstruction": true },
+
+  // At most 16 screen images (all used); geometry passes can sample the first 12 (they sample none). The tonemapped frame
+// goes back into "lit" (post reads and writes it), which "final" and the upscaler take.
+  "images": {
+    "gAlbedo":   { "format": "RGBA8" },                           // albedo (sRGB), a = vertex AO
+    "gNormal":   { "format": "RGBA16" },                          // xy world normal (octahedral), z block light, w sky light
+    "gMat":      { "format": "RGBA8" },                           // LabPBR-style: r smoothness, g f0/metal id, b emission, a material kind/255
+    "tAlbedo":   { "format": "RGBA8" },                           // translucent surface colour (sRGB) + alpha (0 = none)
+    "tNormal":   { "format": "RGBA16" },                          // xy normal, z kind/16, w sky light
+    "fwd":       { "format": "RGBA16F" },                         // particles, weather, hand: premultiplied, composited in resolve
+    "sunRaw":    { "format": "RGBA16F", "clear": false },         // this frame's sun/moon visibility (rgb = tint through glass)
+    "reflRaw":   { "format": "RGBA16F", "clear": false },         // this frame's reflection radiance, a = hit distance
+    "giRaw":     { "format": "RGBA16F", "scale": 0.5, "clear": false }, // half-res diffuse GI + block lights, a = valid
+    "giAcc":     { "format": "RGBA16F", "history": true },        // accumulated GI, a = history length
+    "shadowAcc": { "format": "RGBA16F", "history": true },        // accumulated sun visibility, a = view distance (for reprojection)
+    "reflAcc":   { "format": "RGBA16F", "history": true },        // accumulated reflections, a = history length
+    "lit":       { "format": "RGBA16F", "clear": false },         // HDR scene colour
+    "vol":       { "format": "RGBA16F", "scale": 0.5, "clear": [0, 0, 0, 1] }, // volumetric in-scatter rgb, a = transmittance
+    "bloom":     { "format": "RGBA16F", "scale": 0.5, "mipmaps": true },
+    "giFilt":    { "format": "RGBA16F", "clear": false },         // spatially filtered GI (a-trous)
+    // atmosphere LUTs (lib/atmosphere.glsl), rebuilt every frame by the sky_* passes
+    "skyTrans":  { "format": "RGBA16F", "size": [256, 64], "storage": true, "clear": false },  // transmittance to space
+    "skyMs":     { "format": "RGBA16F", "size": [32, 32], "storage": true, "clear": false },   // multiple scattering
+    "skyView":   { "format": "RGBA16F", "size": [256, 256], "storage": true, "clear": false }  // sky radiance around the camera
+  },
+
+  "buffers": { "exposureBuf": { "bytes": 16 },
+               "volHist": { "bytesPerPixel": 9 },  // two half-res frames of volumetrics history (uvec4 each)
+               "restirBuf": { "bytesPerPixel": 17 } }, // two half-res slots of ReSTIR reservoirs (2 x uvec4 each), + rounding
+
+  "uniforms": {
+    "daylight":  { "type": "float", "expr": "smooth(clamp(sunPosition.y / 40.0 + 0.3, 0.0, 1.0), 2.0, 2.0)" },
+    "caveFactor": { "type": "float", "expr": "smooth(1.0 - eyeBrightnessSmooth.y / 240.0, 3.0, 3.0)" },
+    "rainSmooth": { "type": "float", "expr": "smooth(rainStrength, 4.0, 4.0)" },
+    // biome climate for the air medium (lib/fog.glsl): swamps/jungles, deserts/badlands/savannas, snowy biomes
+    "biomeHumid": { "type": "float", "expr": "smooth(clamp((rainfall - 0.82) / 0.08, 0.0, 1.0) * if(temperature >= 0.75, 1.0, 0.0), 6.0, 6.0)" },
+    "biomeDry":   { "type": "float", "expr": "smooth(clamp((temperature - 1.2) / 0.6, 0.0, 1.0) * clamp((0.4 - rainfall) / 0.3, 0.0, 1.0), 6.0, 6.0)" },
+    "biomeCold":  { "type": "float", "expr": "smooth(clamp((0.3 - temperature) / 0.25, 0.0, 1.0), 6.0, 6.0)" },
+    "humidity":   { "type": "float", "expr": "smooth(rainfall, 6.0, 6.0)" }
+  },
+
+  "passes": [
+    // ---- atmosphere LUTs (overworld only) ----
+    { "name": "sky_trans", "kind": "compute", "phase": "begin", "compute": "shaders/sky_lut.comp.glsl", "defines": { "LUT": "0" },
+      "workgroups": { "size": [8, 8, 1], "count": [32, 8, 1] }, "writes": ["skyTrans"] },
+    { "name": "sky_ms", "kind": "compute", "phase": "begin", "compute": "shaders/sky_lut.comp.glsl", "defines": { "LUT": "1" },
+      "workgroups": { "size": [8, 8, 1], "count": [4, 4, 1] }, "writes": ["skyMs"] },
+    { "name": "sky_view", "kind": "compute", "phase": "begin", "compute": "shaders/sky_lut.comp.glsl", "defines": { "LUT": "2" },
+      "workgroups": { "size": [8, 8, 1], "count": [32, 32, 1] }, "writes": ["skyView", "exposureBuf"] },
+
+    // ---- opaque gbuffer ----
+    { "name": "sky", "kind": "geometry", "classes": ["sky", "sky_textured", "clouds"],
+      "vertex": "shaders/discard.vert.glsl", "fragment": "shaders/discard.frag.glsl", "writes": ["gAlbedo"] },
+    { "name": "gbuffer", "kind": "geometry",
+      "classes": ["terrain_solid", "terrain_cutout", "entities", "block_entities", "textured_lit", "beacon",
+                  "emissive_eyes", "entities_glowing", "lightning"],
+      "vertex": "shaders/gbuffer.vert.glsl", "fragment": "shaders/gbuffer.frag.glsl",
+      "writes": ["gAlbedo", "gNormal", "gMat"] },
+    { "name": "basic", "kind": "geometry", "classes": ["basic"],
+      "vertex": "shaders/basic.vert.glsl", "fragment": "shaders/basic.frag.glsl",
+      "writes": ["gAlbedo", "gNormal", "gMat"] },
+
+    // ---- ray tracing + denoise + lighting ----
+    { "name": "rt_direct", "kind": "compute", "phase": "deferred", "raytracing": true,
+      "compute": "shaders/rt_direct.comp.glsl", "workgroups": { "size": [8, 8, 1], "scale": [1, 1] },
+      "writes": ["sunRaw", "reflRaw"] },
+    // ReSTIR DI for the block lights (lib/restir.glsl): candidates + temporal reuse here, spatial reuse and shading in rt_gi
+    { "name": "restir", "kind": "compute", "phase": "deferred", "raytracing": true,
+      "compute": "shaders/restir.comp.glsl", "workgroups": { "size": [8, 8, 1], "scale": [0.5, 0.5] },
+      "writes": ["restirBuf"] },
+    { "name": "rt_gi", "kind": "compute", "phase": "deferred", "raytracing": true,
+      "compute": "shaders/rt_gi.comp.glsl", "workgroups": { "size": [8, 8, 1], "scale": [0.5, 0.5] },
+      "writes": ["giRaw", "restirBuf"] },
+    { "name": "denoise", "kind": "fullscreen", "phase": "deferred",
+      "fragment": "shaders/denoise.frag.glsl", "writes": ["giAcc", "shadowAcc", "reflAcc"] },
+    { "name": "atrous1", "kind": "fullscreen", "phase": "deferred", "defines": { "STEP": "1" }, "enabled": "!EL_RR_ACTIVE",
+      "fragment": "shaders/atrous.frag.glsl", "writes": ["giFilt"] },
+    { "name": "atrous2", "kind": "fullscreen", "phase": "deferred", "defines": { "STEP": "2" }, "enabled": "!EL_RR_ACTIVE",
+      "fragment": "shaders/atrous.frag.glsl", "writes": ["giFilt"] },
+    { "name": "atrous3", "kind": "fullscreen", "phase": "deferred", "defines": { "STEP": "4" }, "enabled": "!EL_RR_ACTIVE",
+      "fragment": "shaders/atrous.frag.glsl", "writes": ["giFilt"] },
+    { "name": "lighting", "kind": "fullscreen", "phase": "deferred",
+      "fragment": "shaders/lighting.frag.glsl", "writes": ["lit"] },
+
+    // ---- translucents ----
+    { "name": "translucent", "kind": "geometry", "classes": ["terrain_translucent", "block_entities_translucent"],
+      "vertex": "shaders/translucent.vert.glsl", "fragment": "shaders/translucent.frag.glsl",
+      "writes": ["tAlbedo", "tNormal"], "blend": "off", "alphaCutoff": 0.01 },
+    { "name": "forward", "kind": "geometry",
+      "classes": ["entities_translucent", "particles", "particles_translucent", "weather", "hand", "hand_translucent", "glint"],
+      "vertex": "shaders/forward.vert.glsl", "fragment": "shaders/forward.frag.glsl", "writes": ["fwd"],
+      "blend": { "src": "src_alpha", "dst": "one_minus_src_alpha", "srcAlpha": "one", "dstAlpha": "one_minus_src_alpha" } },
+
+    // ---- composite ----
+    { "name": "volumetrics", "kind": "compute", "phase": "composite", "raytracing": true, "enabled": "VOLUMETRICS",
+      "compute": "shaders/volumetrics.comp.glsl", "workgroups": { "size": [8, 8, 1], "scale": [0.5, 0.5] },
+      "writes": ["vol", "volHist"] },
+    { "name": "resolve", "kind": "fullscreen", "phase": "composite", "raytracing": true,
+      "fragment": "shaders/resolve.frag.glsl", "writes": ["lit"] },
+    { "name": "bloom_prep", "kind": "fullscreen", "phase": "composite",
+      "fragment": "shaders/bloom.frag.glsl", "writes": ["bloom"] },
+    { "name": "exposure", "kind": "compute", "phase": "composite", "enabled": "AUTO_EXPOSURE",
+      "compute": "shaders/exposure.comp.glsl", "workgroups": { "size": [1, 1, 1], "count": [1, 1, 1] },
+      "writes": ["exposureBuf"] },
+    { "name": "post", "kind": "fullscreen", "phase": "composite", "mipmaps": ["bloom"],
+      "fragment": "shaders/post.frag.glsl", "writes": ["lit"] },
+    // DLSS Ray Reconstruction's guides; only while RR runs, which then also replaces atrous and most of denoise
+    { "name": "rr_guides", "kind": "compute", "phase": "composite", "compute": "shaders/rr_guides.comp.glsl",
+      "writes": ["el_rrDiffuse", "el_rrSpecular", "el_rrNormal"] },
+
+    { "name": "output", "kind": "final", "fragment": "shaders/final.frag.glsl" }
+  ],
+
+  "options": [
+    { "name": "RTX_INTENSITY", "type": "float", "default": 1.0, "min": 0.0, "max": 3.0, "step": 0.25, "slider": true,
+      "label": "RTX intensity", "comment": "One slider for 'more': bloom, glow, gloss, god rays, saturation. 1 = the intended look, 3 = so much." },
+    { "name": "GI_BOUNCES", "type": "int", "default": 1, "values": [0, 1, 2], "label": "GI bounces",
+      "comment": "Ray-traced diffuse bounces. 0 = sky and lightmap ambient only." },
+    { "name": "GI_FRAMES", "type": "int", "default": 24, "values": [8, 16, 24, 32, 48, 64], "label": "GI history frames",
+      "comment": "More = smoother but slower to react." },
+    { "name": "LIGHT_SAMPLES", "type": "int", "default": 16, "values": [4, 8, 16, 32], "label": "Light candidates",
+      "comment": "Block lights tested per pixel each frame (ReSTIR: the best one is shared with neighbouring pixels and later frames). More = cleaner light in rooms full of lamps." },
+    { "name": "REFLECTIONS", "type": "enum", "default": "high", "values": ["off", "low", "high", "insane"],
+      "label": "Reflections", "comment": "Which surfaces get ray-traced reflections: low = only mirror-like, insane = nearly everything." },
+    { "name": "MIRROR_BOUNCES", "type": "int", "default": 3, "values": [1, 2, 3, 4], "label": "Mirror bounces",
+      "comment": "Reflections of perfect mirrors seen in a mirror (two facing mirrors: a corridor of images). 1 = a mirror shows other mirrors as plain colour." },
+    { "name": "SHADOW_SOFTNESS", "type": "float", "default": 1.0, "min": 0.0, "max": 4.0, "step": 0.25, "slider": true,
+      "label": "Shadow softness", "comment": "Size of the sun disc the shadow rays sample." },
+    { "name": "EMISSIVE_STRENGTH", "type": "float", "default": 1.5, "min": 0.0, "max": 5.0, "step": 0.25, "slider": true,
+      "label": "Emissive strength" },
+    { "name": "BLOCKLIGHT_STRENGTH", "type": "float", "default": 1.0, "min": 0.0, "max": 4.0, "step": 0.25, "slider": true,
+      "label": "Block light strength" },
+    { "name": "FOG_DENSITY", "type": "float", "default": 1.0, "min": 0.0, "max": 4.0, "step": 0.25, "slider": true,
+      "label": "Fog density" },
+    { "name": "VOLUMETRICS", "type": "bool", "default": true, "label": "Volumetric light" },
+    { "name": "ANISOTROPY", "type": "float", "default": 0.75, "min": 0.0, "max": 0.95, "step": 0.05, "slider": true, "label": "Fog anisotropy",
+      "comment": "Henyey-Greenstein g of the air: how strongly fog scatters light forward (bright halo looking toward the sun). 0 = the same in every direction." },
+    { "name": "AERIAL_PERSPECTIVE", "type": "float", "default": 1.0, "min": 0.0, "max": 3.0, "step": 0.25, "slider": true, "label": "Aerial perspective",
+      "comment": "Atmospheric haze on distant terrain, from the same atmosphere as the sky. 0 = off." },
+    { "name": "UNDERWATER_RAYS", "type": "bool", "default": true, "label": "Underwater sun shafts",
+      "comment": "Ray-traced light shafts through the waves when under water (needs volumetric light)." },
+    { "name": "SKY_QUALITY", "type": "int", "default": 2, "values": [0, 1, 2], "label": "Sky quality",
+      "comment": "Ray-march steps of the atmosphere (sky, sunsets, multiple scattering): 0 low, 1 medium, 2 high." },
+    { "name": "SUN_INTENSITY", "type": "float", "default": 1.0, "min": 0.25, "max": 3.0, "step": 0.25, "slider": true, "label": "Sun brightness" },
+    { "name": "MOON_INTENSITY", "type": "float", "default": 1.0, "min": 0.25, "max": 4.0, "step": 0.25, "slider": true, "label": "Moon brightness",
+      "comment": "Moonlight also follows the moon phase: full moon brightest, new moon only a faint glow." },
+    { "name": "GOLDEN_HOUR", "type": "float", "default": 1.0, "min": 0.25, "max": 2.0, "step": 0.25, "slider": true, "label": "Golden hour",
+      "comment": "Colour of the low sun: 1 = the atmosphere's own reddening, more = deeper orange, less = whiter." },
+    { "name": "BLUE_HOUR", "type": "float", "default": 1.0, "min": 0.0, "max": 3.0, "step": 0.25, "slider": true, "label": "Blue hour",
+      "comment": "Ozone in the atmosphere, which keeps the twilight sky blue after sunset. 0 = none (orange-grey dusk)." },
+    { "name": "VOL_STEPS", "type": "int", "default": 12, "values": [4, 6, 8, 12, 16, 24, 32], "label": "Volumetric steps" },
+    { "name": "NEON_GLOW", "type": "float", "default": 2.0, "min": 0.0, "max": 4.0, "step": 0.25, "slider": true,
+      "label": "Emissive glow", "comment": "Extra bloom halo around glowing surfaces (lamps, Emberlight PBR's neon terracotta)." },
+    { "name": "BLOOM", "type": "float", "default": 1.0, "min": 0.0, "max": 3.0, "step": 0.25, "slider": true, "label": "Bloom" },
+    { "name": "EXPOSURE", "type": "float", "default": 1.0, "min": 0.25, "max": 4.0, "step": 0.25, "slider": true, "label": "Exposure" },
+    { "name": "AUTO_EXPOSURE", "type": "bool", "default": true, "label": "Eye adaptation" },
+    { "name": "WATER_WAVES", "type": "float", "default": 1.0, "min": 0.0, "max": 3.0, "step": 0.25, "slider": true, "label": "Water waves" },
+    { "name": "CAUSTICS", "type": "float", "default": 1.0, "min": 0.0, "max": 3.0, "step": 0.25, "slider": true, "label": "Water caustics",
+      "comment": "Sunlight focused by the waves: dancing light on the ground under water and on walls beside it (reflected, strongest at sunset). 0 = off, above 1 = brighter lines." },
+    { "name": "SSS", "type": "float", "default": 1.0, "min": 0.0, "max": 2.0, "step": 0.25, "slider": true, "label": "Subsurface scattering",
+      "comment": "Light through leaves and grass when the sun is behind them, soft light on snow, slime and honey (LabPBR SSS of the resource pack, built-in for plants). 0 = off." },
+    { "name": "POM", "type": "enum", "default": "high", "values": ["off", "low", "high", "ultra"], "label": "Parallax depth",
+      "comment": "Parallax occlusion mapping from the resource pack's height maps (Emberlight PBR): bricks, cobblestone and planks get real depth up close. Fades out with distance (16 / 32 / 48 blocks)." },
+    { "name": "REFRACTION", "type": "enum", "default": "high", "values": ["low", "high"], "label": "Glass and ice",
+      "comment": "high: light refracts through glass blocks, ice, slime and honey (traced through the block, tinted by its thickness, total internal reflection) and scatters inside ice, slime and honey. low: thin tinted sheets." },
+    { "name": "PUDDLES", "type": "bool", "default": true, "label": "Rain puddles" },
+    { "name": "CLOUDS", "type": "bool", "default": true, "label": "Clouds" },
+    { "name": "DEBUG_VIEW", "type": "int", "default": 0, "values": [0, 1, 2, 3, 4, 5], "label": "Debug view",
+      "comment": "0 off, 1 filtered GI, 2 accumulated GI (unfiltered), 3 sun visibility, 4 reflections, 5 lighting without albedo. Not on a page." },
+    { "name": "PBR_SOURCE", "type": "enum", "default": "auto", "values": ["auto", "table"], "label": "Materials",
+      "comment": "auto: LabPBR maps of a resource pack (Emberlight PBR) when present, else the built-in table. table: always the built-in table." }
+  ],
+  "pages": [
+    { "name": "main", "columns": 2,
+      "items": ["<profile>", "RTX_INTENSITY", "GI_BOUNCES", "REFLECTIONS", "EMISSIVE_STRENGTH", "FOG_DENSITY",
+                "<empty>", "<empty>", "[lighting]", "[atmosphere]", "[image]", "[quality]"] },
+    { "name": "lighting", "columns": 2,
+      "items": ["GI_BOUNCES", "BLOCKLIGHT_STRENGTH", "EMISSIVE_STRENGTH", "SHADOW_SOFTNESS", "REFLECTIONS", "MIRROR_BOUNCES", "SSS", "PBR_SOURCE", "POM", "REFRACTION"] },
+    { "name": "atmosphere", "columns": 2,
+      "items": ["FOG_DENSITY", "VOLUMETRICS", "ANISOTROPY", "AERIAL_PERSPECTIVE", "UNDERWATER_RAYS", "CLOUDS",
+                "SUN_INTENSITY", "MOON_INTENSITY", "GOLDEN_HOUR", "BLUE_HOUR", "WATER_WAVES", "CAUSTICS", "PUDDLES"] },
+    { "name": "image", "columns": 2, "items": ["RTX_INTENSITY", "BLOOM", "NEON_GLOW", "EXPOSURE", "AUTO_EXPOSURE"] },
+    { "name": "quality", "columns": 2, "items": ["GI_FRAMES", "LIGHT_SAMPLES", "VOL_STEPS", "SKY_QUALITY"] }
+  ],
+  "profiles": {
+    "low":    { "POM": "off", "REFRACTION": "low", "GI_BOUNCES": 0, "REFLECTIONS": "low", "MIRROR_BOUNCES": 1, "VOLUMETRICS": false, "LIGHT_SAMPLES": 4, "GI_FRAMES": 32, "SKY_QUALITY": 0 },
+    "medium": { "POM": "low", "REFRACTION": "low", "GI_BOUNCES": 1, "REFLECTIONS": "low", "MIRROR_BOUNCES": 2, "VOLUMETRICS": true, "VOL_STEPS": 6, "LIGHT_SAMPLES": 4, "SKY_QUALITY": 1 },
+    "high":   { "POM": "high", "REFRACTION": "high", "GI_BOUNCES": 1, "REFLECTIONS": "high", "MIRROR_BOUNCES": 3, "VOLUMETRICS": true, "VOL_STEPS": 12, "LIGHT_SAMPLES": 16, "SKY_QUALITY": 2 },
+    "ultra":  { "inherit": "high", "POM": "ultra", "GI_BOUNCES": 2, "MIRROR_BOUNCES": 4, "VOL_STEPS": 16, "LIGHT_SAMPLES": 32 },
+    "insane": { "inherit": "ultra", "REFLECTIONS": "insane", "VOL_STEPS": 24, "LIGHT_SAMPLES": 32, "RTX_INTENSITY": 2.0 }
+  },
+
+  // Built-in material table (used without a LabPBR resource pack). Ids are read by lib/materials.glsl.
+  "materials": {
+    "blocks": {
+      "1":  ["minecraft:water", "minecraft:bubble_column"],
+      "2":  ["minecraft:white_stained_glass", "minecraft:orange_stained_glass", "minecraft:magenta_stained_glass", "minecraft:light_blue_stained_glass", "minecraft:yellow_stained_glass", "minecraft:lime_stained_glass", "minecraft:pink_stained_glass", "minecraft:gray_stained_glass", "minecraft:light_gray_stained_glass", "minecraft:cyan_stained_glass", "minecraft:purple_stained_glass", "minecraft:blue_stained_glass", "minecraft:brown_stained_glass", "minecraft:green_stained_glass", "minecraft:red_stained_glass", "minecraft:black_stained_glass",
+              "minecraft:glass", "minecraft:tinted_glass"],
+      "7":  ["minecraft:white_stained_glass_pane", "minecraft:orange_stained_glass_pane", "minecraft:magenta_stained_glass_pane", "minecraft:light_blue_stained_glass_pane", "minecraft:yellow_stained_glass_pane", "minecraft:lime_stained_glass_pane", "minecraft:pink_stained_glass_pane", "minecraft:gray_stained_glass_pane", "minecraft:light_gray_stained_glass_pane", "minecraft:cyan_stained_glass_pane", "minecraft:purple_stained_glass_pane", "minecraft:blue_stained_glass_pane", "minecraft:brown_stained_glass_pane", "minecraft:green_stained_glass_pane", "minecraft:red_stained_glass_pane", "minecraft:black_stained_glass_pane", "minecraft:glass_pane"],
+      "3":  ["minecraft:ice", "minecraft:packed_ice", "minecraft:blue_ice", "minecraft:frosted_ice"],
+      "4":  ["minecraft:slime_block"],
+      "8":  ["minecraft:honey_block"],
+      "11": ["minecraft:snow_block", "minecraft:snow", "minecraft:powder_snow"],
+      "5":  ["minecraft:nether_portal"],
+      "10": ["#minecraft:leaves", "minecraft:vine", "minecraft:short_grass", "minecraft:tall_grass", "minecraft:fern", "minecraft:large_fern",
+             "minecraft:sugar_cane", "minecraft:kelp", "minecraft:kelp_plant", "minecraft:seagrass", "minecraft:tall_seagrass", "#minecraft:flowers", "#minecraft:saplings"],
+      "20": ["minecraft:polished_andesite", "minecraft:polished_diorite", "minecraft:polished_granite", "minecraft:polished_deepslate",
+             "minecraft:polished_blackstone", "minecraft:polished_tuff", "minecraft:smooth_stone", "minecraft:smooth_stone_slab", "minecraft:polished_basalt",
+             "minecraft:polished_andesite_slab", "minecraft:polished_diorite_slab", "minecraft:polished_granite_slab", "minecraft:polished_deepslate_slab",
+             "minecraft:polished_andesite_stairs", "minecraft:polished_diorite_stairs", "minecraft:polished_granite_stairs", "minecraft:polished_deepslate_stairs",
+             "minecraft:polished_blackstone_slab", "minecraft:polished_blackstone_stairs", "minecraft:calcite", "minecraft:smooth_basalt"],
+      "21": ["minecraft:quartz_block", "minecraft:quartz_pillar", "minecraft:smooth_quartz", "minecraft:chiseled_quartz_block", "minecraft:quartz_bricks",
+             "minecraft:quartz_slab", "minecraft:quartz_stairs", "minecraft:smooth_quartz_slab", "minecraft:smooth_quartz_stairs"],
+      "22": ["minecraft:white_concrete", "minecraft:orange_concrete", "minecraft:magenta_concrete", "minecraft:light_blue_concrete", "minecraft:yellow_concrete", "minecraft:lime_concrete", "minecraft:pink_concrete", "minecraft:gray_concrete", "minecraft:light_gray_concrete", "minecraft:cyan_concrete", "minecraft:purple_concrete", "minecraft:blue_concrete", "minecraft:brown_concrete", "minecraft:green_concrete", "minecraft:red_concrete", "minecraft:black_concrete"],
+      "23": ["minecraft:white_glazed_terracotta", "minecraft:orange_glazed_terracotta", "minecraft:magenta_glazed_terracotta", "minecraft:light_blue_glazed_terracotta", "minecraft:yellow_glazed_terracotta", "minecraft:lime_glazed_terracotta", "minecraft:pink_glazed_terracotta", "minecraft:gray_glazed_terracotta", "minecraft:light_gray_glazed_terracotta", "minecraft:cyan_glazed_terracotta", "minecraft:purple_glazed_terracotta", "minecraft:blue_glazed_terracotta", "minecraft:brown_glazed_terracotta", "minecraft:green_glazed_terracotta", "minecraft:red_glazed_terracotta", "minecraft:black_glazed_terracotta"],
+      "24": ["minecraft:obsidian", "minecraft:crying_obsidian"],
+      "25": ["minecraft:diamond_block", "minecraft:emerald_block", "minecraft:lapis_block", "minecraft:amethyst_block", "minecraft:prismarine", "minecraft:prismarine_bricks", "minecraft:dark_prismarine"],
+      "26": ["minecraft:packed_mud", "minecraft:mud_bricks", "minecraft:bricks", "minecraft:stone_bricks", "minecraft:deepslate_tiles", "minecraft:deepslate_bricks",
+             "minecraft:polished_blackstone_bricks", "minecraft:nether_bricks", "minecraft:end_stone_bricks", "minecraft:tuff_bricks"],
+      "40": ["minecraft:iron_block", "minecraft:iron_bars", "minecraft:iron_door", "minecraft:iron_trapdoor", "minecraft:chain", "minecraft:anvil", "minecraft:chipped_anvil",
+             "minecraft:damaged_anvil", "minecraft:cauldron", "minecraft:water_cauldron", "minecraft:lava_cauldron", "minecraft:hopper", "minecraft:heavy_weighted_pressure_plate", "minecraft:rail",
+             "minecraft:powered_rail", "minecraft:detector_rail", "minecraft:activator_rail", "minecraft:lightning_rod"],
+      "41": ["minecraft:gold_block", "minecraft:light_weighted_pressure_plate", "minecraft:bell", "minecraft:raw_gold_block"],
+      "42": ["minecraft:copper_block", "minecraft:cut_copper", "minecraft:cut_copper_slab", "minecraft:cut_copper_stairs", "minecraft:chiseled_copper", "minecraft:copper_grate",
+             "minecraft:waxed_copper_block", "minecraft:waxed_cut_copper", "minecraft:waxed_cut_copper_slab", "minecraft:waxed_cut_copper_stairs", "minecraft:waxed_chiseled_copper",
+             "minecraft:waxed_copper_grate", "minecraft:copper_door", "minecraft:copper_trapdoor", "minecraft:waxed_copper_door", "minecraft:waxed_copper_trapdoor"],
+      "43": ["minecraft:netherite_block"],
+      "60": ["minecraft:torch", "minecraft:wall_torch", "minecraft:lantern", "minecraft:campfire", "minecraft:fire", "minecraft:jack_o_lantern",
+             "#minecraft:candles", "minecraft:furnace:lit=true", "minecraft:blast_furnace:lit=true", "minecraft:smoker:lit=true", "minecraft:copper_torch", "minecraft:copper_wall_torch", "minecraft:copper_lantern"],
+      "61": ["minecraft:soul_torch", "minecraft:soul_wall_torch", "minecraft:soul_lantern", "minecraft:soul_campfire", "minecraft:soul_fire"],
+      "62": ["minecraft:glowstone", "minecraft:shroomlight", "minecraft:redstone_lamp:lit=true", "minecraft:ochre_froglight", "minecraft:copper_bulb:lit=true",
+             "minecraft:waxed_copper_bulb:lit=true"],
+      "63": ["minecraft:sea_lantern", "minecraft:end_rod", "minecraft:beacon", "minecraft:conduit", "minecraft:verdant_froglight", "minecraft:pearlescent_froglight"],
+      "64": ["minecraft:lava", "minecraft:magma_block"],
+      "65": ["minecraft:redstone_torch", "minecraft:redstone_wall_torch", "minecraft:redstone_block"],
+      "66": ["minecraft:amethyst_cluster", "minecraft:large_amethyst_bud", "minecraft:respawn_anchor", "minecraft:end_portal", "minecraft:end_gateway"],
+      "50": ["minecraft:chest", "minecraft:trapped_chest", "minecraft:barrel", "#minecraft:signs", "#minecraft:hanging_signs", "minecraft:lectern"],
+      "67": ["minecraft:glow_lichen", "minecraft:cave_vines:berries=true", "minecraft:cave_vines_plant:berries=true", "minecraft:sea_pickle"]
+    },
+    // worn armour, held and dropped items, entities: the same material numbers as the blocks (lib/materials.glsl);
+    // 44 chainmail, 45 wet / glossy creatures and shells, 50 varnished wood (armour stands, frames, boats, chests).
+    // Unlisted mobs stay rough.
+    "items": {
+      "40": ["minecraft:iron_helmet", "minecraft:iron_chestplate", "minecraft:iron_leggings", "minecraft:iron_boots", "minecraft:iron_sword", "minecraft:iron_pickaxe", "minecraft:iron_axe", "minecraft:iron_shovel", "minecraft:iron_hoe", "minecraft:iron_spear", "minecraft:iron_horse_armor", "minecraft:shears", "minecraft:bucket", "minecraft:water_bucket", "minecraft:lava_bucket", "minecraft:compass", "minecraft:iron_ingot", "minecraft:shield"],
+      "44": ["minecraft:chainmail_helmet", "minecraft:chainmail_chestplate", "minecraft:chainmail_leggings", "minecraft:chainmail_boots"],
+      "41": ["minecraft:golden_helmet", "minecraft:golden_chestplate", "minecraft:golden_leggings", "minecraft:golden_boots", "minecraft:golden_sword", "minecraft:golden_pickaxe", "minecraft:golden_axe", "minecraft:golden_shovel", "minecraft:golden_hoe", "minecraft:golden_spear", "minecraft:golden_horse_armor", "minecraft:gold_ingot", "minecraft:clock", "minecraft:golden_apple", "minecraft:enchanted_golden_apple"],
+      "25": ["minecraft:diamond_helmet", "minecraft:diamond_chestplate", "minecraft:diamond_leggings", "minecraft:diamond_boots", "minecraft:diamond_sword", "minecraft:diamond_pickaxe", "minecraft:diamond_axe", "minecraft:diamond_shovel", "minecraft:diamond_hoe", "minecraft:diamond_spear", "minecraft:diamond_horse_armor", "minecraft:diamond", "minecraft:emerald"],
+      "43": ["minecraft:netherite_helmet", "minecraft:netherite_chestplate", "minecraft:netherite_leggings", "minecraft:netherite_boots", "minecraft:netherite_sword", "minecraft:netherite_pickaxe", "minecraft:netherite_axe", "minecraft:netherite_shovel", "minecraft:netherite_hoe", "minecraft:netherite_spear", "minecraft:netherite_horse_armor", "minecraft:netherite_ingot", "minecraft:mace"],
+      "42": ["minecraft:copper_helmet", "minecraft:copper_chestplate", "minecraft:copper_leggings", "minecraft:copper_boots", "minecraft:copper_sword", "minecraft:copper_pickaxe", "minecraft:copper_axe", "minecraft:copper_shovel", "minecraft:copper_hoe", "minecraft:copper_spear", "minecraft:copper_horse_armor", "minecraft:copper_ingot"],
+      "45": ["minecraft:turtle_helmet", "minecraft:trident", "minecraft:elytra"]
+    },
+    "entities": {
+      "50": ["minecraft:armor_stand", "minecraft:item_frame", "minecraft:glow_item_frame", "minecraft:painting", "minecraft:oak_boat", "minecraft:oak_chest_boat", "minecraft:spruce_boat", "minecraft:spruce_chest_boat", "minecraft:birch_boat", "minecraft:birch_chest_boat", "minecraft:jungle_boat", "minecraft:jungle_chest_boat", "minecraft:acacia_boat", "minecraft:acacia_chest_boat", "minecraft:dark_oak_boat", "minecraft:dark_oak_chest_boat", "minecraft:mangrove_boat", "minecraft:mangrove_chest_boat", "minecraft:cherry_boat", "minecraft:cherry_chest_boat", "minecraft:pale_oak_boat", "minecraft:pale_oak_chest_boat", "minecraft:bamboo_raft", "minecraft:bamboo_chest_raft"],
+      "40": ["minecraft:minecart", "minecraft:chest_minecart", "minecraft:furnace_minecart", "minecraft:hopper_minecart", "minecraft:tnt_minecart", "minecraft:command_block_minecart", "minecraft:spawner_minecart", "minecraft:iron_golem"],
+      "45": ["minecraft:slime", "minecraft:magma_cube", "minecraft:frog", "minecraft:axolotl", "minecraft:tropical_fish", "minecraft:cod", "minecraft:salmon", "minecraft:pufferfish", "minecraft:squid", "minecraft:glow_squid", "minecraft:guardian", "minecraft:elder_guardian", "minecraft:drowned", "minecraft:turtle", "minecraft:dolphin"],
+      "25": ["minecraft:end_crystal", "minecraft:shulker"]
+    }
+  },
+
+  "dimensions": {
+    "nether": { "match": ["minecraft:the_nether"], "disable": ["sky_trans", "sky_ms", "sky_view"] },
+    "end":    { "match": ["minecraft:the_end"], "disable": ["sky_trans", "sky_ms", "sky_view"] }
+  }
+}

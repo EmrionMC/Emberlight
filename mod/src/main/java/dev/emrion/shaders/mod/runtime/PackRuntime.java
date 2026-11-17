@@ -108,6 +108,8 @@ public final class PackRuntime {
 	private long otherCompositionMask;
 	/** DLSS Ray Reconstruction: final's flip state, to look up Complementary's normal and smoothness targets (null: from depth only). */
 	Manifest.FlipState rrFlip;
+	/** A native pack's RR guides (diffuse albedo, specular albedo, normal + roughness), or null. */
+	Img @org.jspecify.annotations.Nullable [] rrNative;
 	private final Map<String, Img> setOverride = new HashMap<>();
 	/** {@link dev.emrion.shaders.mod.upscale.Upscaling#generation()} this runtime was built for; a settings change rebuilds it. */
 	public final int upscaleGeneration = dev.emrion.shaders.mod.upscale.Upscaling.generation();
@@ -168,6 +170,13 @@ public final class PackRuntime {
 		var atlas = PbrAtlases.blockAtlas();
 		builtins.put("block_atlas", atlas != null ? view("block atlas", atlas) : dummy);
 		builtins.put("white_depth", whiteDepth());
+		// LabPBR maps of the block atlas for ray hits (native el_hitSpecular); without a resource pack the LabPBR defaults
+		if (dim.resources().stream().anyMatch(r -> "block_atlas_specular".equals(r.builtin()) || "block_atlas_normals".equals(r.builtin()))) {
+			var n = PbrAtlases.normals();
+			var s = PbrAtlases.specular();
+			builtins.put("block_atlas_normals", n != null ? view("block atlas normals", n) : mcTexture("emrion default normals", solid(0xFFFF7F7F)));
+			builtins.put("block_atlas_specular", s != null ? view("block atlas specular", s) : mcTexture("emrion default specular", solid(0)));
+		}
 		if (dim.resources().stream().anyMatch(r -> RtAoPass.BUILTIN.equals(r.builtin()))) {
 			rtAo = new RtAoPass(ctx, width, height);
 			builtins.put(RtAoPass.BUILTIN, rtAo.output);
@@ -302,7 +311,10 @@ public final class PackRuntime {
 		String target = cutTarget(dim, fin);
 		upscaleInput = read(target, flip);
 		if (upscaleInput == null) throw new IllegalStateException("upscaling: no " + target + " to upscale");
-		upscaler = dev.emrion.shaders.mod.upscale.Upscaler.create(ctx, width, height, displayWidth, displayHeight);
+		var mrt = manifest.rt();
+		// a native pack compiled without RR guides (NATIVE_FORMAT.md §14.4) gets DLSS SR: its own denoisers ran
+		upscaler = dev.emrion.shaders.mod.upscale.Upscaler.create(ctx, width, height, displayWidth, displayHeight,
+				dev.emrion.shaders.mod.upscale.UpscaleConfig.rrActive() && (mrt == null || !mrt.unavailable().containsKey("rr")));
 		dev.emrion.shaders.mod.EmrionShadersClient.LOG.info("Upscaling {} {}x{} -> {}x{} (input {})", upscaler.getClass().getSimpleName() + (upscaler.rayReconstruction() ? " (Ray Reconstruction)" : ""), width, height, displayWidth, displayHeight, target);
 		upscaled = new Img("emrion upscaled", null);
 		upscaled.image = upscaler.output.image;
@@ -314,6 +326,8 @@ public final class PackRuntime {
 		initMasks(flip);
 		// Complementary (its upscale patch ran): colortex4 world normal, colortex6.r smoothness
 		if (upscaler.rayReconstruction() && masks != null && read("colortex4", flip) != null && read("colortex6", flip) != null) rrFlip = flip;
+		if (upscaler.rayReconstruction() && image("el_rrDiffuse", "main") != null) // a native pack's own guides
+			rrNative = new Img[] {image("el_rrDiffuse", "main"), image("el_rrSpecular", "main"), image("el_rrNormal", "main")};
 	}
 
 	/**
@@ -413,7 +427,7 @@ public final class PackRuntime {
 			img.mips = t.mipLevels() == 0 ? Formats.fullMipChain(s[0], s[1], 1) : Math.max(1, t.mipLevels());
 			if (t.kind().equals("image")) {
 				// 3D and storage-only images: MC textures are 2D only
-				img.raw = new RawImage(ctx, img.vkFormat, s[0], s[1], s[2], 1,
+				img.raw = new RawImage(ctx, img.vkFormat, s[0], s[1], s[2], t.dims(), 1,
 						VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, label);
 				img.mips = 1;
 				img.image = img.raw.image;
@@ -477,7 +491,7 @@ public final class PackRuntime {
 		int[] s = {1, 1, 1};
 		System.arraycopy(t.size(), 0, s, 0, t.size().length);
 		Img img = new Img("emrion " + t.name(), null);
-		img.raw = new RawImage(ctx, VulkanConst.toVk(Formats.gpu(t.format())), s[0], s[1], s[2], 1,
+		img.raw = new RawImage(ctx, VulkanConst.toVk(Formats.gpu(t.format())), s[0], s[1], s[2], t.dims(), 1,
 				VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, img.label);
 		rawTextures.add(img.raw);
 		img.image = img.raw.image;

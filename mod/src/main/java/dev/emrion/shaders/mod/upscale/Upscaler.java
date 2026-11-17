@@ -35,8 +35,11 @@ public abstract class Upscaler {
 	/**
 	 * What DLSS Ray Reconstruction's guide pass reads besides colour and depth: the block atlas, the pack's normal and
 	 * smoothness targets (Complementary colortex4 / colortex6, used when {@code pack}), and this frame's jittered matrices.
+	 * {@code specularView} != 0: a native pack's own guides (NATIVE_FORMAT.md §14.4), normalView = el_rrNormal,
+	 * materialView = el_rrDiffuse, specularView = el_rrSpecular; the guide pass copies them instead of deriving its own.
 	 */
-	public record RrInputs(long atlasView, long normalView, long materialView, boolean pack, Matrix4fc projection, Matrix4fc modelView) {}
+	public record RrInputs(long atlasView, long normalView, long materialView, boolean pack, Matrix4fc projection, Matrix4fc modelView,
+			long specularView) {}
 
 	/** This frame's guide inputs (null: no RR this frame). */
 	protected @Nullable RrInputs rr;
@@ -49,7 +52,12 @@ public abstract class Upscaler {
 		displayH = dh;
 		int usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 		output = new RawImage(ctx, VK_FORMAT_R16G16B16A16_SFLOAT, dw, dh, 1, 1, usage, "upscaled colour");
-		mv = new MotionVectors(ctx, rw, rh);
+		try {
+			mv = new MotionVectors(ctx, rw, rh);
+		} catch (RuntimeException | Error failed) {
+			output.destroyLater();
+			throw failed;
+		}
 		motion = mv.image;
 	}
 
@@ -85,7 +93,7 @@ public abstract class Upscaler {
 		boolean reset = mv.dispatch(cb, depthView, behindView, masks != null ? masks.compositionView() : 0, Upscaling.unjittered, modelView);
 		deltaMs = mv.deltaMs;
 		this.masks = masksOn ? masks : null;
-		evaluate(cb, colorImage, colorView, colorFormat, depthImage, depthView, reset);
+		evaluate(cb, colorImage, colorView, colorFormat, depthImage, depthView, reset || dev.emrion.shaders.mod.photo.PhotoMode.independentUpscaler());
 		MotionCapture.record(ctx, cb, mv, this.masks);
 		memory(cb, COMPUTE | TRANSFER, STORAGE_WRITE | TRANSFER_WRITE, FRAGMENT | COMPUTE | TRANSFER, SAMPLED_READ | STORAGE_READ | TRANSFER_READ);
 	}

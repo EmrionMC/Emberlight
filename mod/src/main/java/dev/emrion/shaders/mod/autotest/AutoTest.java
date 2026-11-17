@@ -68,12 +68,13 @@ import org.jspecify.annotations.Nullable;
  * emrion.autotest.script=step;step  then run these steps (robustness tests), one after the other:
  *     wait S | size WxH | fullscreen on|off | gui N | cmd COMMAND | shot NAME (&lt;tag&gt;-NAME.png) | mem (log FPS and VMA budget)
  *     pack off|on|NAME (on/NAME wait until the pack renders) | settle [MAX_S] (chunks built + image converged, default max 30) | reload (waits for the swap) | resources (F3+T) | leave | join | hud | f3 on|off
- *     rt off|on|hybrid|full[+refl+ent+light+ao+caust+gi|gilow|gihigh] (Emberlight RT page Apply, waits for the swap) | rtset KEY=V[,KEY=V] (rt.KEY of
+ *     rt off|on|hybrid|full[+refl+ent+light+ao+caust+gi|gilow|gihigh] (Emberlight RT page Apply, waits for the swap) | rtset KEY=V[,KEY=V] (preset=low|medium|high|ultra first, then rt.KEY of
  *     emberlight.properties, e.g. gi=medium,ao=false; -Demrion.rt.KEY still wins; Apply, waits for the swap) | upscale off|fsr|dlss[:preset] (Upscaling page) |
- *     framegen off|fsr|dlss | reflex off|on|boost|fgoff | move YAW/s DX/s DZ/s SECONDS (per-frame camera motion, continues during later steps) | vsync on|off |
+ *     framegen off|fsr|dlss | hdr on|off | reflex off|on|boost|fgoff | move YAW/s DX/s DZ/s SECONDS (per-frame camera motion, continues during later steps) | vsync on|off |
  *     turnshot DEG_PER_FRAME FRAMES NAME [DX DZ [T]] (frame-exact turn and move, shot of its last frame) | fgturn (the same, captures the
  *     interpolated frame in front of the last one) | bob WALK AMOUNT|off (view bobbing on, at a fixed walk distance and bob amount) | hurt TIME DIR|off | nausea INTENSITY ANGLE|off (frozen damage tilt / nausea skew) | mats NAME (logs gbufferModelView/Projection, Iris's when it renders) |
- *     bench|benchv SECONDS NAME (rendered + presented frame times; benchv keeps VSync/cap) | fgshots N NAME (the next N presented frame pairs as PNGs) | screen pause|inventory|chat|packs|rt|upscale|framegen|perf|dlss|options[:ID]|none | key KEY [ctrl] (into the open screen) | drop PATH[;PATH] (onto the open screen) | use down|up (hold the use key) | press KEY (key.keyboard.KEY) | mdi on|off (terrain multi-draw indirect, F3+M) | irisapi (logs what the Iris API reports) | repeat N { steps } (no nesting) |
+ *     bench|benchv SECONDS NAME (rendered + presented frame times; benchv keeps VSync/cap) | trace start | trace stop NAME (every frame time in between -> emrion-trace-NAME.csv) | fgshots N NAME (the next N presented frame pairs as PNGs) | frames SECONDS NAME (every frame for SECONDS, quarter size, -> &lt;tag&gt;-NAME-NNN-MSms.png; runs on during later steps) | screen pause|inventory|chat|packs|rt|upscale|framegen|perf|dlss|options[:ID]|none | key KEY [ctrl] (into the open screen) | drop PATH[;PATH] (onto the open screen) | use down|up (hold the use key) | press KEY (key.keyboard.KEY) | mdi on|off (terrain multi-draw indirect, F3+M) | irisapi (logs what the Iris API reports) | repeat N { steps } (no nesting) |
+ *     photo SCALE SAMPLES NAME [rt+up|rt|up|none] (photo mode, &lt;tag&gt;-NAME.png; which histories reset per frame, sticky) |
  *     snapshot FILE (replays a debug snapshot.json: pose, dimension, time, weather, effects, items, options, pack settings and
  *     Emberlight config, then shoots &lt;tag&gt;-snapshot-&lt;folder&gt;.png; without world/server it picks the snapshot's own)
  * </pre>
@@ -160,8 +161,23 @@ public final class AutoTest {
 	/** The "hurt" and "nausea" steps' fixed hurt tilt (hurt time of 10, direction) and nausea skew (intensity, angle); NaN = MC's own. */
 	public static volatile float hurtTime = Float.NaN, hurtDir, nausea = Float.NaN, nauseaAngle;
 
+	/** The "frames" step: shoot every frame until this time (nanoTime), as framesName-NNN-MSms.png. */
+	private static volatile long framesStart, framesUntil;
+	private static volatile @org.jspecify.annotations.Nullable String framesName;
+	private static int framesIndex;
+
 	/** Every frame (GameRenderer.render HEAD): the "move" step's camera motion, applied per frame so it is smooth. */
 	public static void onFrame() {
+		String fn = framesName;
+		if (fn != null) { // the main target still holds the previous frame as presented (GUI included)
+			long now = System.nanoTime();
+			if (now > framesUntil) framesName = null;
+			else {
+				pendingShots.incrementAndGet();
+				Screenshot.grab(Minecraft.getInstance().gameDirectory, String.format("%s-%03d-%05dms.png", fn, framesIndex++, (now - framesStart) / 1_000_000),
+						Minecraft.getInstance().gameRenderer.mainRenderTarget(), 4, msg -> pendingShots.decrementAndGet());
+			}
+		}
 		if (exactShot >= 0 && FrameTimeLogger.INSTANCE.frames() >= exactAt) { // the target still holds the previous, complete frame
 			String n = exactShot == 0 ? exactName : exactName.replaceFirst("\\.png$", "-s" + (exactShot + 1) + ".png");
 			shoot(Minecraft.getInstance(), n);
@@ -267,9 +283,13 @@ public final class AutoTest {
 		return Arrays.stream(s.split(";")).map(String::strip).map(c -> c.startsWith("/") ? c.substring(1) : c).filter(c -> !c.isEmpty()).toList();
 	}
 
+	/** An autotest runs: first-start defaults (RT preset pick) stay off so runs keep the plain defaults. */
+	public static boolean ACTIVE;
+
 	public static void registerIfEnabled() {
 		if (System.getProperty(P + "world") == null && System.getProperty(P + "server") == null && !Boolean.getBoolean(P + "quit")
 				&& !System.getProperty(P + "script", "").contains("snapshot ")) return;
+		ACTIVE = true;
 		AutoTest test = new AutoTest();
 		ClientTickEvents.END_CLIENT_TICK.register(test::tick);
 		EmrionShadersClient.LOG.info("Autotest enabled: world={} server={} scenes={} tag={}", test.world, test.server, test.scenes, test.tag);
@@ -643,6 +663,11 @@ public final class AutoTest {
 				shoot(mc, tag + "-" + arg + ".png");
 				return true;
 			}
+			case "trace" -> { // "trace start" | "trace stop NAME": every frame time in between -> emrion-trace-NAME.csv (VSync and cap unchanged)
+				if (arg.equals("start")) FrameTimeLogger.INSTANCE.start();
+				else FrameTimeLogger.INSTANCE.stopAndDump(mc.gameDirectory.toPath().resolve("emrion-trace-" + arg.substring(5).strip() + ".csv"));
+				return true;
+			}
 			case "mem" -> {
 				EmrionShadersClient.LOG.info("Autotest: {} FPS, GPU memory: {}{}", mc.getFps(), gpuMemory(),
 						dev.emrion.shaders.mod.debug.VramReport.driverUsage(VulkanContext.get()));
@@ -689,7 +714,11 @@ public final class AutoTest {
 					swapsBefore = PackManager.swaps;
 					var p = new java.util.Properties();
 					dev.emrion.shaders.mod.rt.RtConfig.store(p);
-					for (String kv : arg.split(",")) p.setProperty("rt." + kv.substring(0, kv.indexOf('=')).strip(), kv.substring(kv.indexOf('=') + 1).strip());
+					for (String kv : arg.split(",")) {
+						String k = kv.substring(0, kv.indexOf('=')).strip(), v = kv.substring(kv.indexOf('=') + 1).strip();
+						if (k.equals("preset")) dev.emrion.shaders.mod.rt.RtPreset.parse(v).applyTo(p); // "rtset preset=high,ao=false"
+						else p.setProperty("rt." + k, v);
+					}
 					dev.emrion.shaders.mod.rt.RtConfig.load(p);
 					if (!PackManager.applyRt()) swapsBefore = -2;
 				}
@@ -710,6 +739,13 @@ public final class AutoTest {
 				if (first) {
 					dev.emrion.shaders.mod.framegen.FrameGenConfig.mode = dev.emrion.shaders.mod.framegen.FrameGenConfig.Mode.valueOf(arg.toUpperCase(java.util.Locale.ROOT));
 					PackManager.applyFrameGen();
+				}
+				return ticks > 10;
+			}
+			case "hdr" -> { // "hdr on|off": the HDR toggle (MC recreates the swapchain after the next frame)
+				if (first) {
+					dev.emrion.shaders.mod.hdr.Hdr.enabled = arg.equals("on");
+					dev.emrion.shaders.mod.hdr.Hdr.settingsChanged();
 				}
 				return ticks > 10;
 			}
@@ -779,6 +815,14 @@ public final class AutoTest {
 					mc.options.enableVsync().set(vsync);
 					mc.options.framerateLimit().set(fpsLimit);
 				}
+				return true;
+			}
+			case "frames" -> { // "frames SECONDS NAME": every frame for SECONDS at quarter size; returns at once, the next steps run meanwhile
+				String[] m = arg.split("\\s+");
+				framesIndex = 0;
+				framesStart = System.nanoTime();
+				framesUntil = framesStart + (long) (Double.parseDouble(m[0]) * 1e9);
+				framesName = tag + "-" + m[1];
 				return true;
 			}
 			case "fgshots" -> { // "fgshots N NAME": the next N frames as presented (interpolated, then real) -> screenshots/NAME-NN-{a-interp,b-real}.png
@@ -908,6 +952,15 @@ public final class AutoTest {
 			case "swing" -> { // one attack click: the main hand swings
 				net.minecraft.client.KeyMapping.click(mc.options.keyAttack.getDefaultKey()); // as a left click
 				return true;
+			}
+			case "photo" -> { // "photo SCALE SAMPLES NAME [RESETS]": photo mode -> screenshots/<tag>-NAME.png, waits until it is written
+				String[] m = arg.split("\\s+");
+				if (first && m.length > 3) { // history resets: "rt", "up", "rt+up" or "none" (default both)
+					dev.emrion.shaders.mod.photo.PhotoMode.resetRt = m[3].contains("rt");
+					dev.emrion.shaders.mod.photo.PhotoMode.resetUpscaler = m[3].contains("up");
+				}
+				if (first) dev.emrion.shaders.mod.photo.PhotoMode.start(mc, Integer.parseInt(m[0]), Integer.parseInt(m[1]), tag + "-" + m[2] + ".png");
+				return ticks > 1 && !dev.emrion.shaders.mod.photo.PhotoMode.frozen() && dev.emrion.shaders.mod.photo.PhotoMode.writing.get() == 0;
 			}
 			case "snapshot" -> {
 				return snapshotStep(mc, arg, first);
@@ -1130,7 +1183,8 @@ public final class AutoTest {
 
 	/** The chunks around the camera are built and the image has converged (resets the convergence while they are not). */
 	private boolean settled(Minecraft mc) {
-		if (!mc.levelRenderer.hasRenderedAllSections() || !chunksLoaded(mc)) {
+		// a dimension switch renders vanilla until the pack's pipelines for the new dimension are built: not settled yet
+		if (!mc.levelRenderer.hasRenderedAllSections() || !chunksLoaded(mc) || PackManager.selected() != null && !PackManager.running()) {
 			convergence.reset();
 			return false;
 		}
