@@ -66,7 +66,7 @@ public final class MotionVectors {
 			int cs = VK_SHADER_STAGE_COMPUTE_BIT;
 			setLayout = new Descriptors.LayoutBuilder().add(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, cs).add(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, cs)
 					.add(2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, cs).add(3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, cs)
-					.add(4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, cs).build(ctx, true);
+					.add(4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, cs).add(5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, cs).build(ctx, true);
 			layout = Descriptors.pipelineLayout(ctx, 0, setLayout);
 			params = new RawBuffer(ctx, (long) SLOT * UboRing.REGIONS, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true, "motion vector params");
 			long module = ShaderModules.create(ctx, ShaderModules.resource("/assets/emberlight/spv/upscale_motion.comp.spv"));
@@ -94,8 +94,10 @@ public final class MotionVectors {
 	 * @param behindView depth behind translucents (depthtex1), or depthView
 	 * @param compositionView the upscaler's composition mask (water / other translucents), or 0: then translucents move with
 	 *        their surface (also when RT refraction is off: then the pack shows them unbent)
+	 * @param distanceView a native pack's el_motionDistance (view-ray distance of what a pixel shows, 0 = the depth's), or 0
 	 */
-	public boolean dispatch(VkCommandBuffer cb, long depthView, long behindView, long compositionView, Matrix4fc projection, Matrix4fc modelView) {
+	public boolean dispatch(VkCommandBuffer cb, long depthView, long behindView, long compositionView, long distanceView, Matrix4fc projection,
+			Matrix4fc modelView) {
 		Vec3 cam = Minecraft.getInstance().gameRenderer.mainCamera().position();
 		reset = prevCam == null || cam.distanceToSqr(prevCam) > RESET_DISTANCE * RESET_DISTANCE;
 		long now = System.nanoTime();
@@ -110,7 +112,7 @@ public final class MotionVectors {
 		prevViewProj.mul(inv, toPrevSky);
 		long nearest = ((VulkanGpuSampler) RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST)).vkSampler();
 		try (MemoryStack stack = MemoryStack.stackPush()) {
-			var writes = VkWriteDescriptorSet.calloc(5, stack);
+			var writes = VkWriteDescriptorSet.calloc(6, stack);
 			paramRegion = (paramRegion + 1) % UboRing.REGIONS;
 			long offset = (long) paramRegion * SLOT;
 			writes.get(4).sType$Default().dstBinding(4).descriptorType(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER).descriptorCount(1)
@@ -119,6 +121,7 @@ public final class MotionVectors {
 			Upscaler.image(writes.get(1), stack, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_NULL_HANDLE, image.view);
 			Upscaler.image(writes.get(2), stack, 2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, nearest, behindView);
 			Upscaler.image(writes.get(3), stack, 3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, nearest, compositionView != 0 ? compositionView : depthView);
+			Upscaler.image(writes.get(5), stack, 5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, nearest, distanceView != 0 ? distanceView : depthView);
 			vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
 			KHRPushDescriptor.vkCmdPushDescriptorSetKHR(cb, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, writes);
 			var pc = MemoryUtil.memByteBuffer(params.mapped + offset, PARAMS);
@@ -129,6 +132,7 @@ public final class MotionVectors {
 			var rt = PackManager.rtState();
 			boolean refraction = compositionView != 0 && rt != null && rt.effects().contains("refraction");
 			pc.putFloat(144, Upscaling.ndcJitterX()).putFloat(148, Upscaling.ndcJitterY()); // as the object pass: same pixels as the gbuffers
+			pc.putFloat(152, distanceView != 0 ? 1f : 0f);
 			pc.putFloat(156, !refraction ? 0f : rt.effects().contains("refraction:glass=0") ? -eta : eta);
 			vkCmdDispatch(cb, (width + 7) / 8, (height + 7) / 8, 1);
 		}

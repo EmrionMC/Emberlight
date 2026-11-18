@@ -120,6 +120,10 @@ public record NativeManifest(
 			Map.entry("underwaterOverlay", "bool"), Map.entry("vignette", "bool"), Map.entry("rayReconstruction", "bool"));
 	/** DLSS Ray Reconstruction's guides (§14.4): render-size RGBA16F storage images Emberlight provides while RR runs. */
 	public static final List<String> RR_IMAGES = List.of("el_rrDiffuse", "el_rrSpecular", "el_rrNormal");
+	/** §14.1: render-size R32F storage image, the view-ray distance of what a pixel shows (a mirror's reflected image), for the motion vectors. */
+	public static final String MOTION_IMAGE = "el_motionDistance";
+
+	boolean writesMotionDistance() { return passes.stream().anyMatch(p -> p.writes().contains(MOTION_IMAGE)); }
 	static final Pattern ID = Pattern.compile("[a-z0-9_-]{1,64}");
 	static final Pattern RES_NAME = Pattern.compile("[A-Za-z][A-Za-z0-9_]{0,47}");
 	static final Pattern PASS_NAME = Pattern.compile("[a-z][a-z0-9_]{0,47}");
@@ -554,7 +558,7 @@ public record NativeManifest(
 				boolean shadowPass = "shadow".equals(phase);
 				for (String w : writes) {
 					boolean ok = shadowPass ? shadowImages.contains(w)
-							: kind.equals("compute") ? imageByName.containsKey(w) || buffers.stream().anyMatch(b -> b.name().equals(w)) || RR_IMAGES.contains(w)
+							: kind.equals("compute") ? imageByName.containsKey(w) || buffers.stream().anyMatch(b -> b.name().equals(w)) || RR_IMAGES.contains(w) || w.equals(MOTION_IMAGE)
 							: imageByName.containsKey(w) && imageByName.get(w).screen();
 					if (!ok) error(m.get("writes"), what + " writes unknown " + (shadowPass ? "shadow image" : "image") + " \"" + w + "\" ("
 							+ (shadowPass ? "shadow images: " + String.join(", ", shadowImages) : "images: " + String.join(", ",

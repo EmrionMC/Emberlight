@@ -150,7 +150,7 @@ int emrGiTraceRtx(vec3 o, vec3 d, float tMax, out EmrGiHit h, out vec3 tint) {
 		if (emrRtSection[custom].z == 0u) return 1;
 		n = -n;
 	}
-	uint lw = emrRtWord(v, tri.x, 6u, 4u); // emrRtLight(v, i): hidden here by the light buffer's emrRtLight[]
+	uint lw = emrRtWord(v, tri.x, v.ent ? 7u : 6u, 4u); // emrRtLight(v, i): hidden here by the light buffer's emrRtLight[]
 	h.skyLm = clamp(float(v.sod ? (lw >> 8u) & 0xFFu : lw >> 16u) / 240.0, 0.0, 1.0);
 	vec3 albedo = textureLod(emrRtAtlas, emrRtBaryUv(v, tri, b), 2.0).rgb * vtint;
 	h.albedo = albedo * albedo;

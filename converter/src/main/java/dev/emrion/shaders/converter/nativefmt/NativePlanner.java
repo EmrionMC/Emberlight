@@ -78,6 +78,8 @@ final class NativePlanner {
 		}
 		if (glsl.rr) for (String g : NativeManifest.RR_IMAGES) // written in full by the pack's guide pass every frame: no clear
 			targets.add(new Manifest.Target(g, "image", "RGBA16F", "RGBA16F", 2, new float[]{1, 1}, null, 1, false, false, new float[]{0, 0, 0, 0}, false, 0));
+		if (m.writesMotionDistance()) // written in full every frame (§14.1): no clear
+			targets.add(new Manifest.Target(NativeManifest.MOTION_IMAGE, "image", "R32F", "R32F", 2, new float[]{1, 1}, null, 1, false, false, new float[]{0, 0, 0, 0}, false, 0));
 		for (var buf : m.buffers())
 			targets.add(new Manifest.Target(buf.name(), "buffer", null, null, 0, buf.bytesPerPixel() > 0 ? new float[]{1, 1} : null, null, 1, false,
 					false, null, false, buf.bytes() > 0 ? buf.bytes() : buf.bytesPerPixel()));

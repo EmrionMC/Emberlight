@@ -279,6 +279,31 @@ class NativePackConversionTest {
 		assertTrue(unsupported.manifest().dimensions().get("default").programs().containsKey("denoise"));
 	}
 
+	/** el_motionDistance (§14.1): a compute pass may write it; it becomes an R32F render-size target. */
+	@Test
+	void motionDistanceImage(@TempDir Path pack) throws Exception {
+		Files.createDirectories(pack.resolve("shaders"));
+		Files.writeString(pack.resolve("emberlight.json"), """
+				{ "format": 1, "id": "x", "name": "X", "version": "1",
+				  "images": { "col": { "format": "RGBA16F" } },
+				  "passes": [
+				    { "name": "mv", "kind": "compute", "phase": "deferred", "compute": "shaders/mv.comp.glsl", "writes": ["col", "el_motionDistance"] },
+				    { "name": "out", "kind": "final", "fragment": "shaders/final.frag.glsl" } ] }
+				""");
+		Files.writeString(pack.resolve("shaders/mv.comp.glsl"), """
+				void main() {
+					ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+					imageStore(col_img, p, vec4(1.0));
+					imageStore(el_motionDistance_img, p, vec4(12.0));
+				}
+				""");
+		Files.writeString(pack.resolve("shaders/final.frag.glsl"), "layout(location = 0) out vec4 c;\nvoid main() { c = texture(col, el_uv); }\n");
+		var r = convert(pack, Set.of());
+		assertEquals(List.of(), r.diagnostics().stream().filter(d -> d.severity() == Diagnostic.Severity.ERROR).toList());
+		assertTrue(r.manifest().dimensions().get("default").targets().stream()
+				.anyMatch(t -> t.name().equals(NativeManifest.MOTION_IMAGE) && t.kind().equals("image") && t.format().equals("R32F")));
+	}
+
 	/** The TLAS is built only when an enabled pass traces rays. */
 	@Test
 	void noRtSceneWithoutEnabledRayPasses(@TempDir Path pack) throws Exception {

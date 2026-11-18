@@ -9,6 +9,7 @@ void main() {
 	if (el_isSky(depth)) {
 		imageStore(sunRaw_img, px, vec4(1.0));
 		imageStore(reflRaw_img, px, vec4(0.0));
+		imageStore(el_motionDistance_img, px, vec4(0.0));
 		return;
 	}
 	vec3 world = el_screenToWorld((vec2(px) + 0.5) / el_screenSize, depth);
@@ -56,6 +57,31 @@ void main() {
 		for (int b = 0; b < MIRROR_BOUNCES; b++) {
 			// the first-person body too: a mirror shows the player (shadows already trace it)
 			ElHit h = el_traceClosest(p, rd, 256.0, MASK_SOLID | EL_MASK_PLAYER);
+			// glass, ice, slime on the way (the first layer only): its frame texels shaded, a Fresnel sheen of the sky,
+			// the rest tinted as resolve.frag.glsl tints the camera's view through it. No alpha test: the clear centre of
+			// a glass block still reflects. Shortcut: glass behind water or a portal is not seen, a second ray would
+			ElHit tg = el_traceSurface(p, rd, h.t, EL_MASK_TRANSLUCENT);
+			if (tg.hit && !tg.entity && tg.blockId != ID_WATER && tg.blockId != ID_PORTAL) {
+				vec4 ga = el_hitAlbedo(tg);
+				vec3 gl = el_srgbToLinear(ga.rgb * tg.color.rgb);
+				float frame = smoothstep(0.8, 0.98, ga.a);
+				if (isGlassId(tg.blockId)) frame = max(frame, ga.a * smoothstep(0.5, 0.6, ga.a));
+				float gf = 0.04 + 0.96 * pow(1.0 - abs(dot(tg.normal, rd)), 5.0);
+				refl.rgb += thr * mix(gf * missRadiance(reflect(rd, tg.normal), tg.light.y), shadeHit(tg, rd, false, false), frame);
+				thr *= (1.0 - frame) * (1.0 - gf) * mix(vec3(1.0), gl / max(max(gl.r, max(gl.g, gl.b)), 1e-3) * 0.85, clamp(ga.a * 1.3, 0.0, 1.0));
+				if (max(thr.r, max(thr.g, thr.b)) < 0.02) { refl.a = path + tg.t; break; } // a frame texel: nothing behind it shows
+			} else if (tg.hit && !tg.entity && tg.blockId == ID_WATER && tg.normal.y > 0.5) {
+				// a lake seen from above: the sky's Fresnel sheen, the bottom absorbed and blued as resolve.frag.glsl shows
+				// the camera's view (not refracted). Left out, the mirror showed the bare lake bottom, its seagrass black
+				// (sky light fades with depth). shortcut: the surface seen from below or from the side stays left out
+				vec3 water = el_srgbToLinear(tg.color.rgb * (0.75 + 0.25 * el_luminance(el_hitAlbedo(tg).rgb))) * (0.4 + 0.6 * daylight); // (translucent.frag.glsl's colour)
+				vec3 T = exp(-vec3(0.38, 0.10, 0.06) * (h.t - tg.t) * 1.2);
+				vec3 insc = water * (lightColor() * max(lightDir().y, 0.0) * 0.06 + skyAmbient(vec3(0.0, 1.0, 0.0)) * 0.35) * tg.light.y + water * 0.004;
+				float F = 0.02 + 0.98 * pow(1.0 - abs(dot(tg.normal, rd)), 5.0);
+				refl.rgb += thr * (F * missRadiance(reflect(rd, tg.normal), tg.light.y) + (1.0 - F) * insc * (1.0 - T));
+				thr *= (1.0 - F) * T;
+				if (max(thr.r, max(thr.g, thr.b)) < 0.02) { refl.a = path + tg.t; break; } // deep: the bottom does not show
+			}
 			if (!h.hit) { refl.rgb += thr * missRadiance(rd, g.light.y); refl.a = 256.0; break; }
 			path += h.t;
 			vec4 ha = el_hitAlbedo(h);
@@ -70,7 +96,8 @@ void main() {
 				// (the last silver mirror: its light only, the iron block's texture must not show at the end of the corridor)
 				if (mirror && abs(hm.f0 - 237.0) < 0.5) refl.rgb += thr * matF0(hm, lin) * hitAmbient(h);
 				else refl.rgb += thr * shadeHitAmb(h, rd, true, true, !mirror && cachedGi(h.position, cg) ? cg : hitAmbient(h));
-				refl.a = path;
+				// a glowing hit: negative distance, so bloom gives the reflected neon its halo too (denoise.frag.glsl)
+				refl.a = hm.emission > 0.25 && max(thr.r, max(thr.g, thr.b)) > 0.1 ? -path : path;
 				break;
 			}
 			refl.rgb += thr * hitEmission(h, srgb, lin);
@@ -85,4 +112,7 @@ void main() {
 	}
 #endif
 	imageStore(reflRaw_img, px, refl);
+	// a mirror shows the reflected image, refl.a behind it: the upscaler's motion vectors follow that, not the surface
+	bool mirror = m.smoothness >= 0.97 && isMetal(m.f0) && refl.a > 0.0;
+	imageStore(el_motionDistance_img, px, vec4(mirror ? length(world) + refl.a : 0.0));
 }

@@ -563,6 +563,9 @@ public final class FrameExecutor {
 		hazards.read(depth, COMPUTE, SAMPLED_READ);
 		if (behind != depth) hazards.read(behind, COMPUTE, SAMPLED_READ);
 		if (rt.masks != null) hazards.read(rt.masks, COMPUTE, SAMPLED_READ);
+		// a native pack's mirror image distance; not for Ray Reconstruction, which wants the surface's motion (it estimates the reflections' own)
+		var distance = rt.upscaler.rayReconstruction() ? null : rt.image(dev.emrion.shaders.converter.nativefmt.NativeManifest.MOTION_IMAGE, "main");
+		if (distance != null) hazards.read(distance, COMPUTE, SAMPLED_READ);
 		var rrNormal = rt.rrFlip == null ? null : rt.read("colortex4", rt.rrFlip);
 		var rrMaterial = rt.rrFlip == null ? null : rt.read("colortex6", rt.rrFlip);
 		if (rrNormal != null) {
@@ -573,7 +576,7 @@ public final class FrameExecutor {
 		hazards.write(rt.upscaled, COMPUTE, STORAGE_WRITE);
 		hazards.flush(cb);
 		rt.upscaler.dispatch(cb, rt.upscaleInput.image, rt.upscaleInput.sampled, rt.upscaleInput.vkFormat, depth.image, depth.sampled, behind.sampled,
-				uniforms.gbufferModelView(), rt.masks == null ? null
+				distance != null ? distance.sampled : 0, uniforms.gbufferModelView(), rt.masks == null ? null
 						: new dev.emrion.shaders.mod.upscale.Upscaler.Masks(rt.masks.image, rt.masks.vkFormat, rt.masks.sampled, rt.compositionMask),
 				!rt.upscaler.rayReconstruction() ? null : rt.rrNative != null
 						? new dev.emrion.shaders.mod.upscale.Upscaler.RrInputs(rt.atlasView(), rt.rrNative[2].sampled, rt.rrNative[0].sampled, false,

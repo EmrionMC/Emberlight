@@ -52,7 +52,18 @@ vec3 mediumInscatter(vec3 o, vec3 d, float L, Medium md, vec3 sigmaT, float skyL
 		sun = lightColor() * vis * exp(-sigmaT * ls) * hgPhase4pi(dot(d, l), 0.55);
 	}
 	vec3 amb = skyAmbient(vec3(0.0, 1.0, 0.0)) * skyLight * skyLight;
-	vec3 src = (sun + amb * 0.25) * md.sigmaS * md.scatter;
+	// block light (the light list's sources of the cell, unshadowed, as hitBlockLight): without it slime and honey next to
+	// a lamp scattered nothing at night and showed only the dark floor through two blocks of absorption
+	// shortcut: no lightmap gate, a lamp behind a wall still lights the jelly; gate it if that shows up
+	vec3 blk = vec3(0.0);
+	uvec2 c = el_lightCell(m);
+	uint cnt = c.y - c.x, nl = min(cnt, 8u);
+	for (uint i = 0u; i < nl; i++) {
+		ElLight L = el_light(el_lightIndex(c.x + uint(float(i) * float(cnt) / float(nl))));
+		blk += L.color * lightFalloff(max(distance(L.position, m), 0.05), L.range);
+	}
+	blk *= float(cnt) / float(max(nl, 1u)) * BLOCKLIGHT_STRENGTH * 1.25; // (a quarter of a surface's: x5 made the blocks glow opaque)
+	vec3 src = (sun + amb * 0.25 + blk) * md.sigmaS * md.scatter;
 	return src * (1.0 - exp(-sigmaT * L)) / max(sigmaT, vec3(1e-4)) * SSS;
 }
 
@@ -73,18 +84,23 @@ vec3 seenHit(ElHit h, vec3 d, float skyLight) {
 	return shadeHit(h, d, true, true);
 }
 
+// a ray from o under the surface of water w down to the bottom: absorbed and in-scattered
+vec3 inWater(vec3 o, vec3 dw, ElHit w, float skyLight) {
+	ElHit b = el_traceClosest(o, dw, 48.0, MASK_SOLID);
+	vec3 T = exp(-vec3(0.38, 0.10, 0.06) * (b.hit ? b.t : 48.0) * 1.2);
+	vec3 water = el_srgbToLinear(w.color.rgb) * 0.8 * (0.4 + 0.6 * daylight);
+	vec3 insc = water * (lightColor() * max(lightDir().y, 0.0) * 0.06 + skyAmbient(vec3(0.0, 1.0, 0.0)) * 0.35) * skyLight + water * 0.004;
+	vec3 below = b.hit ? seenHit(b, dw, skyLight) : vec3(0.0);
+	return below * T + insc * (1.0 - T);
+}
+
 // a water surface hit from above through a glass floor: refract in, absorb down to the bottom, reflect the sky
 vec3 throughWater(ElHit w, vec3 d, float skyLight) {
 	vec3 nw = w.normal;
 	vec3 dw = refract(d, nw, 1.0 / 1.33);
 	if (dw == vec3(0.0)) dw = reflect(d, nw);
-	ElHit b = el_traceClosest(w.position - nw * 0.01, dw, 48.0, MASK_SOLID);
-	vec3 T = exp(-vec3(0.38, 0.10, 0.06) * (b.hit ? b.t : 48.0) * 1.2);
-	vec3 water = el_srgbToLinear(w.color.rgb) * 0.8 * (0.4 + 0.6 * daylight);
-	vec3 insc = water * (lightColor() * max(lightDir().y, 0.0) * 0.06 + skyAmbient(vec3(0.0, 1.0, 0.0)) * 0.35) * skyLight + water * 0.004;
-	vec3 below = b.hit ? seenHit(b, dw, skyLight) : vec3(0.0);
 	float F = 0.02 + 0.98 * pow(1.0 - abs(dot(d, nw)), 5.0);
-	return mix(below * T + insc * (1.0 - T), skyRadiance(reflect(d, nw)) * smoothstep(0.05, 0.6, skyLight), F);
+	return mix(inWater(w.position - nw * 0.01, dw, w, skyLight), skyRadiance(reflect(d, nw)) * smoothstep(0.05, 0.6, skyLight), F);
 }
 
 // what the camera sees through a thick block entered at surf (n faces the camera) along the view direction v
@@ -96,7 +112,8 @@ vec3 thickTransmission(vec3 surf, vec3 n, vec3 v, int kind, vec3 tintLin, float 
 	vec3 o = surf - n * 0.004;
 	vec3 thr = vec3(1.0), insc = vec3(0.0);
 	bool left = false;
-	for (int i = 0; i < 3; i++) { // up to two total internal reflections
+	bool jelly = kind == ID_SLIME || kind == ID_HONEY;
+	for (int i = 0; i < 3 + (jelly ? 6 : 0); i++) { // up to two total internal reflections (jelly: plus its inner cubes)
 		ElHit e = el_traceSurface(o, d, 16.0, EL_MASK_TRANSLUCENT);
 		ElHit s = el_traceClosest(o, d, e.t, MASK_SOLID);
 		if (s.hit) { // the medium ends at a solid block (glass against stone): seen through the medium
@@ -106,10 +123,36 @@ vec3 thickTransmission(vec3 surf, vec3 n, vec3 v, int kind, vec3 tintLin, float 
 		insc += thr * mediumInscatter(o, d, e.t, md, sigmaT, skyLight);
 		thr *= exp(-sigmaT * e.t);
 		if (!e.hit) break;
+		// Slime and honey hold an inner cube of the same jelly: its faces (off the block grid) have the same medium on both
+		// sides, so the ray goes straight on (refracting there trapped it by total internal reflection: black cores at
+		// night), but their texels still show, lit like the frame texels plus the lamps nearby: the vanilla inner cube.
+		vec3 an = abs(e.normal);
+		vec3 wp = e.position + fract(el_cameraPosition); // (fractional camera position: same grid, no precision loss far out)
+		float ax = an.x > an.y && an.x > an.z ? wp.x : an.y > an.z ? wp.y : wp.z;
+		if (jelly && e.blockId == kind && abs(ax - round(ax)) > 0.02) {
+			vec4 ia = el_hitAlbedo(e);
+			vec3 ic = el_srgbToLinear(ia.rgb * e.color.rgb);
+			insc += thr * ia.a * (frameLight(ic, e.normal, skyLight) + ic * hitBlockLight(e));
+			thr *= 1.0 - ia.a;
+			o = e.position + d * 0.004;
+			continue;
+		}
 		// back face: the opaque frame texels of a glass block are seen from inside, the rest lets the ray out
 		vec4 ea = el_hitAlbedo(e);
 		if (kind == ID_GLASS && ea.a > 0.9) return thr * frameLight(el_srgbToLinear(ea.rgb * e.color.rgb), -e.normal, skyLight) + insc;
 		vec3 d2 = refract(d, e.normal, ior);
+		// the bottom face of a block standing in water: Minecraft draws the water below 1/9 block lower, and that air
+		// gap made the face a total-reflection mirror (a band of sky and treetops at the foot of a glass wall in a pool).
+		// The block rests on the water: the ray goes on into it
+		if (e.normal.y > 0.5) {
+			ElHit w = el_traceClosest(e.position - e.normal * 0.004, vec3(0.0, -1.0, 0.0), 0.2, EL_MASK_TRANSLUCENT);
+			if (w.hit && !w.entity && w.blockId == ID_WATER) {
+				vec3 dw = refract(d, e.normal, ior / 1.33);
+				// shortcut: past glass-water's critical angle (62 degrees) the ray goes on unbent instead of reflecting
+				if (dw == vec3(0.0)) dw = d;
+				return thr * inWater(w.position - vec3(0.0, 0.01, 0.0), dw, w, skyLight) + insc;
+			}
+		}
 		if (d2 == vec3(0.0)) { d = reflect(d, e.normal); o = e.position + e.normal * 0.004; continue; }
 		o = e.position - e.normal * 0.004;
 		d = d2;

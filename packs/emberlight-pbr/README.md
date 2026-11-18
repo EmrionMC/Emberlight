@@ -53,7 +53,9 @@ neon through its GI rays and adds a coloured halo; Complementary (labPBR) shows 
 
 * **`_n`** (DirectX / "Y down", as LabPBR specifies): height = blurred luminance (saturation for `bricks`, whose mortar is lighter than the bricks), normalised per animation frame;
   normals from its wrapped gradient times the material's `normal` strength; AO (blue) darkens low texels by `ao`;
-  alpha = height (255 flat, at most `depth` x 25 % deep, never below 1).
+  alpha = height (255 flat, at most `depth` x 25 % deep, never below 1). Only stone, brick, wood and raw ore blocks
+  get depth: POM shaders such as Complementary light every height step as a sideways wall, so smooth or noisy faces
+  (metals, soil, concrete...) stay flat instead of breaking into triangle facets.
 * **`_s`**: red = perceptual smoothness (bright texels a little smoother, cracks rougher); green = F0 (0..229) or a
   LabPBR metal id (230 iron, 231 gold, 234 copper, 255 albedo-as-F0 for dark netherite/machinery); blue = porosity
   (0..64) or SSS (65..255) for foliage, snow, ice, slime, honey; alpha = emission 0..254 (0 = none, 255 never used).

@@ -22,24 +22,24 @@ Parameters (all optional, see DEFAULT):
 """
 
 DEFAULT = dict(smooth=0.22, svar=0.25, f0=0.04, metal=None, por=0.35, sss=0.0, emit=0.0, elo=0.0, ehi=1.0,
-               normal=1.0, depth=0.30, ao=0.35, mode=None, gem=None, hsrc='lum')
+               normal=1.0, depth=0.0, ao=0.35, mode=None, gem=None, hsrc='lum')
 
 # Shorthands
-POLISHED = dict(smooth=0.90, svar=0.10, f0=0.045, por=0.0, normal=0.35, depth=0.06, ao=0.12)
-GLOSSY = dict(smooth=0.80, svar=0.15, f0=0.04, por=0.02, normal=0.5, depth=0.10, ao=0.18)
-SATIN = dict(smooth=0.55, svar=0.25, f0=0.04, por=0.08, normal=0.8, depth=0.20, ao=0.25)
+POLISHED = dict(smooth=0.90, svar=0.10, f0=0.045, por=0.0, normal=0.35, depth=0.0, ao=0.12)
+GLOSSY = dict(smooth=0.80, svar=0.15, f0=0.04, por=0.02, normal=0.5, depth=0.0, ao=0.18)
+SATIN = dict(smooth=0.55, svar=0.25, f0=0.04, por=0.08, normal=0.8, depth=0.0, ao=0.25)
 ROUGH_STONE = dict(smooth=0.25, svar=0.35, por=0.30, normal=1.2, depth=0.40, ao=0.40)
-SOIL = dict(smooth=0.06, svar=0.10, por=0.85, normal=1.1, depth=0.35, ao=0.40)
+SOIL = dict(smooth=0.06, svar=0.10, por=0.85, normal=1.1, depth=0.0, ao=0.40)
 FOLIAGE = dict(smooth=0.38, svar=0.15, por=0.0, sss=0.75, normal=0.6, depth=0.0, ao=0.25)
 WOOD = dict(smooth=0.42, svar=0.30, por=0.25, normal=0.9, depth=0.35, ao=0.30)  # varnished planks, RTX-style
 BARK = dict(smooth=0.12, svar=0.20, por=0.45, normal=1.4, depth=0.45, ao=0.45)
-FABRIC = dict(smooth=0.04, svar=0.05, por=0.60, sss=0.0, normal=0.7, depth=0.15, ao=0.25)
-IRON = dict(metal=230, smooth=0.86, svar=0.20, por=0.0, normal=0.6, depth=0.10, ao=0.20)
-GOLD = dict(metal=231, smooth=0.92, svar=0.15, por=0.0, normal=0.5, depth=0.08, ao=0.15)
-GEM = dict(smooth=0.96, svar=0.05, f0=0.17, por=0.0, normal=0.4, depth=0.05, ao=0.10)
+FABRIC = dict(smooth=0.04, svar=0.05, por=0.60, sss=0.0, normal=0.7, depth=0.0, ao=0.25)
+IRON = dict(metal=230, smooth=0.86, svar=0.20, por=0.0, normal=0.6, depth=0.0, ao=0.20)
+GOLD = dict(metal=231, smooth=0.92, svar=0.15, por=0.0, normal=0.5, depth=0.0, ao=0.15)
+GEM = dict(smooth=0.96, svar=0.05, f0=0.17, por=0.0, normal=0.4, depth=0.0, ao=0.10)
 ICE = dict(smooth=0.97, svar=0.03, f0=0.02, por=0.0, sss=0.45, normal=0.25, depth=0.0, ao=0.05)
 GLASS = dict(smooth=0.98, svar=0.0, f0=0.04, por=0.0, normal=0.15, depth=0.0, ao=0.0)
-LIGHT = dict(smooth=0.70, svar=0.10, por=0.0, normal=0.5, depth=0.05, ao=0.10)
+LIGHT = dict(smooth=0.70, svar=0.10, por=0.0, normal=0.5, depth=0.0, ao=0.10)
 
 
 def m(*bases, **kw):
@@ -170,7 +170,7 @@ RULES += [
     (['smooth_stone', 'smooth_stone_slab_side'], m(GLOSSY, smooth=0.75)),
     (['smooth_basalt'], m(GLOSSY, smooth=0.72)),
     (['calcite'], m(SATIN, smooth=0.6, sss=0.2)),
-    (['*_concrete'], m(GLOSSY, smooth=0.72, svar=0.05, normal=0.25, depth=0.03)),
+    (['*_concrete'], m(GLOSSY, smooth=0.72, svar=0.05, normal=0.25)),
     (['*_concrete_powder'], m(SOIL, smooth=0.1)),
     (['*_glazed_terracotta'], m(POLISHED, smooth=0.92, f0=0.05, normal=0.3)),
     (['terracotta', '*_terracotta'], m(SATIN, smooth=0.50)),

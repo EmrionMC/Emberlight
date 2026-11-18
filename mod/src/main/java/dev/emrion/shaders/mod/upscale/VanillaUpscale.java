@@ -137,7 +137,7 @@ public final class VanillaUpscale {
 		if (upscaled || !FrameGen.bypassed()) depthPass(cb, view(main.getDepthTextureView()), rw, rh, 0, dummyMotion.view);
 		if (upscaled) {
 			long colorImage = ((VulkanGpuTexture) main.getColorTexture()).vkImage();
-			u.dispatch(cb, colorImage, view(main.getColorTextureView()), VK_FORMAT_R8G8B8A8_UNORM, depth.image, depth.view, depth.view, modelView, null, null); // no Ray Reconstruction without a pack (no RT)
+			u.dispatch(cb, colorImage, view(main.getColorTextureView()), VK_FORMAT_R8G8B8A8_UNORM, depth.image, depth.view, depth.view, 0, modelView, null, null); // no Ray Reconstruction without a pack (no RT)
 			swapBack();
 			blit(cb, u.output, ((VulkanGpuTexture) main.getColorTexture()).vkImage(), main.width, main.height);
 			Profiler.mark(cb, "vanilla upscale");

@@ -25,12 +25,12 @@
     "tNormal":   { "format": "RGBA16" },                          // xy normal, z kind/16, w sky light
     "fwd":       { "format": "RGBA16F" },                         // particles, weather, hand: premultiplied, composited in resolve
     "sunRaw":    { "format": "RGBA16F", "clear": false },         // this frame's sun/moon visibility (rgb = tint through glass)
-    "reflRaw":   { "format": "RGBA16F", "clear": false },         // this frame's reflection radiance, a = hit distance
+    "reflRaw":   { "format": "RGBA16F", "clear": false },         // this frame's reflection radiance, a = hit distance (< 0: glowing hit)
     "giRaw":     { "format": "RGBA16F", "scale": 0.5, "clear": false }, // half-res diffuse GI + block lights, a = valid
     "giAcc":     { "format": "RGBA16F", "history": true },        // accumulated GI, a = history length
     "shadowAcc": { "format": "RGBA16F", "history": true },        // accumulated sun visibility, a = view distance (for reprojection)
-    "reflAcc":   { "format": "RGBA16F", "history": true },        // accumulated reflections, a = history length
-    "lit":       { "format": "RGBA16F", "clear": false },         // HDR scene colour
+    "reflAcc":   { "format": "RGBA16F", "history": true },        // accumulated reflections, a = share that glows (bloom)
+    "lit":       { "format": "RGBA16F", "clear": false },         // HDR scene colour, a = bloom gain (glow)
     "vol":       { "format": "RGBA16F", "scale": 0.5, "clear": [0, 0, 0, 1] }, // volumetric in-scatter rgb, a = transmittance
     "bloom":     { "format": "RGBA16F", "scale": 0.5, "mipmaps": true },
     "giFilt":    { "format": "RGBA16F", "clear": false },         // spatially filtered GI (a-trous)
@@ -79,7 +79,7 @@
     // ---- ray tracing + denoise + lighting ----
     { "name": "rt_direct", "kind": "compute", "phase": "deferred", "raytracing": true,
       "compute": "shaders/rt_direct.comp.glsl", "workgroups": { "size": [8, 8, 1], "scale": [1, 1] },
-      "writes": ["sunRaw", "reflRaw"] },
+      "writes": ["sunRaw", "reflRaw", "el_motionDistance"] },
     // ReSTIR DI for the block lights (lib/restir.glsl): candidates + temporal reuse here, spatial reuse and shading in rt_gi
     { "name": "restir", "kind": "compute", "phase": "deferred", "raytracing": true,
       "compute": "shaders/restir.comp.glsl", "workgroups": { "size": [8, 8, 1], "scale": [0.5, 0.5] },

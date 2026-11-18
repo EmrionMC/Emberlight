@@ -107,6 +107,12 @@ public final class SodiumRt {
 		return scene.external.size();
 	}
 
+	/** Sodium's section manager exists (it is null while a resource reload or level switch rebuilds the renderer). */
+	public static boolean sectionsReady() {
+		var renderer = SodiumWorldRenderer.instanceNullable();
+		return renderer != null && ((SodiumWorldRendererAccessor) renderer).emrion$sections() != null;
+	}
+
 	/** levelStart, before the TLAS build in the same command buffer: syncs the BLAS set, builds within budget, fills scene.external. */
 	public void update(VkCommandBuffer cb, Vec3 cam) {
 		frame++;

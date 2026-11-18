@@ -129,6 +129,11 @@ final class NativeGlsl {
 				add(g + "_img", "uniform image2D " + g + "_img", new Manifest.Resource(0, "storage_image", null, g, null, null, null), "rgba16f");
 				computeOnly.add(g + "_img");
 			}
+			if (m.writesMotionDistance()) { // target of the same name (NativePlanner), read by Emberlight's motion vectors
+				add(NativeManifest.MOTION_IMAGE + "_img", "uniform image2D " + NativeManifest.MOTION_IMAGE + "_img",
+						new Manifest.Resource(0, "storage_image", null, NativeManifest.MOTION_IMAGE, null, null, null), "r32f");
+				computeOnly.add(NativeManifest.MOTION_IMAGE + "_img");
+			}
 			boolean ownNoise = false;
 			for (var t : m.textures()) {
 				boolean three = t.rawSize() != null && t.rawSize().length == 3;

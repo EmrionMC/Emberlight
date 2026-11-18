@@ -103,6 +103,9 @@ void main() {
 	// this view distance; 8 taps on a per-frame rotated spiral cover it (none below 1.5 px: the temporal pass suffices), weighted by plane, normal and smoothness so
 	// the gather stays on this surface (radius idea after Stachowiak 2015, "Stochastic Screen-Space Reflections").
 	vec4 rf = texelFetch(reflRaw, px, 0);
+	// rt_direct.comp.glsl: the reflection shows a glowing surface. Gathered below as the glowing share of the radiance
+	float glow = rf.a < 0.0 ? 1.0 : 0.0, gLum = el_luminance(rf.rgb), gSum = glow * gLum;
+	rf.a = abs(rf.a);
 	if (!RR && rough > 0.02 && rough <= REFL_MAX_ROUGH) { // rougher: no traced reflection (lighting uses its ambient estimate)
 		float alpha = rough;
 		float pixAngle = 2.0 / (el_projection[1][1] * el_screenSize.y);
@@ -124,8 +127,12 @@ void main() {
 			vec4 s = texelFetch(reflRaw, q, 0);
 			acc += s.rgb * w;
 			rsum += w;
+			float sl = el_luminance(s.rgb) * w;
+			gLum += sl;
+			gSum += s.a < 0.0 ? sl : 0.0;
 		}
 		rf.rgb = acc / rsum;
+		glow = gSum / max(gLum, 1e-6);
 	}
 
 	// ---- reflection history: reprojected by the reflected image, not the surface ----
@@ -179,5 +186,6 @@ void main() {
 	if (hist > 0.0) hSh.rgb = mix(hSh.rgb, clamp(hSh.rgb, shMin - 0.1, shMax + 0.1), 1.0 - rest);
 	outGi = vec4(mix(hGi.rgb, gi, hist > 0.0 ? aGi : 1.0), min(n1, 255.0));
 	outShadow = vec4(mix(hSh.rgb, sh, hist > 0.0 ? aSh : 1.0), dist);
-	outRefl = vec4(mix(hRf.rgb, rf.rgb, hist > 0.0 ? aRf : 1.0), n1);
+	// a = how much of the reflection glows (lighting.frag.glsl passes it on to bloom)
+	outRefl = mix(hRf, vec4(rf.rgb, glow), hist > 0.0 ? aRf : 1.0);
 }

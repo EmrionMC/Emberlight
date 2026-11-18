@@ -31,7 +31,10 @@ public class LevelRendererVertexMixin {
 		RtEntities.begin(false, net.minecraft.client.Minecraft.getInstance().gameRenderer.mainCamera().position());
 		dev.emrion.shaders.mod.upscale.ObjectMotion.begin(true);
 		try {
-			return original.call(dispatcher, storage);
+			FeatureRenderDispatcher.PreparedFrame frame = original.call(dispatcher, storage);
+			dev.emrion.shaders.mod.upscale.ObjectMotion.end(); // the RT-only player frame is never drawn: no motion slots
+			dev.emrion.shaders.mod.runtime.GeometryHooks.captureRtPlayer((net.minecraft.client.renderer.LevelRenderer) (Object) this);
+			return frame;
 		} finally {
 			EntityIds.extending = false;
 			RtEntities.end();

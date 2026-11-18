@@ -356,6 +356,32 @@ final class ShadowPass {
 
 	private static final EntityFrustum ENTITY_FRUSTUM = new EntityFrustum();
 
+	private static void ensureDispatcher() {
+		if (dispatcher != null) return;
+		var mc = Minecraft.getInstance();
+		submits = new SubmitNodeStorage();
+		dispatcher = new FeatureRenderDispatcher(buffers = new RenderBuffers(0), mc.getModelManager(), mc.getAtlasManager(), mc.font, mc.gameRenderer.gameRenderState());
+	}
+
+	/**
+	 * First person without a shadow pass (native packs): the main frame never draws the local player, so its body would be
+	 * missing from the RT scene (mirrors, its own shadow). Prepares just the player into the running main RT capture; the
+	 * frame is never drawn. Its vehicle and a sleeping player are in the main frame already (vanilla draws them).
+	 */
+	static void captureRtPlayer(LevelRenderer level, CameraRenderState camera) {
+		var mc = Minecraft.getInstance();
+		if (mc.player == null || mc.level == null || mc.player.isSpectator() || mc.player.isSleeping() || !mc.options.getCameraType().isFirstPerson()
+				|| mc.getCameraEntity() != mc.player || !dev.emrion.shaders.mod.rt.RtEntities.capturingMainFrame()) return;
+		ensureDispatcher();
+		var entityDispatcher = level.entityRenderDispatcher();
+		PoseStack pose = new PoseStack();
+		Vec3 cam = camera.pos;
+		float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(!mc.level.tickRateManager().isEntityFrozen(mc.player));
+		var state = entityDispatcher.extractEntity(mc.player, partial);
+		entityDispatcher.submit(state, camera, state.x - cam.x, state.y - cam.y, state.z - cam.z, pose, submits);
+		dispatcher.prepareFrame(submits).close();
+	}
+
 	/** Iris extractVisibleEntities + renderEntities into our own storage, prepared with the shadow model-view; null if none. */
 	private static FeatureRenderDispatcher.PreparedFrame prepareEntities(FrameExecutor e, LevelRenderer level, CameraRenderState camera,
 			Matrix4fc shadowView) {
@@ -365,10 +391,7 @@ final class ShadowPass {
 		boolean blockEntities = prop(props, "shadowBlockEntities"), lights = prop(props, "shadowLightBlockEntities");
 		entityCount = 0;
 		if (mc.level == null || mc.player == null || !all && !player && !blockEntities && !lights) return null;
-		if (dispatcher == null) {
-			submits = new SubmitNodeStorage();
-			dispatcher = new FeatureRenderDispatcher(buffers = new RenderBuffers(0), mc.getModelManager(), mc.getAtlasManager(), mc.font, mc.gameRenderer.gameRenderState());
-		}
+		ensureDispatcher();
 		Vec3 cam = camera.pos;
 		ENTITY_FRUSTUM.x = cam.x;
 		ENTITY_FRUSTUM.y = cam.y;

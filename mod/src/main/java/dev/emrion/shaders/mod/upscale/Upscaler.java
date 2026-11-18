@@ -86,11 +86,14 @@ public abstract class Upscaler {
 		}
 	}
 
-	/** Records motion vectors and the upscale; color and depth must be compute-readable, output is readable afterwards. */
+	/**
+	 * Records motion vectors and the upscale; color and depth must be compute-readable, output is readable afterwards.
+	 * {@code distanceView}: see {@link MotionVectors#dispatch}.
+	 */
 	public final void dispatch(VkCommandBuffer cb, long colorImage, long colorView, int colorFormat, long depthImage, long depthView, long behindView,
-			Matrix4fc modelView, @Nullable Masks masks, @Nullable RrInputs rr) {
+			long distanceView, Matrix4fc modelView, @Nullable Masks masks, @Nullable RrInputs rr) {
 		this.rr = rr;
-		boolean reset = mv.dispatch(cb, depthView, behindView, masks != null ? masks.compositionView() : 0, Upscaling.unjittered, modelView);
+		boolean reset = mv.dispatch(cb, depthView, behindView, masks != null ? masks.compositionView() : 0, distanceView, Upscaling.unjittered, modelView);
 		deltaMs = mv.deltaMs;
 		this.masks = masksOn ? masks : null;
 		evaluate(cb, colorImage, colorView, colorFormat, depthImage, depthView, reset || dev.emrion.shaders.mod.photo.PhotoMode.independentUpscaler());

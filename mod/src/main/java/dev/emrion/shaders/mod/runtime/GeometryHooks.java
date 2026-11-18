@@ -272,6 +272,11 @@ public final class GeometryHooks {
 		if (e != null) guarded(() -> e.renderShadows(level));
 	}
 
+	/** After the main feature frame's prepare: the first-person body into the RT scene when no shadow pass put it there. */
+	public static void captureRtPlayer(net.minecraft.client.renderer.LevelRenderer level) {
+		if (exec() != null) guarded(() -> ShadowPass.captureRtPlayer(level, Minecraft.getInstance().gameRenderer.gameRenderState().levelRenderState.cameraRenderState));
+	}
+
 	/** Iris turns vanilla entity (blob) shadows off when the pack renders a shadow map. */
 	public static boolean vanillaEntityShadows() {
 		FrameExecutor e = exec();

@@ -119,7 +119,9 @@ float lightFalloff(float d, float range) {
 // the walls it saw last frame on screen lit and everything else black. The lightmap still gates it (no block light
 // behind a wall), and right next to an emitter its curve, brighter there than one face's falloff, stays the floor (the
 // light list alone darkened a lava cave's bounce light by a tenth). At most 16 sources, evenly spread over the cell's
-// list and scaled up to its length.
+// list and scaled up to its length. The spread starts at a per-hit, per-frame offset: with a fixed one each light-grid cell
+// summed its own subset, and a room with more lamps than that showed the cell edges as hard steps in the light its
+// reflections and bounces received (patches that came and went with the view, as the screen cache took over).
 vec3 hitBlockLight(ElHit h) {
 	vec3 p = h.position + h.normal * 0.05;
 	uvec2 c = el_lightCell(p);
@@ -127,9 +129,10 @@ vec3 hitBlockLight(ElHit h) {
 	if (cnt == 0u) return lightmapBlock(h.light.x);
 	uint n = min(cnt, 16u);
 	float stride = float(cnt) / float(n);
+	float first = cnt > n ? fract(hash12(p.xz + p.y * 7.31) + 0.61803399 * float(el_frame & 1023)) * stride : 0.0;
 	vec3 s = vec3(0.0);
 	for (uint i = 0u; i < n; i++) {
-		ElLight L = el_light(el_lightIndex(c.x + uint(float(i) * stride)));
+		ElLight L = el_light(el_lightIndex(c.x + min(uint(float(i) * stride + first), cnt - 1u)));
 		vec3 d = L.position - p;
 		float dist = max(length(d), 0.05);
 		s += L.color * lightFalloff(dist, L.range) * clamp((dot(h.normal, d) / dist + 0.3) / 1.3, 0.0, 1.0);

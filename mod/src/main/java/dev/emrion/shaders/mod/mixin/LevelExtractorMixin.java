@@ -12,6 +12,7 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.ModifyArg;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
@@ -32,6 +33,14 @@ public class LevelExtractorMixin {
 		var area = levelRenderer.viewArea();
 		if (sectionUpdateTracker != null && level != null && area != null) dev.emrion.shaders.mod.runtime.ForcedSections.schedule(sectionUpdateTracker, level, area, levelRenderState);
 		else dev.emrion.shaders.mod.runtime.ForcedSections.clear();
+	}
+
+	/** Why: RT traces only the entities MC extracts; without a shadow pass nearby ones out of view must be extracted too (RtEntities.casterFrustum). */
+	@ModifyArg(method = "extract", at = @At(value = "INVOKE",
+			target = "Lnet/minecraft/client/renderer/extract/LevelExtractor;extractVisibleEntities(Lnet/minecraft/client/Camera;Lnet/minecraft/client/renderer/culling/Frustum;Lnet/minecraft/client/DeltaTracker;Lnet/minecraft/client/renderer/state/level/LevelRenderState;)V"),
+			index = 1)
+	private net.minecraft.client.renderer.culling.Frustum emrion$rtCasters(net.minecraft.client.renderer.culling.Frustum frustum) {
+		return dev.emrion.shaders.mod.rt.RtEntities.casterFrustum(frustum, PackManager.running());
 	}
 
 	@Inject(method = "applyFrustum", at = @At("TAIL"))

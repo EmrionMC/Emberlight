@@ -52,7 +52,8 @@ a dark-glass mirror, `matF0`); a perfect silver one (metal id 237: its iron bloc
 that shows none of the block's texture. Both are traced crisp (one fixed ray, no temporal history to ghost) and reflecting other mirrors up
 to `MIRROR_BOUNCES` times (Low 1, Medium 2, High 3, Ultra 4: facing mirrors become a corridor of images). Glowing
 surfaces that are no light source (*Emberlight PBR*'s plain terracotta, solid neon tubes) light their surroundings through the GI rays that hit them, show in
-reflections, and get an amplified bloom halo (`NEON_GLOW`, default 2); their colour is saturated so neon does not wash
+reflections, and get an amplified bloom halo (`NEON_GLOW`, default 2), in a mirror too (the reflection ray flags a
+glowing hit, `lighting` writes the glowing share of each pixel as the bloom gain into `lit`'s alpha); their colour is saturated so neon does not wash
 out to white, and a dark albedo glows at a lamp's brightness (`emissiveColor`): a muddy red block is a bright red tube.
 
 Water caustics (`CAUSTICS`, 0 = off, default 1, up to 3): the sun ray of `rt_direct` that crosses a water surface
@@ -84,11 +85,14 @@ the view ray (IOR 1.5 glass, 1.31 ice, 1.42 slime/honey), which is traced to the
 `el_traceSurface` (no alpha test, so the clear centre of a glass block is still its face; three blocks of glass are three
 blocks deep), absorbed on the way (Beer-Lambert: one block passes about the saturated surface colour; clear glass a faint
 green), totally internally reflected up to twice, and refracted out. What lies behind is the lit screen pixel where that
-is visible, else a traced shade; water under a glass floor is refracted into and absorbed too. Ice, slime and honey also
+is visible, else a traced shade; water under a glass floor is refracted into and absorbed too, and a block standing in a
+pool passes its bottom face straight into the water (the 1/9 block air gap Minecraft draws there is no total-reflection
+mirror). Ice, slime and honey also
 scatter: one sample per segment gathers the sunlight that entered the block toward the sun (its own shadow ray and the
 absorption on the way in, Henyey-Greenstein g = 0.55) and the sky light, so a backlit ice wall glows blue. Panes stay
 thin tinted sheets; the frame texels of a glass block are lit as a surface; clear and stained glass add no diffuse light
-of their own (that made glass walls milky). Opaque packed and blue ice and snow get wrap lighting (`SSS`).
+of their own (that made glass walls milky). Reflection rays see one layer of glass, ice, slime or honey on their way
+(one extra ray against the translucent geometry only): its frame lit, a Fresnel sheen of the sky, the rest tinted. Opaque packed and blue ice and snow get wrap lighting (`SSS`).
 
 Entities and items: `materials.items` and `materials.entities` reuse the block material numbers: worn armour (with the
 item id Emberlight now passes for armour layers, as Iris does), held and dropped tools are iron, gold, copper, netherite

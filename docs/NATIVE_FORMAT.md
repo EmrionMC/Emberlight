@@ -679,7 +679,12 @@ The user enables upscaling in Emberlight's settings; the pack does nothing to op
   upscaler is the temporal filter).
 * **Motion vectors.** Emberlight computes them itself (camera motion from depth + matrices, plus per-vertex object
   motion for entities, block entities and the hand). Vertex animation done in a pack's vertex shader (waving leaves,
-  water waves) is not in them; keep such motion small or mask it.
+  water waves) is not in them; keep such motion small or mask it. Mirrors: a compute pass may write the reserved
+  render-size `R32F` storage image `el_motionDistance_img` (list `el_motionDistance` in its `writes`; it does not count
+  against the image limits): per pixel the distance along the view ray of what the pixel shows, i.e. for a mirror the
+  surface's distance plus the reflection's path length (where the reflected image sits), 0 for "the depth's". The
+  motion vectors then follow the reflected image, not the mirror (DLSS smears a mirror's image otherwise). Write every
+  pixel every frame. Not used under Ray Reconstruction.
 * **Ray Reconstruction** (DLSS RR) is opt-in and needs guide images from the pack, §14.4.
 
 ### 14.2 Frame generation

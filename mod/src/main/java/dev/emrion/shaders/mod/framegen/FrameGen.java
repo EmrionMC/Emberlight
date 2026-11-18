@@ -129,7 +129,7 @@ public final class FrameGen {
 					ownMotion = new MotionVectors(ctx, renderW, renderH);
 				}
 				mv = ownMotion;
-				mv.dispatch(cb, depthView, depthView, 0, projection, modelView);
+				mv.dispatch(cb, depthView, depthView, 0, 0, projection, modelView);
 				dev.emrion.shaders.mod.upscale.MotionCapture.record(ctx, cb, mv, null);
 			}
 			clipToPrev.set(mv.clipToPrevClip());

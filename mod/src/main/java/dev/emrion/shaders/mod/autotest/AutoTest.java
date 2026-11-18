@@ -166,6 +166,12 @@ public final class AutoTest {
 	private static volatile @org.jspecify.annotations.Nullable String framesName;
 	private static int framesIndex;
 
+	/** The "frames" step's downscale: 4, else the largest of 2 and 1 that divides the target (Screenshot.grab needs both sides divisible). */
+	private static int framesScale(com.mojang.blaze3d.pipeline.RenderTarget t) {
+		for (int f = 4; f > 1; f /= 2) if (t.width % f == 0 && t.height % f == 0) return f;
+		return 1;
+	}
+
 	/** Every frame (GameRenderer.render HEAD): the "move" step's camera motion, applied per frame so it is smooth. */
 	public static void onFrame() {
 		String fn = framesName;
@@ -175,7 +181,7 @@ public final class AutoTest {
 			else {
 				pendingShots.incrementAndGet();
 				Screenshot.grab(Minecraft.getInstance().gameDirectory, String.format("%s-%03d-%05dms.png", fn, framesIndex++, (now - framesStart) / 1_000_000),
-						Minecraft.getInstance().gameRenderer.mainRenderTarget(), 4, msg -> pendingShots.decrementAndGet());
+						Minecraft.getInstance().gameRenderer.mainRenderTarget(), framesScale(Minecraft.getInstance().gameRenderer.mainRenderTarget()), msg -> pendingShots.decrementAndGet());
 			}
 		}
 		if (exactShot >= 0 && FrameTimeLogger.INSTANCE.frames() >= exactAt) { // the target still holds the previous, complete frame
@@ -206,6 +212,7 @@ public final class AutoTest {
 					turnName = null;
 				} // MC's target lags one frame behind: shoot at the next one
 			} else { // the target now holds the last turning frame
+				if (p != null) EmrionShadersClient.LOG.info("Autotest: turnshot {} at {} {} {} / {} {}", turnName, p.getX(), p.getY(), p.getZ(), p.getYRot(), p.getXRot());
 				shoot(Minecraft.getInstance(), turnName);
 				turnName = null;
 			}
@@ -817,7 +824,7 @@ public final class AutoTest {
 				}
 				return true;
 			}
-			case "frames" -> { // "frames SECONDS NAME": every frame for SECONDS at quarter size; returns at once, the next steps run meanwhile
+			case "frames" -> { // "frames SECONDS NAME": every frame for SECONDS at quarter size (less if the target is not divisible by 4); returns at once, the next steps run meanwhile
 				String[] m = arg.split("\\s+");
 				framesIndex = 0;
 				framesStart = System.nanoTime();
@@ -967,6 +974,11 @@ public final class AutoTest {
 			}
 			case "use" -> {
 				mc.options.keyUse.setDown(arg.equals("down"));
+				return true;
+			}
+			case "fly" -> { // "fly on|off": creative flight, so a camera moved by turnshot/move after a snapshot does not fall
+				mc.player.getAbilities().flying = arg.equals("on");
+				mc.player.setDeltaMovement(net.minecraft.world.phys.Vec3.ZERO);
 				return true;
 			}
 			default -> throw new IllegalArgumentException("autotest: unknown script step " + s);
@@ -1184,7 +1196,9 @@ public final class AutoTest {
 	/** The chunks around the camera are built and the image has converged (resets the convergence while they are not). */
 	private boolean settled(Minecraft mc) {
 		// a dimension switch renders vanilla until the pack's pipelines for the new dimension are built: not settled yet
-		if (!mc.levelRenderer.hasRenderedAllSections() || !chunksLoaded(mc) || PackManager.selected() != null && !PackManager.running()) {
+		// a resource reload (e.g. a pack from -Demrion.autotest.resourcepacks) rebuilds the renderer: Sodium's section
+		// manager is null until it finishes
+		if (mc.gui.overlay() != null || dev.emrion.shaders.mod.compat.SodiumTerrain.LOADED && !dev.emrion.shaders.mod.compat.sodium.SodiumRt.sectionsReady() || !chunksLoaded(mc) || !mc.levelRenderer.hasRenderedAllSections() || PackManager.selected() != null && !PackManager.running()) {
 			convergence.reset();
 			return false;
 		}

@@ -12,8 +12,8 @@ void main() {
 	float w = 0.0;
 	for (int i = 0; i < 4; i++) {
 		ivec2 q = min(p + ivec2(i & 1, i >> 1), m);
-		vec3 c = max(texelFetch(lit, q, 0).rgb, vec3(0.0));
-		if (!el_isSky(texelFetch(el_depth, q, 0).r)) c *= 1.0 + 8.0 * NEON_GLOW * decodeMat(texelFetch(gMat, q, 0)).emission;
+		vec4 l = texelFetch(lit, q, 0);
+		vec3 c = max(l.rgb, vec3(0.0)) * l.a; // a: the glow gain lighting.frag.glsl wrote (also for neon seen in a mirror)
 		float k = 1.0 / (1.0 + el_luminance(c) * 0.25);
 		s += c * k;
 		w += k;

@@ -19,7 +19,9 @@ vec3 reflection(vec3 p, vec3 rd, float skyLight) {
 
 void main() {
 	ivec2 px = ivec2(gl_FragCoord.xy);
-	vec3 c = texelFetch(lit, px, 0).rgb;
+	vec4 lit0 = texelFetch(lit, px, 0);
+	vec3 c = lit0.rgb;
+	float through = 1.0; // how much of the opaque pixel (and its bloom gain) still shows
 	float depth = texelFetch(el_depthNoHand, px, 0).r;
 	vec3 world = el_screenToWorld(el_uv, depth);
 	vec3 v = normalize(world);
@@ -62,6 +64,7 @@ void main() {
 			if (underwater) F = nv < 0.66 ? 1.0 : F; // total internal reflection outside Snell's window
 			vec3 refl = reflection(p, rdir, underwater ? 0.0 : skyLight);
 			c = mix(refr, refl, clamp(F * rtxBoost(), 0.0, 1.0));
+			through = 1.0 - clamp(F * rtxBoost(), 0.0, 1.0);
 		} else if (kind == 5) { // nether portal: a glowing, swirling sheet
 			c = c * 0.35 + tint * (1.5 + 2.5 * ta.a) * EMISSIVE_STRENGTH * rtxBoost();
 		} else {
@@ -89,6 +92,7 @@ void main() {
 			}
 			vec3 refl = reflection(p, reflect(v, n), skyLight);
 			c = mix(base, refl, clamp(F * rtxBoost(), 0.0, 1.0));
+			through = (1.0 - frame) * (1.0 - clamp(F * rtxBoost(), 0.0, 1.0));
 		}
 	}
 
@@ -121,5 +125,7 @@ void main() {
 
 	vec4 f = texelFetch(fwd, px, 0);
 	c = c * (1.0 - f.a) + f.rgb;
-	outLit = vec4(c, 1.0);
+	// a: bloom gain (lighting.frag.glsl), only for what still shows of the pixel (not on a glass frame or the hand).
+	// shortcut: refracted water keeps this pixel's gain, not the one of the pixel it shows
+	outLit = vec4(c, 1.0 + (lit0.a - 1.0) * through * (1.0 - f.a));
 }

@@ -61,7 +61,7 @@ void main() {
 		diffuse += hc * held * 3.0 * max(dot(n, -v), 0.0) / (1.0 + d * d * 0.15) * (1.0 - smoothstep(0.0, held * 15.0, d)) * BLOCKLIGHT_STRENGTH;
 	}
 
-	vec3 spec = vec3(0.0);
+	vec3 spec = vec3(0.0), reflGlow = vec3(0.0);
 	vec3 kd = metal ? vec3(0.0) : vec3(1.0);
 	// what a surface would reflect without a ray: its diffuse light plus the sky it sees
 	vec3 r = reflect(v, sn);
@@ -77,7 +77,9 @@ void main() {
 		// side of it (bricks whose smoothness varies per texel) a patchwork of reflecting and non-reflecting ones
 		float traced = REFL_MAX_ROUGH > 0.0 ? 1.0 - smoothstep(REFL_MAX_ROUGH * 0.55, REFL_MAX_ROUGH, rough) : 0.0; // reflections off: -1
 		vec3 rf = envAmbient * 1.2;
-		if (traced > 0.0) rf = mix(rf, texelFetch(reflAcc, px, 0).rgb, traced);
+		vec4 ra = texelFetch(reflAcc, px, 0);
+		if (traced > 0.0) rf = mix(rf, ra.rgb, traced);
+		reflGlow = ra.rgb * (ra.a * traced) * fe * rtxBoost();
 		// metals: a second, rough lobe (50 %) that sees the ambient light and the sun, as worn and scratched metal does:
 		// a pure mirror only showed what it reflected (the floor in front of a gold block), so gold and copper read as
 		// tinted glass; with it they keep their own colour and texture in any surroundings
@@ -104,5 +106,7 @@ void main() {
 	c = kd * diffuse + spec;
 #endif
 	c += emissiveColor(albedo) * m.emission * EMISSIVE_STRENGTH * 2.0 * rtxBoost();
-	outLit = vec4(c, 1.0);
+	// a = bloom gain (bloom.frag.glsl): own glow, or the share of the image that is glowing neon seen in a reflection
+	float glowShare = el_luminance(reflGlow) / max(el_luminance(c), 1e-4);
+	outLit = vec4(c, 1.0 + 8.0 * NEON_GLOW * max(m.emission, min(glowShare, 1.0)));
 }

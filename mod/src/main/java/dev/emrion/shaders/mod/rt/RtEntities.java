@@ -132,6 +132,11 @@ public final class RtEntities {
 			}
 	}
 
+	/** True while a main frame's prepare is captured as the RT entity frame (no shadow-pass capture this frame). */
+	public static boolean capturingMainFrame() {
+		return capturing && !extraOnly;
+	}
+
 	public static void end() {
 		capturing = false;
 		drawTypes.clear();
@@ -211,6 +216,41 @@ public final class RtEntities {
 	static boolean casts(String name) {
 		if (name.contains("emissive") || name.equals("entity_shadow")) return false;
 		return name.startsWith("entity_") || name.startsWith("armor_") || name.startsWith("item_") || name.equals("banner_pattern");
+	}
+
+	/** How far around the camera entities are extracted off screen for the TLAS when no shadow pass captures them. */
+	private static final double CASTER_RANGE = 32;
+	private static volatile boolean castersOn;
+	private static volatile double casterX, casterY, casterZ;
+
+	/**
+	 * The frustum MC extracts entities with (LevelExtractor.extractVisibleEntities). Without a shadow pass (native packs) the main
+	 * frame is the only capture, so an entity that left the view also left the TLAS and its shadow on screen popped away with
+	 * the camera's pitch. Then entities within {@link #CASTER_RANGE} count as visible in every direction (drawn off screen and
+	 * clipped: vertex cost only); Sodium's own section test asks {@link #casterNear} too (SodiumWorldRendererMixin).
+	 */
+	public static net.minecraft.client.renderer.culling.Frustum casterFrustum(net.minecraft.client.renderer.culling.Frustum view, boolean packRunning) {
+		RtScene s = RtScene.get();
+		Vec3 cam = Minecraft.getInstance().gameRenderer.mainCamera().position();
+		casterX = cam.x;
+		casterY = cam.y;
+		casterZ = cam.z;
+		castersOn = packRunning && s != null && s.entities != null && !s.entities.expectShadowCapture();
+		if (!castersOn) return view;
+		return new net.minecraft.client.renderer.culling.Frustum(view) {
+			@Override
+			public boolean isVisible(net.minecraft.world.phys.AABB bb) {
+				return super.isVisible(bb) || casterNear(bb);
+			}
+		};
+	}
+
+	/** An entity box near enough to the camera to be extracted for the TLAS whether it is in view or not. */
+	public static boolean casterNear(net.minecraft.world.phys.AABB bb) {
+		if (!castersOn) return false;
+		double dx = Math.max(0, Math.max(bb.minX - casterX, casterX - bb.maxX)), dy = Math.max(0, Math.max(bb.minY - casterY, casterY - bb.maxY)),
+				dz = Math.max(0, Math.max(bb.minZ - casterZ, casterZ - bb.maxZ));
+		return dx * dx + dy * dy + dz * dz <= CASTER_RANGE * CASTER_RANGE;
 	}
 
 	// ---- per scene ----------------------------------------------------------------------------------------------------------
