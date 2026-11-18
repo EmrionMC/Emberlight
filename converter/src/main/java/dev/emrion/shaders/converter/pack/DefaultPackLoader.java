@@ -67,7 +67,15 @@ public final class DefaultPackLoader implements PackLoader {
 
 	@Override
 	public ResolvedPack load(PackSource source, Path settingsFile, Map<String, String> environmentMacros, Diagnostics diagnostics) {
-		return new Run(source, environmentMacros, diagnostics).load(settingsFile);
+		return load(source, settingsFile, environmentMacros, diagnostics, Map.of());
+	}
+
+	@Override
+	public ResolvedPack load(PackSource source, Path settingsFile, Map<String, String> environmentMacros, Diagnostics diagnostics,
+	                         Map<String, String> minimums) {
+		Run run = new Run(source, environmentMacros, diagnostics);
+		run.minimums = minimums;
+		return run.load(settingsFile);
 	}
 
 	private static final class Run {
@@ -78,6 +86,7 @@ public final class DefaultPackLoader implements PackLoader {
 		final Map<String, List<String>> files = new TreeMap<>();
 		final Map<String, List<String>> applied = new ConcurrentHashMap<>();
 		OptionSet optionSet;
+		Map<String, String> minimums = Map.of();
 		OptionValues values;
 		/** Iris reads .tcs/.tes only if the pack lists TESSELLATION_SHADERS (required or optional; ProgramSet). */
 		boolean readTessellation;
@@ -136,6 +145,7 @@ public final class DefaultPackLoader implements PackLoader {
 				diags.add(Diagnostic.error(String.valueOf(settingsFile), 0, "Cannot read settings file: " + e.getMessage()));
 				settings = new LinkedHashMap<>();
 			}
+			raise(settings);
 			values = new OptionValues(optionSet, settings);
 
 			// 4. shaders.properties: preprocessed with option values + all usable features; some keys from the raw text
@@ -192,6 +202,23 @@ public final class DefaultPackLoader implements PackLoader {
 
 			Manifest.Options options = OptionsManifest.build(settingsFile, values, settings, profiles, raw, ROOT);
 			return new ResolvedPack(src, options, properties, idMaps, List.copyOf(mapping), dimensions);
+		}
+
+		/** Raises every option in {@link #minimums} below its minimum (numbers compared, anything else replaced) to it. */
+		private void raise(SequencedMap<String, String> settings) {
+			minimums.forEach((name, min) -> {
+				OptionSet.Option opt = optionSet.strings().get(name);
+				if (opt == null) opt = optionSet.booleans().get(name);
+				if (opt == null) return; // not this pack's option
+				String cur = settings.getOrDefault(name, opt.decl().defaultValue());
+				try {
+					if (Double.parseDouble(cur) >= Double.parseDouble(min)) return;
+				} catch (NumberFormatException | NullPointerException e) {
+					if (min.equals(cur)) return;
+				}
+				settings.put(name, min);
+				warn(null, "RT needs " + name + " = " + min + " (was " + cur + "): raised for this conversion");
+			});
 		}
 
 		private String idText(String kind, Map<String, String> env) {

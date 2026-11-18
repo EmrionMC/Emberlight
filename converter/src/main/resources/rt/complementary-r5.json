@@ -4,6 +4,14 @@
   "pack": "Complementary Reimagined / Unbound",
   "version": "r5",
   "detect": ["lib/lighting/shadowSampling.glsl"],
+  "packSettings": {
+    "shadows": {"SHADOW_QUALITY": "0"},
+    "refraction": {"DETAIL_QUALITY": "3"},
+    "caustics": {"SHADOW_QUALITY": "0"},
+    "reflections": {"COLORED_LIGHTING": "128", "WORLD_SPACE_REFLECTIONS": "1", "SHADOW_QUALITY": "0"},
+    "shafts": {"SHADOW_QUALITY": "0"},
+    "blocklight": {"COLORED_LIGHTING": "128", "SHADOW_QUALITY": "0"}
+  },
   "effects": {
     "shadows": {
       "requires": ["gbuffers_terrain"],
@@ -38,16 +46,18 @@
         "viewWidth": "float", "viewHeight": "float", "far": "float", "isEyeInWater": "int"},
       "needs": ["depthtex1"],
       "lifts": {
-        "terrainAoCurve": {"program": "gbuffers_terrain", "function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
+        "terrainAoCurve": {"program": "gbuffers_terrain", "function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float) | void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
           "at": "vanillaAO = min1(vanillaAO + 0.08);", "statements": 2, "otherwise": ""},
         "lightSource": {"program": "gbuffers_terrain", "function": "void main()", "at": "if (lmCoord.x > 0.99 ||", "otherwise": ""},
         "lavaEmission": {"program": "gbuffers_terrain", "function": "void main()", "at": "if (emission < 1.0)", "otherwise": ""},
         "materialEmission": {"program": "gbuffers_terrain", "function": "void main()", "at": "if (mat > 20999", "otherwise": ";"},
         "crossModel": {"program": "gbuffers_terrain", "function": "void main()", "at": "if (length(abs(worldGeoNormal.xz)", "otherwise": ""},
-        "subsurfaceHighlight": {"program": "gbuffers_terrain", "function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
+        "subsurfaceHighlight": {"program": "gbuffers_terrain", "function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float) | void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
           "at": "float VdotL =", "statements": 3, "otherwise": ""},
-        "highlightMix": {"program": "gbuffers_terrain", "function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
-          "at": "lightHighlight = isEyeInWater", "otherwise": ""}
+        "highlightMix": {"program": "gbuffers_terrain", "function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float) | void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
+          "at": "lightHighlight = isEyeInWater", "otherwise": ""},
+        "euphoriaArgs": {"function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)", "text": ", emrPk, emrSource, emrDd, vec3(1.0)", "otherwise": ""},
+        "euphoriaF0": {"function": "float GGX(vec3,vec3,vec3,float,float,float)", "text": ", 0.05", "otherwise": ""}
       },
       "patches": [
         {"function": "vec2 DoRefraction(inout vec3,inout float,inout float,vec3,float)", "body": "rt/complementary/refraction_body.glsl",
@@ -56,9 +66,9 @@
          "programs": ["gbuffers_water"]},
         {"function": "void main()", "find": "gl_FragData[0] = color;", "body": "rt/complementary/refraction_water_out.glsl", "programs": ["gbuffers_water"],
          "needs": ["DoLighting", "DoFog", "GGX", "NdotU", "NdotUmax0", "lightVec", "upVec", "sunVec", "highlightColor"]},
-        {"function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
+        {"function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float) | void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
          "find": "vanillaAO = glColor.a;", "body": "rt/complementary/refraction_ao.glsl", "programs": ["gbuffers_water"]},
-        {"function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
+        {"function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float) | void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
          "find": "vanillaAO = vanillaAO * 0.9 + 0.1;", "body": "rt/complementary/refraction_ao_curve.glsl", "programs": ["gbuffers_water"]}
       ]
     },
@@ -70,11 +80,12 @@
       "uniforms": {"shadowModelViewInverse": "mat4", "shadowProjectionInverse": "mat4"},
       "needs": ["shadowMapBias", "shadowtex0", "shadowtex1", "shadowcolor0", "gaux4", "GetShadowPos", "cameraPosition", "frameTimeCounter"],
       "lifts": {
-        "waterNormals": {"program": "gbuffers_water", "function": "void main()", "at": "vec2 normalMed =", "statements": 4}
+        "waterNormals": {"program": "gbuffers_water", "function": "void main()", "at": "vec2 normalMed =", "statements": 4,
+          "otherwise": "vec2 normalMed = emrRtCaWaves(xz, wind), normalSmall = vec2(0.0), normalBig = vec2(0.0);"}
       },
       "patches": [
         {"function": "vec3 SampleShadow(vec3,float,float)", "find": "texture2D(shadowcolor0, shadowPos.st).rgb", "body": "rt/complementary/caustics_body.glsl"},
-        {"function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
+        {"function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float) | void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
          "after": "float NdotL = dot(normalM, lightVec);", "body": "rt/complementary/caustics_ndotl.glsl"}
       ]
     },
@@ -85,7 +96,7 @@
       "uniforms": {},
       "needs": [],
       "patches": [
-        {"function": "float GetAmbientOcclusion(sampler2D,float,float,float,float,float,float,vec3)", "body": "rt/complementary/ao_body.glsl"}
+        {"function": "float GetAmbientOcclusion(sampler2D,float,float,float,float,float,float) | float GetAmbientOcclusion(sampler2D,float,float,float,float,float,float,vec3)", "body": "rt/complementary/ao_body.glsl"}
       ]
     },
     "reflections": {
@@ -124,14 +135,19 @@
     "materials": {
       "requires": ["gbuffers_terrain"],
       "options": {},
-      "helpers": "rt/complementary/rtx/materials.glsl",
+      "helpers": "rt/complementary/rtx/materials_table.glsl",
       "uniforms": {},
       "needs": [],
       "library": false,
+      "lifts": {
+        "integrated": {"function": "void GetCustomMaterials(inout vec4,inout vec3,inout vec2,inout float,inout vec3,inout float,inout float,inout float,inout float,inout float,vec3,float) | void GetCustomMaterials(inout vec4,inout vec3,inout vec2,inout float,inout vec3,inout float,inout float,inout float,inout float,inout float,inout float,vec3,float)", "text": "false", "otherwise": "true"}
+      },
       "patches": [
-        {"function": "void GetCustomMaterials(inout vec4,inout vec3,inout vec2,inout float,inout vec3,inout float,inout float,inout float,inout float,inout float,inout float,vec3,float)",
+        {"function": "void GetCustomMaterials(inout vec4,inout vec3,inout vec2,inout float,inout vec3,inout float,inout float,inout float,inout float,inout float,vec3,float) | void GetCustomMaterials(inout vec4,inout vec3,inout vec2,inout float,inout vec3,inout float,inout float,inout float,inout float,inout float,inout float,vec3,float)",
          "after": "vec4 specularMap = texture2D(specular, texCoordM);", "body": "rt/complementary/rtx/materials.glsl",
-         "programs": ["gbuffers_terrain"], "needs": ["mat"], "bare": true}
+         "programs": ["gbuffers_terrain"], "needs": ["mat"], "optional": true},
+        {"function": "void main()", "find": "DoLighting(color, shadowMult,", "body": "rt/complementary/rtx/materials_integrated.glsl",
+         "programs": ["gbuffers_terrain"], "needs": ["mat"], "optional": true}
       ]
     },
     "blocklight": {
@@ -140,8 +156,11 @@
       "helpers": "rt/complementary/bl_buffer.glsl,rt/complementary/blocklight.glsl",
       "uniforms": {"frameCounter": "int"},
       "needs": [],
+      "lifts": {
+        "lightSource": {"function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)", "text": "isLightSource", "otherwise": "lightmap.x > 0.99"}
+      },
       "patches": [
-        {"function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
+        {"function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float) | void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
          "after": "blockLighting = mix(specialLighting, blockLighting, blocklightDecider);", "body": "rt/complementary/blocklight_apply.glsl"}
       ],
       "variants": {
@@ -150,14 +169,14 @@
             "clamp": "2.0", "filter": "1"},
           "helpers": "rt/complementary/rtx/bl_common.glsl,rt/complementary/rtx/blocklight.glsl",
           "patches": [
-            {"function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
+            {"function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float) | void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
              "after": "blockLighting = mix(specialLighting, blockLighting, blocklightDecider);", "body": "rt/complementary/rtx/blocklight_apply.glsl",
              "programs": ["gbuffers_basic", "gbuffers_line", "gbuffers_textured", "gbuffers_block", "gbuffers_entities",
               "gbuffers_lightning", "gbuffers_entities_glowing", "gbuffers_hand"]},
-            {"function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
+            {"function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float) | void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
              "after": "blockLighting = mix(specialLighting, blockLighting, blocklightDecider);", "body": "rt/complementary/rtx/blocklight_apply_terrain.glsl",
              "programs": ["gbuffers_terrain"]},
-            {"function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
+            {"function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float) | void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
              "after": "blockLighting = mix(specialLighting, blockLighting, blocklightDecider);", "body": "rt/complementary/rtx/blocklight_apply_hit.glsl",
              "programs": ["gbuffers_water"]}
           ],
@@ -211,7 +230,7 @@
       "needs": [],
       "patches": [
         {
-          "function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
+          "function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float) | void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
           "find": "vec3 sceneLighting = lightColorM * shadowLightMult + ambientColorM * ambientMult;",
           "body": "rt/complementary/gi_scene_lighting.glsl"
         }
@@ -264,7 +283,7 @@
           "uniforms": {"gbufferModelView": "mat4", "gbufferProjection": "mat4", "gbufferModelViewInverse": "mat4", "gbufferProjectionInverse": "mat4"},
           "patches": [
             {
-              "function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
+              "function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float) | void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
               "find": "vec3 sceneLighting = lightColorM * shadowLightMult + ambientColorM * ambientMult;",
               "body": "rt/complementary/rtx/gi_scene_lighting.glsl",
               "programs": ["gbuffers_basic", "gbuffers_line", "gbuffers_textured", "gbuffers_terrain", "gbuffers_block", "gbuffers_entities",

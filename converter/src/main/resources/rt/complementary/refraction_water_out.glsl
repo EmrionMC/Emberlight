@@ -59,7 +59,7 @@
 			// centerShadowBias (terrain-only, unused for water) marks a refraction hit: RTX block light then traces it as on terrain
 			emrRtHitRays = emrRt_refraction_sunRays; // TAA / DLSS average the per-frame jittered ray
 			DoLighting(emrLit, emrSh, emrHp, emrHv, emrLv, emrLn, emrLn, dither, emrHn, emrLm, emrNoSmooth, emrNoDir, false,
-				emrRt_refraction_blockLight != 0, emrSss, 0.0, 1.0, emrEm, emrPk, emrSource, emrDd, vec3(1.0));
+				emrRt_refraction_blockLight != 0, emrSss, 0.0, 1.0, emrEm @euphoriaArgs);
 			emrRtHitRays = 0;
 			emrRtRfAoIn = -1.0;
 			emrRtRfTerrain = false;
@@ -73,7 +73,7 @@
 				bool leaves = false;
 				if (subsurfaceMode != 0) { @subsurfaceHighlight }
 				@highlightMix
-				emrLit.rgb += lightHighlight * (subsurfaceHighlight + GGX(emrNv, emrNvp, lightVec, max(dot(emrNv, lightVec), 0.0), 0.0, 0.05)) * highlightColor;
+				emrLit.rgb += lightHighlight * (subsurfaceHighlight + GGX(emrNv, emrNvp, lightVec, max(dot(emrNv, lightVec), 0.0), 0.0 @euphoriaF0)) * highlightColor;
 			}
 			if (!emrEnt && !emrIsGlass && emrRtRfEmission(emrI, emrP) < 6.0) emrLit.rgb *= emrRtRfAo(emrHp, emrHn); // deferred1: the RT AO
 			float emrSf = 0.0;

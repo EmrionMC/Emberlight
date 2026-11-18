@@ -184,6 +184,19 @@ class PackRtTableTest {
 	}
 
 	@Test
+	void alternativeSignaturesAndTextLifts(@TempDir Path tmp) throws Exception {
+		// a pack version that changed the signature: either alternative matches; a text lift follows whichever the pack has
+		String alt = TABLE.replace("\"float getShadow(vec3)\"", "\"float getShadow(vec3,float) | float getShadow(vec3)\"")
+				.replace("\"patches\":", "\"lifts\": {\"v2\": {\"function\": \"float getShadow(vec3)\", \"text\": \"* 0.75\", \"otherwise\": \"* 0.5\"},"
+						+ " \"v3\": {\"function\": \"float getShadow(vec3,float)\", \"text\": \"* 0.25\", \"otherwise\": \"\"}},\n\"patches\":");
+		Map<String, String> files = pack(alt);
+		files.put("shaders/emberlight/shadow_body.glsl", "return tinyRtShadow(pos) @v2 @v3;\n");
+		var r = convert(folder(tmp.resolve("Tiny"), files), tmp.resolve("out"), Set.of("shadows"));
+		assertShadowsApplied(r);
+		assertTrue(Files.readString(r.outputDir().resolve("src/gbuffers_terrain.fsh.glsl")).contains("return tinyRtShadow(pos) * 0.75 ;"));
+	}
+
+	@Test
 	void authorErrorsAreReported(@TempDir Path tmp) throws Exception {
 		assertTrue(unavailable(tmp.resolve("a"), TABLE.replace("\"schema\": 1", "\"schema\": 99")).contains("schema 99 is not supported"));
 		assertTrue(unavailable(tmp.resolve("b"), TABLE.replace("\"schema\": 1,", "")).contains("missing \"schema\""));

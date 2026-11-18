@@ -12,4 +12,10 @@ public interface PackLoader {
 
 	/** @param environmentMacros standard macros from {@link StandardMacros}; MC_RENDER_STAGE_* and per-program ones are added here */
 	ResolvedPack load(PackSource source, Path settingsFile, Map<String, String> environmentMacros, Diagnostics diagnostics);
+
+	/** @param minimums option → lowest value the conversion needs (RT effects hook into code the pack only has from there on) */
+	default ResolvedPack load(PackSource source, Path settingsFile, Map<String, String> environmentMacros, Diagnostics diagnostics,
+	                          Map<String, String> minimums) {
+		return load(source, settingsFile, environmentMacros, diagnostics);
+	}
 }

@@ -1,1 +1,1 @@
-if (centerShadowBias) blockLighting = emrRtxBlockLightHit(blockLighting, playerPos, worldGeoNormal, isLightSource, lightmap.x);
+if (centerShadowBias) blockLighting = emrRtxBlockLightHit(blockLighting, playerPos, worldGeoNormal, @lightSource, lightmap.x);

@@ -36,6 +36,20 @@ class DefaultPackLoaderTest {
 				StandardMacros.build(StandardMacros.Environment.DEFAULT), d);
 	}
 
+	@Test
+	void minimumsRaiseLowerSettingsOnly() throws Exception {
+		basePack();
+		Path s = tmp.resolve("pack.txt");
+		var src = PackSource.open(tmp.resolve("pack"));
+		var env = StandardMacros.build(StandardMacros.Environment.DEFAULT);
+		Files.writeString(s, "QUALITY=1\n");
+		var raised = new DefaultPackLoader().load(src, s, env, new Diagnostics(), Map.of("QUALITY", "3", "UNKNOWN_OPTION", "1"));
+		assertEquals("true", raised.properties().get("quality.high"));
+		Files.writeString(s, "QUALITY=3\n");
+		var kept = new DefaultPackLoader().load(src, s, env, new Diagnostics(), Map.of("QUALITY", "2"));
+		assertEquals("true", kept.properties().get("quality.high")); // already above the minimum: not lowered
+	}
+
 	private void basePack() throws Exception {
 		write("shaders/lib/settings.glsl", """
 				#define BLOOM

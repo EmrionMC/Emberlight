@@ -50,6 +50,34 @@ public final class RtPatcher {
 		return apply(pack, request, null);
 	}
 
+	/** Pack option → lowest value the requested effects need, from the table {@link #apply} would use (empty: none). */
+	public static Map<String, String> packSettings(dev.emrion.shaders.converter.pack.PackSource src, Set<String> request) throws java.io.IOException {
+		RtPatchTable table;
+		try {
+			table = RtPatchTable.fromPack(src);
+			if (table != null && missing(src, table) != null) return Map.of();
+		} catch (IllegalArgumentException e) {
+			return Map.of();
+		}
+		if (table == null) for (String t : RtPatchTable.TABLES) {
+			RtPatchTable candidate = RtPatchTable.load(t);
+			if (missing(src, candidate) == null) { table = candidate; break; }
+		}
+		if (table == null || table.packSettings() == null) return Map.of();
+		Map<String, String> out = new TreeMap<>();
+		for (String r : request) {
+			var s = table.packSettings().get(r.indexOf(':') < 0 ? r : r.substring(0, r.indexOf(':')));
+			if (s != null) s.forEach((k, v) -> out.merge(k, v, (a, b) -> {
+				try {
+					return Double.parseDouble(a) >= Double.parseDouble(b) ? a : b;
+				} catch (NumberFormatException e) {
+					return a;
+				}
+			}));
+		}
+		return out;
+	}
+
 	/** The effects the table {@link #apply} would use for this pack offers; empty: no usable table (none, broken or for another version). */
 	public static Set<String> tableEffects(dev.emrion.shaders.converter.pack.PackSource src) throws java.io.IOException {
 		try {
@@ -192,7 +220,7 @@ public final class RtPatcher {
 					List<Match> m = matches(GlslParser.parse(t), t, effect, program);
 					if (m.isEmpty()) continue;
 					for (var patch : effect.patches()) // a stage that matches part of a program's patch set is never half-patched
-						if (patch.programs() != null && patch.programs().contains(program) && m.stream().noneMatch(x -> x.patch() == patch))
+						if (!patch.optional() && patch.programs() != null && patch.programs().contains(program) && m.stream().noneMatch(x -> x.patch() == patch))
 							throw new Unavailable(d.getKey() + ": patch '" + patch.function() + "' matched no function in " + program
 									+ " (the pack's version or settings differ)");
 					found.add(new StageMatch(p, s, m));
@@ -300,7 +328,7 @@ public final class RtPatcher {
 			String sig = signature(t, it);
 			for (var p : effect.patches())
 				// a find patch matches only where its anchor occurs: "void main()" also names the vertex stages
-				if ((p.programs() == null || p.programs().contains(program)) && normalise(p.function()).equals(sig)
+				if ((p.programs() == null || p.programs().contains(program)) && sameFunction(p.function(), sig)
 						&& (p.find() == null || contains(t, it, GlslLexer.lex(p.find())))) out.add(new Match(it, p));
 		}
 		return out;
@@ -338,6 +366,12 @@ public final class RtPatcher {
 			cur.add(x);
 		}
 		return GlslParser.text(t, fn.typeStart, fn.nameIdx) + " " + fn.name + "(" + String.join(",", params) + ")";
+	}
+
+	/** {@code function} of a patch or lift: one signature, or alternatives separated by '|' (a pack version that changed it). */
+	static boolean sameFunction(String function, String sig) {
+		for (String f : function.split("\\|")) if (normalise(f).equals(sig)) return true;
+		return false;
 	}
 
 	static String normalise(String sig) {
@@ -541,7 +575,8 @@ public final class RtPatcher {
 					});
 					List<Token> t = tp.getKey();
 					for (Item fn : tp.getValue()) {
-						if (fn.kind != ItemKind.FUNCTION || !normalise(l.function()).equals(signature(t, fn))) continue;
+						if (fn.kind != ItemKind.FUNCTION || !sameFunction(l.function(), signature(t, fn))) continue;
+						if (l.text() != null) return l.text();
 						why = take(l, t, fn, known);
 						if (!why.startsWith("!")) return why;
 						why = why.substring(1);

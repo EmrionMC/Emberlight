@@ -25,8 +25,23 @@ float emrRtCaWater(vec3 o, vec3 dir) {
 	return rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT ? -1.0 : rayQueryGetIntersectionTEXT(rq, true);
 }
 
+// Our own wave field for packs whose water has no normal map octaves to lift (Complementary's water style 1): eight
+// crossing sine ripples in world blocks, 0.3 to 2.6 blocks long, with deep-water style dispersion (angular speed ~ sqrt(k)).
+// What makes a caustic is the slope's curvature, slope * k: about 0.6 to 2.5 per block for each ripple, so even the thin
+// water a pool spreads over the floor focuses light into a visible network, as with the packs' own wave textures.
+vec2 emrRtCaRipple(vec2 p, float t, vec2 d, float k, float slope) {
+	return d * (slope * cos(k * dot(d, p) - 0.9 * sqrt(k) * t));
+}
+vec2 emrRtCaWaves(vec2 xz, vec2 wind) {
+	float t = -wind.y / 0.045; // seconds (times the speed option): the wind in emrRtCaSlope is -0.045 per second
+	return emrRtCaRipple(xz, t, vec2(0.9659, 0.2588), 2.42, 0.25) + emrRtCaRipple(xz, t, vec2(-0.5736, 0.8192), 3.70, 0.20)
+		+ emrRtCaRipple(xz, t, vec2(-0.3420, -0.9397), 5.71, 0.18) + emrRtCaRipple(xz, t, vec2(0.9063, -0.4226), 8.38, 0.18)
+		+ emrRtCaRipple(xz, t, vec2(0.1736, 0.9848), 12.57, 0.18) + emrRtCaRipple(xz, t, vec2(-0.9397, -0.3420), 16.98, 0.16)
+		+ emrRtCaRipple(xz, t, vec2(0.4226, -0.9063), 10.47, 0.18) + emrRtCaRipple(xz, t, vec2(-0.9397, 0.3420), 20.94, 0.12);
+}
+
 // Height-field slope of the water at world xz (surface height y): the pack's own water normal octaves (lifted from its
-// gbuffers_water), at the pack's water scale and wind.
+// gbuffers_water), at the pack's water scale and wind; emrRtCaWaves when it has none.
 vec2 emrRtCaSlope(vec2 xz, float y) {
 	vec2 waterPosM = 0.08 * (xz + 2.0 * y);
 	vec2 wind = vec2(0.0, -0.045 * frameTimeCounter * emrRt_caustics_speed);

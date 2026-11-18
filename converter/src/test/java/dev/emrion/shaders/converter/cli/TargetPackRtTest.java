@@ -165,7 +165,7 @@ class TargetPackRtTest {
 		assertEquals(List.of("blocklight", "blocklight:rtx", "gi", "gi:rtx", "materials", "reflections", "refraction", "refraction:entities", "refraction:glass=0",
 						"shadows", "shadows:entities", "shadows:rtx", "shafts"), r.manifest().rt().effects(), r.manifest().rt().unavailable().toString());
 		String fsh = Files.readString(r.outputDir().resolve("src/world0/gbuffers_terrain.fsh.glsl"));
-		for (String s : List.of("emrRtxShadowTerm(", "emrRtxBlockLight(", "emrRtxGi(", "emrRtxS = mat == 10264")) assertTrue(fsh.contains(s), s);
+		for (String s : List.of("emrRtxShadowTerm(", "emrRtxBlockLight(", "emrRtxGi(", "specularMap.rg = emrRtxMaterial(mat);", "return mat == 10264")) assertTrue(fsh.contains(s), s);
 		// RTX GI runs in prepare, before the gbuffers apply it (this frame's GI, no reprojection)
 		assertTrue(Files.readString(r.outputDir().resolve("src/world0/prepare_a.csh.glsl")).contains("emrGiBounceRtx("));
 		// RTX block light: ReSTIR in prepare_f..i, the gbuffers read its result; GI's bounce hits use the same source list

@@ -1,1 +1,1 @@
-blockLighting = emrRtxBlockLight(blockLighting, playerPos, worldGeoNormal, isLightSource, lightmap.x);
+blockLighting = emrRtxBlockLight(blockLighting, playerPos, worldGeoNormal, @lightSource, lightmap.x);

@@ -17,9 +17,11 @@ import java.util.Map;
  * @param schema  table format version ({@link #SCHEMA}); required in pack tables
  * @param pack    pack name and {@code version} the table targets (shown in diagnostics); required in pack tables
  * @param files   null: paths are classpath resources; else path → GLSL read from the pack at load (never taken from the JSON)
+ * @param packSettings effect → pack option → lowest value the effect needs (its patches hook into code the pack only compiles
+ *                from there on); raised for the RT conversion when the user's settings are below it. Null = none
  */
 public record RtPatchTable(String id, List<String> detect, Map<String, Effect> effects, Integer schema, String pack, String version,
-                           Map<String, String> files) {
+                           Map<String, String> files, Map<String, Map<String, String>> packSettings) {
 	/** Bundled tables tried in order after the pack's own; the first whose detect files all exist wins. */
 	public static final List<String> TABLES = List.of("rt/complementary-r5.json");
 	/** Newest table format this converter reads. */
@@ -28,7 +30,7 @@ public record RtPatchTable(String id, List<String> detect, Map<String, Effect> e
 	public static final String PACK_DIR = "shaders/emberlight/", PACK_TABLE = PACK_DIR + "rt.json";
 
 	public RtPatchTable(String id, List<String> detect, Map<String, Effect> effects) {
-		this(id, detect, effects, SCHEMA, null, null, null);
+		this(id, detect, effects, SCHEMA, null, null, null, null);
 	}
 
 	/** "id", or "id (pack version, from the pack)" for a pack table. */
@@ -83,7 +85,7 @@ public record RtPatchTable(String id, List<String> detect, Map<String, Effect> e
 				if (!files.containsKey(p))
 					files.put(p, src.readString(PACK_DIR + p)
 							.orElseThrow(() -> new IllegalArgumentException("effect " + e.getKey() + ": " + PACK_DIR + p + " not found")));
-		return new RtPatchTable(t.id(), detect, t.effects(), t.schema(), t.pack(), t.version(), Map.copyOf(files));
+		return new RtPatchTable(t.id(), detect, t.effects(), t.schema(), t.pack(), t.version(), Map.copyOf(files), t.packSettings());
 	}
 
 	/** Pack paths are plain relative paths: no absolute paths, '..', '.', backslashes, drive letters or other odd characters. */
@@ -182,14 +184,21 @@ public record RtPatchTable(String id, List<String> detect, Map<String, Effect> e
 	 *                 the body is inserted
 	 * @param find     null or a token sequence (exactly once in the body) replaced by {@code body}'s text; with neither,
 	 *                 {@code body} replaces the function body
+	 * @param optional a stage of one of {@code programs} need not match this patch (two patches for code a pack setting switches
+	 *                 between, where one of them is enough)
 	 */
-	public record Patch(String function, String body, List<String> programs, List<String> needs, boolean bare, String after, String find) {
+	public record Patch(String function, String body, List<String> programs, List<String> needs, boolean bare, String after, String find,
+	                    boolean optional) {
 		public Patch(String function, String body) {
 			this(function, body, null, null, false, null, null);
 		}
 
 		public Patch(String function, String body, List<String> programs, List<String> needs, boolean bare) {
 			this(function, body, programs, needs, bare, null, null);
+		}
+
+		public Patch(String function, String body, List<String> programs, List<String> needs, boolean bare, String after, String find) {
+			this(function, body, programs, needs, bare, after, find, false);
 		}
 	}
 
@@ -199,9 +208,11 @@ public record RtPatchTable(String id, List<String> detect, Map<String, Effect> e
 	 * {@code function} in the same stage type of {@code program}, null = the patched program; read before any effect patched it).
 	 * Every name they use must be declared in front of the {@code @name} marker (the snippet's own declarations, the patched
 	 * function's, the stage's globals) or be a GLSL built-in. When that fails or {@code at} is missing the effect is unavailable,
-	 * unless {@code otherwise} is given: then that text stands in (an INFO diagnostic says so).
+	 * unless {@code otherwise} is given: then that text stands in (an INFO diagnostic says so). With {@code text} instead of
+	 * {@code at}, nothing is taken from the pack: the marker becomes {@code text} when the pack has {@code function}, else
+	 * {@code otherwise} (a snippet that must follow a parameter list that differs between pack versions).
 	 */
-	public record Lift(String program, String function, String at, Integer statements, String otherwise) {}
+	public record Lift(String program, String function, String at, Integer statements, String otherwise, String text) {}
 
 	/** One compute program: the library, {@code helpers} and {@code body} (a whole compute stage; {@code $<option>} replaced). */
 	public record Compute(String program, List<String> helpers, String body) {

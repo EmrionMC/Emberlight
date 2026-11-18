@@ -152,7 +152,8 @@ public final class DefaultConverter implements Converter {
 		}
 
 		Result execute() throws IOException {
-			ResolvedPack pack = loader.load(source, request.settings(), environment.macros(), diagnostics);
+			ResolvedPack pack = loader.load(source, request.settings(), environment.macros(), diagnostics,
+					request.rt().isEmpty() ? Map.of() : dev.emrion.shaders.converter.glsl.RtPatcher.packSettings(source, request.rt()));
 			Manifest.Rt rt = null;
 			List<String> rtFrees = List.of();
 			if (!request.rt().isEmpty()) { // RT variant; an empty set never gets here
