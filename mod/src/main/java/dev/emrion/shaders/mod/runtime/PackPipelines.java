@@ -44,6 +44,8 @@ public final class PackPipelines {
 	public long clearSetLayout, clearLayout, clear2d, clear3d;
 	/** program name → VkPipeline (graphics for composite-like, compute for compute). */
 	public final Map<String, Long> pipelines = new java.util.concurrent.ConcurrentHashMap<>();
+	/** Compute programs compiled as ray generation shaders (RtRaygen): their SBT; the handle is in {@link #pipelines} too. */
+	public final Map<String, dev.emrion.shaders.mod.rt.RtRaygen.Pipeline> raygen = new java.util.concurrent.ConcurrentHashMap<>();
 	/** VkFormat → texel copy pipeline into that format. */
 	public final Map<Integer, Long> blit = new java.util.concurrent.ConcurrentHashMap<>();
 	/** Area-filter mip generation per colour format of the mipmapped targets (FrameExecutor.mipmaps). */
@@ -115,7 +117,7 @@ public final class PackPipelines {
 				counted(TOTAL);
 				jobs.add(CompletableFuture.runAsync(() -> {
 					checkCancelled();
-					pipelines.put(e.getKey(), build(cacheDir, p, targets, cache));
+					pipelines.put(e.getKey(), build(cacheDir, e.getKey(), p, targets, cache));
 					counted(BUILT);
 				}, pool));
 			}
@@ -152,18 +154,25 @@ public final class PackPipelines {
 		};
 	}
 
-	private long build(Path cacheDir, Manifest.Program p, Map<String, Manifest.Target> targets, long cache) {
+	private long build(Path cacheDir, String name, Manifest.Program p, Map<String, Manifest.Target> targets, long cache) {
 		if (p.kind().equals("compute")) {
-			long cs = module(cacheDir, p.stages().compute().spv());
+			byte[] spv = bytes(cacheDir, p.stages().compute().spv());
+			long cs = ShaderModules.create(ctx, spv);
 			try {
+				if (dev.emrion.shaders.mod.rt.RtRaygen.isRaygen(spv)) {
+					var rg = dev.emrion.shaders.mod.rt.RtRaygen.create(ctx, cs, layout, cache);
+					raygen.put(name, rg);
+					dev.emrion.shaders.mod.EmrionShadersClient.LOG.debug("{} runs as a ray generation shader", name);
+					return rg.handle();
+				}
 				return ComputePipelines.create(ctx, cs, layout, cache);
 			} finally {
 				ShaderModules.destroy(ctx, cs);
 			}
 		}
-		long vs = module(cacheDir, p.stages().vertex().variants().get("fullscreen"));
-		long fs = module(cacheDir, p.stages().fragment().spv());
+		long vs = module(cacheDir, p.stages().vertex().variants().get("fullscreen")), fs = 0; // destroying 0 is a no-op
 		try {
+			fs = module(cacheDir, p.stages().fragment().spv());
 			int[] formats;
 			Blend[] blends;
 			if (p.group().equals("final")) {
@@ -200,9 +209,9 @@ public final class PackPipelines {
 
 	/** Helper fullscreen pass from the mod jar. */
 	private long helper(String frag, int colorFormat) {
-		long vs = ShaderModules.create(ctx, ShaderModules.resource("/assets/emberlight/spv/fullscreen.vert.spv"));
-		long fs = ShaderModules.create(ctx, ShaderModules.resource("/assets/emberlight/spv/" + frag + ".frag.spv"));
+		long vs = ShaderModules.create(ctx, ShaderModules.resource("/assets/emberlight/spv/fullscreen.vert.spv")), fs = 0;
 		try {
+			fs = ShaderModules.create(ctx, ShaderModules.resource("/assets/emberlight/spv/" + frag + ".frag.spv"));
 			return new GraphicsPipelineBuilder().stage(VK_SHADER_STAGE_VERTEX_BIT, vs).stage(VK_SHADER_STAGE_FRAGMENT_BIT, fs).layout(helperLayout)
 					.colors(new int[] {colorFormat}).build(ctx, ctx.pipelineCache().handle);
 		} finally {
@@ -235,9 +244,13 @@ public final class PackPipelines {
 	}
 
 	private long module(Path cacheDir, String spv) {
+		return ShaderModules.create(ctx, bytes(cacheDir, spv));
+	}
+
+	private static byte[] bytes(Path cacheDir, String spv) {
 		if (spv == null) throw new IllegalStateException("program stage without SPIR-V");
 		try {
-			return ShaderModules.create(ctx, Files.readAllBytes(cacheDir.resolve(spv)));
+			return Files.readAllBytes(cacheDir.resolve(spv));
 		} catch (IOException e) {
 			throw new UncheckedIOException(e);
 		}
@@ -249,6 +262,7 @@ public final class PackPipelines {
 		if (defaults != null) defaults.destroyLater();
 		ctx.destroyLater(() -> {
 			pipelines.values().forEach(p -> vkDestroyPipeline(ctx.vk, p, null));
+			raygen.values().forEach(r -> r.sbt().destroyLater());
 			blit.values().forEach(p -> vkDestroyPipeline(ctx.vk, p, null));
 			mip.values().forEach(p -> vkDestroyPipeline(ctx.vk, p, null));
 			vkDestroyPipeline(ctx.vk, clear2d, null);

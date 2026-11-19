@@ -82,6 +82,14 @@ public final class GlslTranspiler implements Transpiler {
 
 	public static final String LIGHTMAP_MATRIX = "mat4(vec4(0.00390625, 0.0, 0.0, 0.0), vec4(0.0, 0.00390625, 0.0, 0.0), "
 			+ "vec4(0.0, 0.0, 0.00390625, 0.0), vec4(0.03125, 0.03125, 0.03125, 1.0))";
+	/**
+	 * The upscaler's sub-pixel jitter, added in clip space after the pack's vertex code (0 outside world/hand draws). Not in
+	 * gl_ProjectionMatrix: packs project with diagonal3(m) * v + m[3].xyz (Eclipse's projMAD), which drops the jitter terms,
+	 * while gbufferProjectionInverse keeps them, so their positions were off by the jitter every frame.
+	 * shortcut: a vertex stage multiplying by the (still jittered) gbufferProjection uniform gets the jitter twice; none of
+	 * the packs we test does, map it to emr_ProjMat in vertex stages if one shows up.
+	 */
+	static final String JITTER = "\tgl_Position.xy += emr_phase.emr_Jitter * gl_Position.w;\n";
 	static final String COMPOSITE_PROJECTION = "mat4(vec4(2.0, 0.0, 0.0, 0.0), vec4(0.0, 2.0, 0.0, 0.0), vec4(0.0), vec4(-1.0, -1.0, 0.0, 1.0))";
 
 	/** Vertex-decoding helpers of the terrain_sodium and clouds variants (shared with the native compiler). */
@@ -1236,6 +1244,7 @@ public final class GlslTranspiler implements Transpiler {
 			for (String l : epilogue) w.append('\t').append(l).append('\n');
 			if (s.type == StageType.FRAGMENT && fragData.contains(0)) w.append(alphaTest());
 			if (lastVertexStage && s.type != StageType.GEOMETRY && s.used("gl_Position")) {
+				if (p.geometry) w.append(JITTER);
 				w.append("\tgl_Position.z = (gl_Position.z + gl_Position.w) * 0.5;\n");
 			}
 			return w.append("}\n").toString();
@@ -1281,7 +1290,7 @@ public final class GlslTranspiler implements Transpiler {
 			h.put("emr_fsUV", "vec2 emr_fsUV() { int v = emr_fsVertexId(); return vec2(float(v == 1 || v == 2), float(v >= 2)); }");
 			h.put("emr_ftransform", "vec4 emr_ftransform() { return " + repl.getOrDefault("gl_ModelViewProjectionMatrix", "mat4(1.0)")
 					+ " * " + repl.getOrDefault("gl_Vertex", "vec4(0.0, 0.0, 0.0, 1.0)") + "; }");
-			h.put("emr_EmitVertex", "void emr_EmitVertex() { gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5; EmitVertex(); }");
+			h.put("emr_EmitVertex", "void emr_EmitVertex() { " + JITTER.strip() + " gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5; EmitVertex(); }");
 			h.put("emr_FrontColor", "vec4 emr_FrontColor;");
 			return h;
 		}

@@ -30,7 +30,8 @@ public final class Std140LayoutBuilder implements UniformLayoutBuilder {
 
 	/** EmrionPhase block (set 1 binding 1), fixed. */
 	public static final Manifest.Block PHASE = new Manifest.Block("EmrionPhase", 144, List.of(
-			member("emr_ProjMat", "mat4", 0), member("emr_ProjMatInverse", "mat4", 64), member("renderStage", "int", 128)));
+			member("emr_ProjMat", "mat4", 0), member("emr_ProjMatInverse", "mat4", 64), member("renderStage", "int", 128),
+			member("emr_Jitter", "vec2", 136)));
 
 	/** EmrionDraw push-constant block, fixed. */
 	public static final Manifest.Block PUSH = new Manifest.Block("EmrionDraw", 40, List.of(
@@ -39,7 +40,7 @@ public final class Std140LayoutBuilder implements UniformLayoutBuilder {
 
 	private static final Set<String> NOT_IN_BLOCK = Set.of(
 			"entityColor", "entityId", "blockEntityId", "currentRenderedItemId", "emr_alphaTestRef", "atlasSize",
-			"emr_ProjMat", "emr_ProjMatInverse", "renderStage");
+			"emr_ProjMat", "emr_ProjMatInverse", "renderStage", "emr_Jitter");
 
 	private final Function<String, Optional<UniformCatalog.Builtin>> catalog;
 

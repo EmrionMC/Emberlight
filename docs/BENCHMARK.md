@@ -1089,3 +1089,251 @@ mean / max of neighbouring pixel pairs per tile):
 So: the settings that gain ≥ 3 % change the image visibly, the settings that keep it identical gain nothing. The
 prototype is kept as `vrs-prototype.patch` next to the run scripts and outputs in
 a local test folder (not in the repo).
+
+## RT night perf pass (2026-11-19, `perf/rt-night`)
+
+Setup: LAN test server (the queue script), 2560×1386, the test instance's RT settings (`rtx`, full shadows
+with 4 rays and entities, GI medium with the radiance cache, block light 4 rays, AO, reflections, caustics, no refraction,
+trace distance 16), DLSS Quality requested (the dev run falls back to FSR Quality, render 1706×924), frame generation off,
+Emberlight PBR on, pinned `frameTimeCounter=100`, `-Demrion.autotest.profile=true` for the per-pass GPU times. Scenes
+(camera via `execute in overworld run tp`): overview 1373.7 162 1362.5 (-52/11, noon), neon street 1538.1 153.7 1447.2
+(night, the PBR neon), torch hall 323.1 -39 325.8 (cave), old-growth taiga 540 82 500 (135/20, forest), pool 566.7 66.5
+527.8 (water). Scripts and every log/shot: a local test folder (not in the repo) (`bin/bench.sh`,
+`bin/ab.sh`: per scene two shots for the noise floor, a bench, then each variant via `rtset extra=...` with shot + bench).
+
+**Where the RT time goes (Complementary, forest, ms GPU).** `gbuffers opaque` is 8.6 ms with RT, 2.5 ms without. Turning
+parts off one at a time: RT sun shadows 3.45 (4 rays; with 1 ray still 2.35: the first ray of a fragment pays most of the
+traversal), GI apply 2.5, RTX block-light lookup 0.7. The prepare passes (GI trace, ReSTIR, SHaRC) are 1–2 ms together.
+Most of the opaque cost is overdraw: leaf fragments that a nearer leaf covers later still trace their shadow rays and run
+the GI fallback search (up to 40 taps of the half-res GI buffers when no GI pixel matches).
+
+**Native Emberlight RTX pack:** 160–280 FPS in the same scenes (GPU 3.5–6 ms), no pass above 1.3 ms (rt_direct in the
+torch hall); the three à-trous steps (0.3 ms each, off with Ray Reconstruction), denoise, rt_gi and volumetrics are the
+largest. Nothing tried there gave a measurable gain (see below).
+
+| Change | Gain | Image |
+|---|---|---|
+| GI: a terrain fragment that raster draws over later skips the GI fallback search (`gi:hiddenMargin` 0.3; a huge margin turns it off). "Hidden" = RTX block light's full-res view ray (`emrBlG`, prepare_f) hit a surface more than 0.3 + 0.05·d blocks in front of the rasterised fragment (distance from `gl_FragCoord`, so POM does not count). GI declares the same image; without RTX block light nothing writes it and nothing is hidden (it still allocates one RGBA16F render-res image then) | forest gbuffers opaque, four runs: 8.25 → 7.47, 8.83 → 7.66, 8.81 → 7.44, and on test/all-current d22a8c9 8.95 → 8.39 ms (+3…8 % FPS); water −0.2 ms, cave −0.1 ms, overview and neon unchanged | forest: 0.3–0.9 % of the pixels differ by > 16/255 from the same build with the skip off, on bark and leaves right behind waving foliage near the camera (the TLAS holds the leaves unwaved, and the view ray tests alpha at mip 0 against 0.1, raster at the mip level against the pack's cutoff); no mean shift. Two stock frames of the same scene differed by up to 0.95 % in one run, so this is at the noise level but not provably zero |
+| GI radiance cache resolve: untouched entries update only their age row | prepare_k −0.02…0.04 ms | identical by construction |
+| Refraction: translucent-mask traces use the opaque flag (every candidate was confirmed anyway) | composite1 −0.05 ms with refraction on | identical (A/B within the reload noise) |
+| Native: a GI / glossy-reflection hit traces its block-light ray only when the lit sample could beat the lightmap floor (not at an emitter, not at lightmap 0) | torch hall rt_direct 1.32 → 1.05 ms (144.6 → 159.1 FPS); other scenes unchanged | identical up to float rounding (cave MAE 0.34 vs floor 0.33) |
+| Optional, off: `blocklight:hidden=1` also replaces the RT shadow rays of hidden terrain fragments by one shadow-map tap (`blocklight:hiddenMargin` 1.5) | forest opaque 8.95 → 6.69 ms with the GI skip (+14 % FPS), water −0.5 ms, cave −0.2 ms | 0.4–1.2 % of the forest pixels differ by > 16/255, darker texels on near waving leaves (same cause); margin 0.3: 0.8 %, 3.0: ~0.1 % for half the gain. Kept off |
+
+Base: `test/all-current` a59bc75, final numbers on d22a8c9 (merged). Tried, not kept: native `el_traceSurface` with the opaque flag (no change in rt_direct/resolve), GI hidden test on the
+half-res GI buffer (darkened leaves seen through holes), the hidden test on `playerPos` (POM pushes it into bricks: the
+neon street's walls changed), skipping hidden fragments with the RT shadow set to "lit" instead of a map tap (2.8 % pixels
+changed). The double TLAS build per frame (Codex) is fixed on `fix/codex-a-rt` already.
+
+## RT night perf pass 2 (2026-11-19, `perf/rt-night2`)
+
+Same setup as above. New method: an **in-run pack A/B** (a local test folder (not in the repo)):
+older pack states are extracted with `git archive` and linked into `shaderpacks/`, and one game run switches between them
+with `pack NAME`, benching every scene per pack, interleaved two or three times. The mod build is the same for all, so only
+shader changes are compared, and run-to-run noise (±8 %) drops out. Ignore the first two or three pack passes of a run:
+rt_gi is inflated there (warm-up), later passes repeat to ±0.02 ms.
+
+**The night's native regression is real** (base a59bc75 → 4d5ff13, FPS): overview 255 → 234, neon 215 → 205, torch hall
+154 → 150; forest and water got faster. Two causes, both from `fix/gi-light-night` (no other merged branch moved a pass):
+
+| Cause | Cost | Status |
+|---|---|---|
+| GI bounce hits sampled the sun disc with a point hashed per hit (`HIT_SUN_DISC`): neighbouring sun rays diverge | rt_gi +0.1 (overview), +0.25 (neon), +0.07 (torch hall), +0.15 (forest, water) ms | fixed: one disc point per frame for all hits; the history still averages the disc (rt_gi back to base, images identical within the shot floor) |
+| The block-light visibility ray at glossy reflection hits (`hitBlockLightTraced`), plus gi-round2's four rays per mirror hit | rt_direct +0.1…0.2 ms in overview, +0.05 neon | not changed (mirror2's area); without the glossy ray overview and neon images were identical, the torch hall changed (2 % pixels) |
+
+| Change | Gain | Image |
+|---|---|---|
+| Native GI: one sun-disc point per frame for every bounce hit | rt_gi overview 0.53 → 0.43, neon 0.77 → 0.49, torch hall 1.13 → 1.06, forest 0.79 → 0.64, water 0.79 → 0.65 ms; 234 → 241, 205 → 217, 176 → 182 FPS | identical within the shot-to-shot floor in all five scenes (stills; motion not compared, and no scene with a narrow sun opening was tested) |
+| Complementary RTX: leaf receivers trace two sun rays (`shadows:leafRays`, 0 = all) | forest gbuffers opaque 8.20 → 7.75 ms (mean of 7 and 6 benches over 4 runs, ~57.6 → 59 FPS) | stills within the reload floor; one ray (1.6 ms faster) left speckles in the canopy, not kept |
+
+## Terrain depth prepass (2026-11-19, `perf/compl-deferred-sun`)
+
+Same setup as the two passes above (`-Demrion.debug.terrainMarks=true` for per-pipeline GPU times and fragment counts; scripts
+and logs in a local test folder (not in the repo)). In the forest the opaque terrain ran 5.46 M fragment shader
+invocations for 1.58 M pixels (3.5 per pixel), and with RT every one of them traced its rays.
+
+Now, when the converter's `prepass` effect patched `gbuffers_terrain` (Complementary r5; on by default with RT, off with
+`rt.extra=noprepass` or `-Demrion.perf.prepass=false`), Sodium's opaque layers draw twice: a depth-only pass whose shader returns
+right after the pack's alpha test (push alpha ref 2), then the shading pass with depth writes off (same vertex SPIR-V,
+`invariant gl_Position`, LEQUAL), so only the fragment that stays visible shades and traces. The shading pass (alpha ref -2)
+skips every discard after the alpha test (the converter's alpha test on the final alpha, which POM resampling can lower;
+Euphoria's IPBR snow-layer dither), so the prepass coverage is final and no texel can end up with depth but no colour. Cost: a
+texel whose alpha drops below 0.5 only after the alpha test is now shaded instead of discarded (not the case in the user's
+settings).
+
+| Scene | gbuffers opaque terrain, ms (off → prepass, prepass included) | FPS |
+|---|---|---|
+| forest | 7.97 → 3.40, 7.26 → 3.51, 7.41 → 3.73 | 58 → 80, 60 → 77, 60 → 76 |
+| water | 3.58 → 2.60, 3.51 → 2.78, 3.56 → 2.79 | 81 → 88, 81 → 86, 80 → 86 |
+| cave | 1.51 → 1.04, 1.54 → 1.18, 1.57 → 1.14 | 84 → 88, 83 → 85, 83 → 86 |
+| overview | 2.46 → 2.06, 2.58 → 2.17, 2.55 → 2.13 | 105 → 110, 101 → 107, 103 → 110 |
+| neon street | 1.19 → 1.46, 1.09 → 1.48, 1.20 → 1.51 | 139 → 135, 137 → 131, 136 → 130 |
+
+(three runs, `ab1`, `ab3`, `ab4`; the last with the prepass as default and `noprepass` as the variant.) Neon has almost no overdraw, so it pays the extra vertex work (~0.3 ms). Prepassing only the cutout
+layer was slower (forest 4.33 ms, cave 1.80 ms). Images: every scene's prepass still matched a stock shot within the shot-to-shot
+floor (forest 0.04 % of pixels > 16/255, overview 0.04, cave 0.03, neon 0.01, water 1.2–1.3 % like its own floor); turning
+shots (40 frames at 0.6°/frame while moving) differed from stock no more than stock from itself (2–4 %, TAA under motion). Some
+shots taken 6 s after a reload (either mode) showed bark and walls without their normal maps / POM (0.84 % of the pixels): the PBR
+atlases were not back yet. With 20 s after each reload (`fin1`, forest, stock/prepass/stock/prepass interleaved) all four shots
+agree within 0.02–0.05 %, and opaque terrain was 8.01, 3.63, 7.47, 3.62 ms (56.6, 77.0, 59.3, 76.5 FPS).
+Not done: the deferred RT sun visibility idea (fullscreen visibility pass after opaque depth): Complementary lights in the
+gbuffers pass (DoLighting multiplies the shadow into colour there), so deferring it means splitting the pack's lighting into
+two outputs; with the prepass the gbuffers pass already traces once per pixel, which was most of that idea's gain.
+
+## Native pack and RT scene: amortization (2026-11-19, `perf/native-amortize`)
+
+Same setup as the passes above (test server, 2560×1386, FSR Quality fallback, Emberlight PBR, pinned time, per-pass GPU
+times). Shader changes were measured with in-run pack A/B (`pab.sh`: the pack states switched inside one game, scenes
+overview / neon street / torch hall / forest benched per pack, interleaved three times, the first pass dropped); mod
+changes with an in-run toggle or across runs. Scripts and all logs and shots: a local test folder (not in the repo).
+
+| Change | GPU time (ms, before → after) | FPS | Image |
+|---|---|---|---|
+| Volumetrics: a pixel with 8+ frames of valid history marches every other frame (checkerboard) and keeps its reprojected history in between; fresh pixels and underwater shafts every frame | volumetrics overview 0.38 → 0.27, neon 0.45 → 0.25, cave 0.97 → 0.49 | +3 / +5 / +7 % | stills at the shot floor; a moving turn through morning mist with sun shafts (40 frames, 0.6°/frame) shows no trails |
+| Volumetrics: the sun ray of a march step tests solid and translucent geometry in one ray first when the previous step was lit (the same alpha test, so the same result) | volumetrics overview 0.26 → 0.16, forest 0.40 → 0.31, neon 0.23 → 0.27, cave 0.51 → 0.53 | +2…5 % (see note) | stills and a slow pan (0.11°/frame, one half-res texel) at the floor |
+| A-trous: the 3×3 variance taps are reused by the 5×5 filter, the centre gets its known weight, plane test in view space | three passes overview 0.68 → 0.59, neon 0.99 → 0.81, cave 1.01 → 0.85 | +1…2 % | at the floor (same kernel) |
+| TLAS refit while the instance set is unchanged (camera moves shift all instances alike) | TLAS build 0.16 → 0.04, trace passes unchanged | ~+2 % | across runs at the floor |
+| Section BLAS compaction | (none) | – | across runs at the floor; BLAS memory 521 → 135 MiB |
+
+Flight at 40 blocks/s over fresh terrain with the native pack (all of the above on): 244 FPS average, 1 % low 114 FPS,
+99th percentile 7.7 ms, longest frame 11.8 ms, no frame over 20 ms; ~1100 BLAS compacted per second while streaming and
+the TLAS refitted on ~40 % of the frames.
+
+Tried, not kept:
+- Sun shadows in `rt_direct` with the same one-ray-first order, guessed from last frame's visibility: forest rt_direct
+  0.97 → 1.20 ms (dappled light guesses wrong and then pays three rays), neon +0.05, overview −0.03. The same for GI bounce
+  hits (guess: sky light): no change. The translucent ray of a lit surface is cheap; the one in the volumetrics is not.
+- `denoise` gathers with the plane test in view space (as in the a-trous change): denoise got 0.03–0.1 ms slower.
+- GI and reflection hits beyond 96 blocks shaded with the sky light estimate instead of a sun shadow ray: rt_gi overview
+  0.55 → 0.50 ms, nothing elsewhere; not worth the (small) image risk.
+
+Note on noise: pass times of passes a change does not touch moved by up to 0.1–0.2 ms between pack variants in the same run
+(`rt_gi` neon 0.83 vs 0.60 ms in run `ab3` between two packs that differ only in the volumetrics and a function rt_gi does
+not take the new path of), probably a different register allocation after the shared library changed. Only the gains in
+the passes a change touches are claimed above; the FPS column includes such effects.
+
+Combined shader changes, native pack of test/all-current 37e91b6 (run `ab2`) → this branch (run `ab3`), both on the build
+with the TLAS refit and compaction, FPS: overview 231 → 250, neon street 202 → 227, torch hall 149 → 165, forest 175 → 195
+(across two runs, so ±8 %; the pass times above are the reliable part).
+
+## After the prepass: profile and the next wins (2026-11-19, `perf/compl-after-prepass`)
+
+Same setup as the three sections above (scripts and logs: a local test folder (not in the repo); `bin/adab.sh`
+flips a runtime switch inside one run with the new autotest step `prop KEY VALUE`, so no reload separates A from B).
+
+**Where a frame goes now** (test/all-current 37e91b6, ms GPU unless noted; every scene is GPU-bound: the render thread waits
+5–10 ms per frame for the GPU and records for 2.5–3.3 ms):
+
+| | overview | neon | cave | forest | water |
+|---|---|---|---|---|---|
+| FPS | 108 | 130 | 84 | 78 | 85 |
+| gbuffers opaque (prepass included) | 2.16 | 1.49 | 1.24 | 3.69 | 2.89 |
+| fullscreen composite (the pack's SSR; RT only for translucent reflections) | 1.18 | 1.32 | 1.85 | 2.37 | 1.37 |
+| RT prepare passes (GI a–e, j–k; RTX block light f–i) | 1.3 | 0.9 | 4.3 | 1.6 | 1.1 |
+| shadowcomp (the pack's coloured-light floodfill, 512×256×512) | 0.73 | 0.70 | 0.71 | 0.68 | 0.74 |
+| clear of `voxel_img` (R16UI 512×256×512, 128 MiB, every frame) | 0.42 | 0.38 | 0.44 | 0.53 | 0.41 |
+| gbuffers translucent | 0.18 | – | 0.06 | 0.12 | 1.82 |
+| RT AO trace + filter | 0.23 | 0.36 | 0.43 | 0.49 | 0.39 |
+| shadow pass terrain | 0.38 | 0.37 | 0.42 | 0.96 | 0.73 |
+
+The torch hall's 4.3 ms are RTX block light: prepare_f 1.8 ms is the exact per-pixel loop over every source of the cell (U and
+the reservoir draw; capping the loop at 32 sources: 0.57 ms, so the hall's lists are far longer; the view ray alone 0.34 ms; the
+visibility ray and the temporal reuse cost nothing measurable; a conservative distance prune before `emrBlSourceAt` saved
+nothing, most listed sources are in reach), prepare_g 0.85 ms of which 0.53 ms are the bias-correction rays (`blocklight:bias=0`).
+Both are quality features; handed to the `cpass` worker together with composite and AO.
+
+| Change | Gain | Image |
+|---|---|---|
+| Adaptive terrain prepass (`pipeline.TerrainPrepass`): two pipeline-statistics queries count the fragment shader invocations of the prepass and of the shading pass. Ratio below 1.12 for 8 frames: Sodium's plain draws; every 20th frame still prepasses to measure, back on at 1.2. Measured ratios: street 1.02, overview 1.38–1.48, torch hall 1.55, pool 1.45, forest 2+ (helper lanes count: occlusion counts read 1.16 in the overview, where the prepass still saves 0.4 ms) | neon opaque 1.39 → 1.11, 1.37 → 1.12 ms, 128 → 132 FPS (two runs); on test/all-current af3c00d 1.50 → 1.26 ms, 137.6 → 141.0 FPS; the other four scenes keep the prepass (unchanged) | same image by construction (the plain draw is the old no-prepass path); shots of both modes match within the shot-to-shot floor in all five scenes |
+
+Tried, not kept:
+- **RTX sun shadow rays shared across the 2x2 quad** (subgroup quad swaps; each lane traces its own disk stratum, takes its quad
+  neighbours' samples and traces the missing strata). With helper lanes contributing: forest opaque −0.37 ms, water −0.41 ms, but
+  the contact shadows of plants on the ground faded (helper lanes behind the prepass depth returned unshadowed samples). Without
+  helper samples and only on solid receivers: forest opaque +0.3 ms, overview +0.2 ms, composite +0.05 ms everywhere (bigger
+  shader), water −0.17 ms — a net loss. The diff is kept in `cprof/share-final.diff`.
+- Making the prepass cheaper instead: the prepass costs the vertex work of the pack's terrain vertex shader for both opaque layers
+  (neon: 0.21 + 0.13 ms with 0 cutout fragments); a position-only vertex shader would need bit-identical `gl_Position`.
+- Clearing only the written tiles of `voxel_img`: every shadow vertex shader variant would have to mark tiles (atomics per vertex
+  in the shadow pass) for at most the 0.4 ms of the clear; not tried.
+
+Not changed, for the record: entities and block entities cost < 0.15 ms in these scenes ("other" in the opaque pass), so no
+prepass for them; the water pass's +0.7 ms over RT off is RT sun shadows (4 rays per water pixel) and GI on the surface; CPU:
+the prepass adds ~0.1 ms of draw recording (gone where the adaptive prepass skips it); no scene is CPU-bound.
+
+## Complementary RT passes: reflections and block light (2026-11-19, `perf/compl-rtpasses`)
+
+Same setup as above (test server, 2560×1386, FSR Quality fallback, Emberlight PBR, pinned time, per-pass GPU times); every
+change A/B'd inside one run with `rtset extra=<effect>:<option>=…` toggles, interleaved; scripts, logs and shots:
+a local test folder (not in the repo) (`bin/ab.sh`, the mirror room at 1503.5 152.6 1440.5 added as a scene).
+
+**Where composite's time goes.** With the RT trace in `voxelRayTrace` disabled (a measurement switch, not kept) composite drops
+from 2.57 to 0.68 ms in the forest, 1.58 → 0.51 in the cave and 1.23 → 0.46 in the overview: the pack's SSR is the smaller
+part, the RT reflection fallback (the TLAS ray and the pack's `getShadedReflection` per hit) the larger. It runs on nearly
+every pixel because Emberlight PBR gives every untuned block smoothness 0.22 / F0 0.04, which with world-space reflections on
+makes the pack's fresnelM at least ~0.04 (`deferred1`); skipping pixels with fresnelM below 0.003 or 0.01 changed nothing.
+Every hit ran the full 4-ray RTX sun shadow.
+
+| Change | GPU time (ms, before → after) | FPS | Image |
+|---|---|---|---|
+| Reflection hits trace 2 sun shadow rays (`reflections:sunRays`, 0 = the terrain's count) | composite overview 1.24 → 0.94, neon 1.33 → 1.06, cave 1.85 → 1.26, forest 2.19–2.56 → 1.77, water 1.15–1.37 → 1.04, mirror room 0.89–1.11 → 0.85 (two interleaved passes) | +4 / +4 / +5 / +3–7 / +1 / ±0 % | stills at the shot floor in all six scenes; turn shots (overview, forest) within the alignment noise; Codex image review: OK in all pairs |
+| (the same, confirmation run `fin2` on test/all-current ca71dcd, 4 rays vs 2 interleaved twice) | composite overview 1.26 → 1.23, neon 1.32 → 1.19, cave 1.84 → 1.57, forest 2.57 → 2.34, water 1.36 → 1.31 | within the ±3 % run noise | stills at the floor |
+| RTX block light pass 1 (prepare_f) stages the cell's source list through shared memory when the whole 8×8 group reads one cell; groups across cells walk it directly; same candidates in the same order | torch hall prepare_f 1.45–1.50 → 1.25–1.32; other scenes unchanged | +1–2 % (cave) | identical by construction (stills at the floor) |
+
+Tried, not kept:
+- A conservative distance prune of the light list before `emrBlSourceAt` (as cprof found: most listed sources are in reach) and
+  skipping the bias-correction rays where the reservoir's weight sum is 0 (exact): no measurable change.
+- The GI apply's fallback ring search capped at radius 8 or 4 (from 32): no change in gbuffers opaque. With the whole search
+  off (measurement only) forest opaque was −0.3 ms and the stills just above the floor; GI apply as a whole costs ~0.85 ms in
+  the forest (RT GI off: opaque 2.98 → 2.13 ms), RTX block light's lookup ~0.15 ms.
+- 1 sun ray at every reflection hit: 0.1–0.2 ms faster than 2 rays, a little more change on sunlit floors.
+- 1 sun ray only for rough reflectors (the pack's smoothness < 0.5, read from colortex6): run `ab9` measured composite forest
+  2.32 → 2.13, cave 1.41 → 1.18, water 1.34 → 1.02 ms (Codex image review OK), but the confirmation run `fin1` had water
+  and forest 0.1–0.2 ms slower than the old 4-ray reflections, consistently over two interleaved passes, and the variant with
+  2 rays for every hit plus the colortex6 read was 0.3 ms slower in water than plain 2 rays. Not robust, not kept.
+
+Open: prepare_f's loop is ALU-bound once staged (the torch hall's cells list hundreds of sources, and each pixel computes U
+exactly); a cheaper U needs an estimator that stays smooth (U is the denominator of the filtered ratio). prepare_g's
+bias-correction rays (0.5 ms there) and the `voxel_img` clear (0.4–0.5 ms, the user's COLORED_LIGHTING 512) are unchanged.
+
+## Water surface with RTX (2026-11-19, `perf/compl-water`)
+
+Same bench setup (scripts and logs: a local test folder (not in the repo); `bin/ab2.sh` interleaves old and new
+twice in one run, then turnshots). Pool scene, translucent pass:
+
+| Change | Gain | Image |
+|---|---|---|
+| GI on the water surface without the nearest-surface search (`gi:waterSearch=0`): the GI view ray skips translucents, so water never has a GI surface of its own and the 40-tap ring search failed on almost every water pixel, falling back to the pack's ambient anyway | −0.30 ms | no tile of the pool off by more than the shot-to-shot floor (no bias near the rim) |
+| 2 RTX sun rays on the water surface, 1 beyond `shadows:farDist` (`shadows:waterRays=2`; was 4/2). Glass and ice keep 4 | −0.12 ms (1 ray: another −0.04, not taken) | stills and motion turnshots within the floor; grain metric unchanged; Codex: no visible regression |
+| both | translucent 1.88/1.85 → 1.47/1.45 ms, 80.1/81.7 → 83.7/85.5 FPS (two interleaved pairs); overview 0.18 → 0.15 ms; forest unchanged | |
+
+Measured, not changed: RT caustics cost 0.2 ms of the pool's opaque pass (caustics off: 2.82 → 2.61 ms); a forward-difference
+caustic would save one of its five wave lookups, too little to be worth a different pattern. What is left of the water pass is
+mostly the pack's own (its reflections in gbuffers_water).
+
+## Complementary RT reflections: rough reflectors at a quarter rate (2026-11-19, `perf/compl-rough-refl`)
+
+Same bench setup; scripts, logs and shots: a local test folder (not in the repo) (`bin/abm.sh` interleaves
+variants and adds turnshot frame sequences; `bin/tile.py` adds a 16 px checkerboard metric to the image diff).
+
+**Without the Emberlight PBR pack (the user's setup: vanilla + Continuity).** Composite with the RT reflection trace on vs off
+(measurement switch, not kept), before the bughunt merge: overview 0.21 → 0.09 ms, cave 0.10 → 0.05, forest 0.09 → 0.04,
+neon street 0.90 → 0.34, water 0.68 → 0.05. Neon's cost came from the RTX material table's 0.58 smoothness on bricks/blackstone
+(dropped in f67b509: neon composite is now 0.06 ms). What is left is the water surface (0.69 ms, translucent path, no history):
+half of it is hit shading (~0.3 ms, 2 → 1 sun rays −0.17 ms), half the ray. Not changed here.
+
+**With the PBR pack** every untuned block has smoothness 0.22 (`tools/materials.py` DEFAULT, deliberately like ROUGH_STONE,
+FOLIAGE 0.38, WOOD 0.42; left as is). The pack blends only ~3.5 % of a new reflection per frame below smoothness ~0.7
+(colortex7 history), so rough opaque reflectors (smoothness < `reflections:halfBelow` 0.7, not entities or translucents) now
+trace one frame in four (`halfRate`) per 16×16 tile (`halfTile`, whole warps skip) and take 4× the blend on that frame. Skipped
+frames copy the history; tiles whose history reprojects off screen (edge revealed by a turn) trace anyway; over a poor history
+(disocclusion) a skipped frame keeps the old depth so the next traced frame replaces it.
+
+| Change | GPU time (composite, ms) | FPS | Image |
+|---|---|---|---|
+| rough reflectors 1 frame in 4 per 16 px tile (PBR on) | forest 2.37/2.42/1.79 → 1.77/1.77/1.14, cave 1.42/1.15/1.14 → 1.08/1.11/0.84 (three interleaved pairs, run `m1`; the forest base itself switches between ~2.4 and ~1.8 between passes); mirror room unchanged (smooth) | forest +6–8 %, cave +1–6 % | stills at the shot floor (forest, cave, mirror); turnshot sequences slow (0.4°/frame) and fast (2.5°/frame + 0.08 block/frame) slightly above the floor in the cave, no 16 px pattern (checker metric ≈ 0); Codex image reviews (stills, motion pairs, 4-frame sequences): OK |
+| (same, PBR off) | no change (neon, water, overview, forest, cave within ±0.01 ms after f67b509) | ±0 | identical |
+
+Tried, not kept: 8 px tiles (half the gain of 16 px at rate 2), rate 2 (forest −0.3 to −0.6 ms), and letting a skipped frame
+blend its RT-less result in where the history is poor: that is mostly sky and brightened foliage reflections by ~0.7 levels.
+Also fixed on the way: an optional `main()` patch matched the Nether composite (no world-space reflections), which made the
+whole reflections effect unavailable; a stage that matches only optional patches is now left out with an INFO note.

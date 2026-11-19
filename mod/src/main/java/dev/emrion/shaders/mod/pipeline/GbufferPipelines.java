@@ -37,11 +37,26 @@ import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
+import org.jspecify.annotations.Nullable;
 
 /** Every gbuffers pipeline of a pack dimension, built at pack load (Iris's program choice per vanilla pipeline); nothing is created in a frame. */
 public final class GbufferPipelines {
 	/** SHADOW draws without backface culling (Iris ShadowRenderer); BLOCK_ENTITY maps entity programs to gbuffers_block, as Iris. */
-	public enum Context { WORLD, HAND_SOLID, HAND_TRANSLUCENT, SHADOW, BLOCK_ENTITY }
+	public enum Context { WORLD, HAND_SOLID, HAND_TRANSLUCENT, SHADOW, BLOCK_ENTITY, TERRAIN_PREPASS, TERRAIN_MAIN }
+
+	/**
+	 * Terrain depth prepass (the converter's "prepass" effect; SodiumWorldRendererMixin draws the opaque layers twice): set to
+	 * TERRAIN_PREPASS (depth only, the shader stops after the alpha test) or TERRAIN_MAIN (shading without depth writes, so only the
+	 * fragment the prepass kept passes the depth test) around Sodium's opaque terrain draws; null otherwise. Render thread only.
+	 */
+	public static @Nullable Context terrainMode;
+	/**
+	 * Push-constant alpha refs: TERRAIN_PREPASS returns after the pack's alpha test (above 1.5); TERRAIN_MAIN (below -1.5) skips
+	 * every later discard (the converter's alpha test, Euphoria's snow fade), so it never leaves a texel the prepass kept uncoloured.
+	 */
+	private static final float PREPASS_REF = 2f, MAIN_REF = -2f;
+	/** This dimension's conversion has the prepass patch: its Sodium opaque terrain has TERRAIN_PREPASS/MAIN pipelines. */
+	public boolean prepass;
 
 	/** The colortex targets written by any gbuffers program, by index. */
 	public final List<String> targets;
@@ -57,7 +72,7 @@ public final class GbufferPipelines {
 	private final Map<RenderPipeline, FrontendRenderPipeline>[] byContext;
 	private final List<FrontendRenderPipeline> all = new ArrayList<>();
 
-	private record Key(String program, String variant, RenderPipeline vanilla, boolean hidden, boolean shadow) {}
+	private record Key(String program, String variant, RenderPipeline vanilla, boolean hidden, boolean shadow, @Nullable Context terrain) {}
 
 	/** The program and variant chosen for one vanilla pipeline in one context; {@code line} is its mapping-table entry (null: not logged). */
 	private record Resolved(Key key, GbufferMapping.Entry entry, FrontendRenderPipeline compiled, String line) {}
@@ -99,6 +114,9 @@ public final class GbufferPipelines {
 		this.set1Layout = set1Layout;
 		this.pushSize = manifest.uniforms().pushConstants().size();
 		this.serving = serving;
+		// programs of this dimension the converter's prepass effect patched (it may skip a dimension or a fallback program)
+		String folder = manifest.dimensions().entrySet().stream().filter(x -> x.getValue() == dim).map(Map.Entry::getKey).findFirst().orElse("");
+		List<String> patched = manifest.rt() == null ? List.of() : manifest.rt().patched().getOrDefault("prepass", List.of());
 		Map<Key, CompletableFuture<FrontendRenderPipeline>> jobs = new HashMap<>();
 		byContext = new Map[Context.values().length];
 		Map<RenderPipeline, Key>[] keys = new Map[byContext.length];
@@ -107,7 +125,9 @@ public final class GbufferPipelines {
 			keys[c.ordinal()] = new IdentityHashMap<>();
 			if (c == Context.SHADOW && !serving.containsKey("shadow")) continue; // no shadow program: no shadow pass in this dimension
 			for (var raw : vanilla.entrySet()) {
+				if (terrain(c) && !sodiumOpaque(raw.getKey())) continue;
 				Resolved r = resolve(c, raw.getKey(), raw.getValue());
+				if (terrain(c) && (r.key().program() == null || !patched.contains(folder + "/" + r.key().program() + ".fsh"))) continue;
 				keys[c.ordinal()].put(raw.getKey(), r.key());
 				jobs.computeIfAbsent(r.key(), kk -> {
 					owner.counted(PackPipelines.TOTAL);
@@ -139,12 +159,21 @@ public final class GbufferPipelines {
 			all.add(j.join());
 			grouped(k, j.join());
 		});
+		// both opaque layers need both variants, else the prepass would draw with a colour-writing pipeline. Sodium's pipelines
+		// are cached statically, so the ones known now are the ones it draws with; a late one gets the plain pipeline on both draws.
+		prepass = byContext[Context.TERRAIN_PREPASS.ordinal()].size() == 2 && byContext[Context.TERRAIN_MAIN.ordinal()].size() == 2;
 		table.sort(Comparator.naturalOrder());
 		EmrionShadersClient.LOG.info("Gbuffers attachments {}; {} pipelines; mapping:\n  {}", groups.size() == 1 ? targets : "in groups " + groups + " " + programGroup,
 				all.size(), String.join("\n  ", table));
 	}
 
 	public FrontendRenderPipeline get(Context c, RenderPipeline vanilla) {
+		if (c == Context.WORLD && terrainMode != null) {
+			FrontendRenderPipeline t = byContext[terrainMode.ordinal()].get(vanilla);
+			if (t != null) return t;
+			// Sodium recreated its pipelines (a changed option): the plain one draws this frame, no prepass from the next
+			prepass = false;
+		}
 		FrontendRenderPipeline f = byContext[c.ordinal()].get(vanilla);
 		// Sodium and other mods (particlerain, ...) create pipelines after pack load; a vanilla pipeline in a pack pass would crash (attachment count)
 		if (f == null && !byContext[c.ordinal()].containsKey(vanilla)) {
@@ -188,6 +217,17 @@ public final class GbufferPipelines {
 		}
 	}
 
+	private static boolean terrain(Context c) {
+		return c == Context.TERRAIN_PREPASS || c == Context.TERRAIN_MAIN;
+	}
+
+	/** Sodium's solid and cutout terrain pipelines (the ones SodiumWorldRendererMixin draws twice). */
+	private static boolean sodiumOpaque(RenderPipeline p) {
+		GbufferMapping.Entry e = GbufferMapping.get(p);
+		return p.getLocation().getNamespace().equals("sodium") && e != null
+				&& (e.program().equals("gbuffers_terrain_solid") || e.program().equals("gbuffers_terrain_cutout"));
+	}
+
 	private Resolved resolve(Context c, RenderPipeline p, FrontendRenderPipeline raw) {
 		boolean shadow = c == Context.SHADOW;
 		FrontendRenderPipeline compiled = extended(raw);
@@ -197,7 +237,7 @@ public final class GbufferPipelines {
 		String world = e.program();
 		if (shadow) e = GbufferMapping.shadow(e);
 		if (c == Context.BLOCK_ENTITY) e = GbufferMapping.blockEntity(e);
-		String iris = c == Context.WORLD || c == Context.BLOCK_ENTITY || shadow ? e.program() : GbufferMapping.handProgram(e);
+		String iris = c == Context.WORLD || c == Context.BLOCK_ENTITY || shadow || terrain(c) ? e.program() : GbufferMapping.handProgram(e);
 		boolean hidden = c == Context.HAND_SOLID && e.translucent() || c == Context.HAND_TRANSLUCENT && !e.translucent();
 		String program = null, variant = null, why = variants.isEmpty() ? "no vertex variant for " + compiled.vertexFormats() : null;
 		search:
@@ -220,9 +260,9 @@ public final class GbufferPipelines {
 			}
 			if (why == null) why = prog + " has none of " + variants;
 		}
-		String line = c == Context.WORLD || shadow || !iris.equals(world)
+		String line = c == Context.WORLD || shadow || terrain(c) || !iris.equals(world)
 				? c + " " + p.getLocation() + " -> " + iris + " => " + (program == null ? "(nothing drawn: " + why + ")" : program + "[" + variant + "]") : null;
-		return new Resolved(new Key(program, variant, p, hidden, shadow), e, compiled, line);
+		return new Resolved(new Key(program, variant, p, hidden, shadow, terrain(c) ? c : null), e, compiled, line);
 	}
 
 	/** The colour attachments a pass in context {@code c} opens with. */
@@ -454,7 +494,7 @@ public final class GbufferPipelines {
 				int[] remap = new int[p.outputs().stream().mapToInt(Manifest.Output::location).max().orElse(-1) + 1];
 				Blend vanillaBlend = GeometryPipelines.vanillaBlend(vanilla);
 				// vanilla depth-only draws (boat water mask) stay depth-only, as under Iris which keeps the GL colour mask
-				boolean noColor = k.hidden() || !vanilla.colorTargetStates().isEmpty() && vanilla.colorTargetStates().getFirst().writeMask() == 0;
+				boolean noColor = k.hidden() || k.terrain() == Context.TERRAIN_PREPASS || !vanilla.colorTargetStates().isEmpty() && vanilla.colorTargetStates().getFirst().writeMask() == 0;
 				for (var o : p.outputs()) {
 					int i = attachments.indexOf(o.target());
 					remap[o.location()] = i;
@@ -478,11 +518,13 @@ public final class GbufferPipelines {
 				modules.add(ShaderModules.create(ctx, fs));
 				b.stage(VK_SHADER_STAGE_FRAGMENT_BIT, modules.getLast());
 				if (p.alphaTest() != null) alphaRef = p.alphaTest().ref();
+				if (k.terrain() != null) alphaRef = k.terrain() == Context.TERRAIN_PREPASS ? PREPASS_REF : MAIN_REF;
+				if (k.terrain() == Context.TERRAIN_MAIN) b.depthWrite(false);
 			}
 			if (k.hidden() || k.program() == null) b.depth(VK_FORMAT_D32_SFLOAT, true, false, VK_COMPARE_OP_LESS_OR_EQUAL);
 			long pipeline;
 			try {
-				pipeline = b.colors(formats, blends).writeMasks(masks).layout(layout).label(k.program() + "[" + k.variant() + "] " + k.vanilla().getLocation() + (k.hidden() ? " hidden" : "")).build(ctx, ctx.pipelineCache().handle);
+				pipeline = b.colors(formats, blends).writeMasks(masks).layout(layout).label(k.program() + "[" + k.variant() + "] " + k.vanilla().getLocation() + (k.hidden() ? " hidden" : "") + (k.terrain() != null ? " " + k.terrain() : "")).build(ctx, ctx.pipelineCache().handle);
 			} catch (RuntimeException failed) { // the wrapped pipeline would own these
 				org.lwjgl.vulkan.VK10.vkDestroyPipelineLayout(ctx.vk, layout, null);
 				org.lwjgl.vulkan.VK10.vkDestroyDescriptorSetLayout(ctx.vk, set0Layout, null);

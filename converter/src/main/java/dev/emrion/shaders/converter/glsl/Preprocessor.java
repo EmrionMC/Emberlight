@@ -62,12 +62,16 @@ public final class Preprocessor {
 	private PpLexer lexer;
 	/** Tokens all macro expansions may still produce (exponential macro chains); see {@link #EXPANSION_BUDGET}. */
 	private long budget = EXPANSION_BUDGET;
+	/** Nesting of argument pre-expansion; {@code I(I(I(...)))} thousands deep would overflow the Java stack. */
+	private int depth;
+	private boolean depthWarned;
 	/** The last emitted token ended where an expansion began or ended: a following token must not merge with it. */
 	private boolean boundary;
 	private PpToken last;
 
 	/** Per run: the most any stage of the 20 test packs needs is under 7,000 tokens; bounds time and output (tens of MB). */
 	static final long EXPANSION_BUDGET = 5_000_000;
+	static final int MAX_ARG_DEPTH = 256;
 	/** Zero-width space around expansion results: {@link #emit} keeps the tokens on both sides apart ({@code 1.0-BIAS}). */
 	private static final PpToken BOUNDARY = new PpToken(Kind.WS, "", 0, Set.of(), false);
 
@@ -386,6 +390,20 @@ public final class Preprocessor {
 	// ---- macro expansion (Prosser's hide-set algorithm) ---------------------------------------------------------------
 
 	private List<PpToken> expandList(List<PpToken> tokens) {
+		if (depth >= MAX_ARG_DEPTH) {
+			if (!depthWarned) warn(lexer == null ? 0 : lexer.line(), "Macro arguments nested deeper than " + MAX_ARG_DEPTH + " levels; the rest stays unexpanded");
+			depthWarned = true;
+			return tokens;
+		}
+		depth++;
+		try {
+			return expandListNested(tokens);
+		} finally {
+			depth--;
+		}
+	}
+
+	private List<PpToken> expandListNested(List<PpToken> tokens) {
 		Deque<PpToken> q = new ArrayDeque<>(tokens);
 		Source src = new Source() {
 			public PpToken next() {

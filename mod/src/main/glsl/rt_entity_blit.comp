@@ -1,5 +1,6 @@
 #version 450
-// RT entities: copies one entity texture's base mip into the entity atlas (RtEntities.place).
+// RT entities: copies one entity texture's base mip into the entity atlas (RtEntities.place), halved as often as needed for
+// textures above RtEntities.MAX_TEXTURE (nearest: at 1:1 exactly the texel).
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(set = 0, binding = 0) uniform sampler2D src;
 layout(set = 0, binding = 1, rgba8) uniform writeonly image2D dst;
@@ -7,5 +8,5 @@ layout(push_constant) uniform Push { ivec4 rect; }; // x, y, w, h
 void main() {
     ivec2 p = ivec2(gl_GlobalInvocationID.xy);
     if (any(greaterThanEqual(p, rect.zw))) return;
-    imageStore(dst, rect.xy + p, texelFetch(src, p, 0));
+    imageStore(dst, rect.xy + p, textureLod(src, (vec2(p) + 0.5) / vec2(rect.zw), 0.0));
 }

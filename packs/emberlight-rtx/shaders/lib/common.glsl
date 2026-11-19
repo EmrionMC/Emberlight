@@ -26,7 +26,10 @@ float ign(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00
 vec2 blueNoise2(ivec2 px, int salt) {
 	vec2 q = vec2(px) + 5.588238 * float(el_frame & 63) + float(salt) * vec2(23.0, 41.0);
 	vec2 q2 = vec2(px.yx) * vec2(1.0, -1.0) + 7.31 * float(el_frame & 63) + float(salt) * vec2(59.0, 17.0);
-	return vec2(ign(q), fract(ign(q2) + 0.61803399 * float((el_frame >> 6) & 15)));
+	// both dimensions move on every 64 frames: x alone repeated, so the sun cone and GI hemisphere radii a pixel ever
+	// took were the same 64 (a small opening stayed too dark or kept the same speckles)
+	float k = float((el_frame >> 6) & 15);
+	return vec2(fract(ign(q) + 0.75487767 * k), fract(ign(q2) + 0.61803399 * k));
 }
 
 float hash12(vec2 p) { return float(rtxHash(floatBitsToUint(p.x) * 31u + rtxHash(floatBitsToUint(p.y)))) * (1.0 / 4294967296.0); }
@@ -195,6 +198,11 @@ vec2 cameraMotion(vec3 world) {
 	return unjitteredUv(el_prevProjection, el_prevView, world + el_cameraPosition - el_prevCameraPosition)
 		- unjitteredUv(el_projection, el_view, world);
 }
+
+// How far a ray starts off the surface at view distance |world|: about a pixel's footprint (0.0015 blocks per block at 70
+// degrees FOV, as before), so it shrinks when zoomed in instead of lifting the origin past the feet and thin details that
+// the zoom shows large.
+float rayLift(vec3 world) { return 0.004 + 0.00214 * length(world) / el_projection[1][1]; }
 
 float rtxBoost() { return 0.6 + 0.4 * RTX_INTENSITY; }
 

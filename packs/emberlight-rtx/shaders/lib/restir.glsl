@@ -140,11 +140,11 @@ Reservoir rsMerge(Reservoir r[RS_MAXD], int cnt, bool centreVisible, inout Rng r
 ivec2 giJitter() { int f = el_frame & 3; return ivec2(f & 1, f >> 1); }
 bool rsSurface(ivec2 hp, out ivec2 px, out vec3 world, out vec3 p, out GNormal g) {
 	px = min(hp * 2 + giJitter(), ivec2(el_screenSize) - 1);
-	float depth = texelFetch(el_depth, px, 0).r;
+	float depth = texelFetch(el_depthNoHand, px, 0).r;
 	if (el_isSky(depth)) return false;
 	world = el_screenToWorld((vec2(px) + 0.5) / el_screenSize, depth);
 	g = decodeGNormal(texelFetch(gNormal, px, 0));
-	p = world + g.geo * (0.004 + 0.0015 * length(world));
+	p = world + g.geo * rayLift(world);
 	return true;
 }
 #endif

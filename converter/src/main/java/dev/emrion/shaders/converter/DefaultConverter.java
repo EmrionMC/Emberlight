@@ -113,7 +113,13 @@ public final class DefaultConverter implements Converter {
 	private static Result cached(Path dir, String key) throws IOException {
 		Manifest manifest = CacheDir.readValid(dir, key);
 		if (manifest == null || !Files.isRegularFile(dir.resolve(CacheDir.REPORT))) return null;
-		Report report = ManifestJson.read(dir.resolve(CacheDir.REPORT), Report.class);
+		Report report;
+		try {
+			report = ManifestJson.read(dir.resolve(CacheDir.REPORT), Report.class);
+		} catch (IOException | RuntimeException e) {
+			return null; // corrupt report: reconvert, commit replaces the entry
+		}
+		if (report == null || report.diagnostics() == null) return null;
 		return new Result(dir, manifest, report.diagnostics(), true, report.stagesCompiled(), report.stagesFailed());
 	}
 
@@ -578,11 +584,20 @@ public final class DefaultConverter implements Converter {
 
 		private static Manifest.SpvRef ref(String path) { return path == null ? null : new Manifest.SpvRef(path); }
 
-		/** Drops commands of programs that were planned but removed (failed). */
+		/**
+		 * Drops commands of programs that were planned but removed (failed). A failed final falls back to Iris's plain colortex0
+		 * blit; a failed full-screen pass becomes a copy of each target it writes from its read side, so the planned buffer
+		 * flips still find this frame's data (the pass acts as a pass-through).
+		 */
 		private static List<Manifest.Command> withoutPrograms(List<Manifest.Command> commands, Map<String, Manifest.Program> kept,
 		                                                     Map<String, Manifest.Program> planned) {
 			if (commands == null) return null;
-			return commands.stream().filter(c -> c.program() == null || kept.containsKey(c.program()) || !planned.containsKey(c.program())).toList();
+			return commands.stream().<Manifest.Command>mapMulti((c, out) -> {
+				if (c.program() == null || kept.containsKey(c.program()) || !planned.containsKey(c.program())) out.accept(c);
+				else if (c.cmd().equals("final")) out.accept(new Manifest.Command("final", null, c.flipState(), null, null, null, null, null, null, null));
+				else if (c.cmd().equals("fullscreen") && c.writes() != null) for (var w : c.writes()) // flipState marks it as mid-frame (FlipSwap leaves it alone)
+					out.accept(new Manifest.Command("copy", null, c.flipState(), null, w.target(), null, w.side().equals("alt") ? "main" : "alt", w.side(), null, null));
+			}).toList();
 		}
 	}
 }

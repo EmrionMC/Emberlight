@@ -89,6 +89,11 @@ public final class GraphicsPipelineBuilder {
 		return this;
 	}
 
+	public GraphicsPipelineBuilder depthWrite(boolean write) {
+		this.depthWrite = write;
+		return this;
+	}
+
 	public GraphicsPipelineBuilder depthBias(float constant, float slope) {
 		this.depthBiasConstant = constant;
 		this.depthBiasSlope = slope;

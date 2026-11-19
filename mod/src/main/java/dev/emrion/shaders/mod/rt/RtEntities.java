@@ -275,6 +275,8 @@ public final class RtEntities {
 	private final List<Blas> live = new ArrayList<>();
 	private double liveX, liveY, liveZ;
 	private int frameNo;
+	/** Frames between copies of the textures in use into the atlas (they may change in place). */
+	private static final int REFRESH_FRAMES = 10;
 	// stats
 	int draws, builds, refits, dropped, blits;
 	long cpuNs;
@@ -345,7 +347,7 @@ public final class RtEntities {
 			return;
 		}
 		// previous frames' ray queries (BLAS refitted in place, atlas regions rewritten after a reset) before this frame's writes
-		Barriers.memory(cb, AS_BUILD | Barriers.COMPUTE | Barriers.FRAGMENT, AS_RW | Barriers.SAMPLED_READ, AS_BUILD | Barriers.COMPUTE, AS_RW | Barriers.STORAGE_WRITE);
+		Barriers.memory(cb, AS_BUILD | Barriers.COMPUTE | Barriers.FRAGMENT | Barriers.RAYGEN, AS_RW | Barriers.SAMPLED_READ, AS_BUILD | Barriers.COMPUTE, AS_RW | Barriers.STORAGE_WRITE);
 
 		long bytes = captured.getLast().offset() + (long) captured.getLast().vertices() * STRIDE;
 		if (verts[slot] == null || verts[slot].size < bytes) {
@@ -446,8 +448,12 @@ public final class RtEntities {
 	 * the draws would hand rects that earlier draws already use to later textures. Same skip rules as the BLAS loop.
 	 */
 	private void placeTextures(VkCommandBuffer cb, GpuTexture blocks) {
+		rects.keySet().removeIf(GpuTexture::isClosed);
 		List<GpuTextureView> views = new ArrayList<>();
 		List<int[]> placed = new ArrayList<>();
+		// no change signal for animated item sprites or maps: every few frames the textures in use are copied again
+		boolean refresh = frameNo % REFRESH_FRAMES == 0;
+		java.util.Set<GpuTexture> refreshed = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
 		boolean reset = false;
 		pass:
 		for (;;) {
@@ -458,7 +464,15 @@ public final class RtEntities {
 				if (tris + t > BUDGET) continue;
 				tris += t;
 				GpuTexture tex = c.texture().texture();
-				if (tex == blocks || rects.containsKey(tex)) continue;
+				if (tex == blocks) continue;
+				int[] had = rects.get(tex);
+				if (had != null) {
+					if (refresh && had != NO_FIT && refreshed.add(tex)) {
+						views.add(c.texture());
+						placed.add(had);
+					}
+					continue;
+				}
 				if (!reset && !fits(c.texture())) { // atlas full: start over once per frame, re-copying what is used
 					rects.clear();
 					shelves.clear();
@@ -466,10 +480,12 @@ public final class RtEntities {
 					reset = true;
 					views.clear();
 					placed.clear();
+					refreshed.clear();
 					continue pass;
 				}
 				int[] rect = allocate(c.texture());
 				rects.put(tex, rect);
+				refreshed.add(tex); // copied below already: a later draw of it must not schedule a second, unordered copy
 				if (rect != NO_FIT) {
 					views.add(c.texture());
 					placed.add(rect);
@@ -555,14 +571,26 @@ public final class RtEntities {
 	// ---- atlas --------------------------------------------------------------------------------------------------------------
 
 	private static boolean usable(GpuTextureView v) {
+		return v.texture().getFormat() == GpuFormat.RGBA8_UNORM && v.getWidth(v.baseMipLevel()) > 0 && v.getHeight(v.baseMipLevel()) > 0;
+	}
+
+	/** {w, h} of the texture's atlas copy: its base mip; above MAX_TEXTURE (HD resource pack mob skins) halved to at most half
+	 * of it, so a few of them do not fill the atlas. Too big textures used to get no copy and were traced as opaque, so their
+	 * cutout parts cast the full silhouette. */
+	private static int[] copySize(GpuTextureView v) {
 		int w = v.getWidth(v.baseMipLevel()), h = v.getHeight(v.baseMipLevel());
-		return v.texture().getFormat() == GpuFormat.RGBA8_UNORM && w <= MAX_TEXTURE && h <= MAX_TEXTURE && w > 0 && h > 0;
+		if (w > MAX_TEXTURE || h > MAX_TEXTURE) while (w > MAX_TEXTURE / 2 || h > MAX_TEXTURE / 2) {
+			w = Math.max(w / 2, 1);
+			h = Math.max(h / 2, 1);
+		}
+		return new int[] {w, h};
 	}
 
 	/** Shelf packing: true if {@link #place} would find room without a reset. */
 	private boolean fits(GpuTextureView v) {
 		if (!usable(v)) return true;
-		int w = v.getWidth(v.baseMipLevel()), h = v.getHeight(v.baseMipLevel());
+		int[] size = copySize(v);
+		int w = size[0], h = size[1];
 		for (int[] s : shelves) if (s[1] >= h && s[2] + w <= ATLAS) return true;
 		return shelfBottom + h <= ATLAS;
 	}
@@ -570,7 +598,8 @@ public final class RtEntities {
 	/** {x, y, w, h} of a fresh copy of the texture's base mip in the atlas, or NO_FIT (traced as opaque). */
 	private int[] allocate(GpuTextureView v) {
 		if (!usable(v)) return NO_FIT;
-		int w = v.getWidth(v.baseMipLevel()), h = v.getHeight(v.baseMipLevel());
+		int[] size = copySize(v);
+		int w = size[0], h = size[1];
 		int[] shelf = null;
 		for (int[] s : shelves) if (s[1] >= h && s[2] + w <= ATLAS && (shelf == null || s[1] < shelf[1])) shelf = s;
 		if (shelf == null) {
@@ -605,10 +634,14 @@ public final class RtEntities {
 	// ---- TLAS ---------------------------------------------------------------------------------------------------------------
 
 	/** Appends this frame's entity instances at {@code i}; returns the next free index. */
+	/** Hash of the instances the last writeInstances wrote (BLAS addresses, masks): RtScene refits the TLAS while it stays the same. */
+	long instanceKey;
+
 	int writeInstances(long inst, long sec, int i, int capacity, int region, Vec3 cam) {
 		float tx = (float) (liveX - cam.x), ty = (float) (liveY - cam.y), tz = (float) (liveZ - cam.z);
 		// third person: the player model is drawn, so it is an entity like any other
 		int playerMask = Minecraft.getInstance().options.getCameraType().isFirstPerson() ? MASK_LOCAL_PLAYER : MASK;
+		instanceKey = 1;
 		for (Blas b : live) {
 			if (i == capacity) break;
 			long a = inst + (long) i * VkAccelerationStructureInstanceKHR.SIZEOF;
@@ -618,6 +651,7 @@ public final class RtEntities {
 			MemoryUtil.memPutInt(a + 48, (region + i) | (b.player ? playerMask : MASK) << 24);
 			MemoryUtil.memPutInt(a + 52, VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR << 24);
 			MemoryUtil.memPutLong(a + 56, b.addr);
+			instanceKey = instanceKey * 0x9E3779B97F4A7C15L + b.addr * 2 + (b.player ? playerMask : MASK);
 			long s = sec + i * 16L;
 			MemoryUtil.memPutLong(s, b.vertexAddr);
 			MemoryUtil.memPutInt(s + 8, b.kind);

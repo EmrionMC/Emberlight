@@ -48,6 +48,7 @@ public final class Xess {
 	public static final String NOTICE = "Intel(R) Xe Super Sampling (XeSS) SDK: Copyright (C) 2025 Intel Corporation.";
 
 	private static final String NOT_DOWNLOADED = "Intel's XeSS runtime is not downloaded yet";
+	private static final String DAMAGED = DLL + " does not match Intel's " + TAG + " release, download it again";
 	private static volatile String reason = initialReason();
 	/** Why the last context creation failed; cleared by a settings change ({@link #retryCreate}). */
 	private static volatile String createFailure;
@@ -77,9 +78,9 @@ public final class Xess {
 		return r != null ? r : createFailure;
 	}
 
-	/** Only the download is missing: the Upscaling page offers it. */
+	/** Only the download is missing (or the file is damaged): the Upscaling page offers it. */
 	public static boolean needsDownload() {
-		return NOT_DOWNLOADED.equals(reason);
+		return NOT_DOWNLOADED.equals(reason) || DAMAGED.equals(reason);
 	}
 
 	/** Linux/macOS: the mode is not offered at all. */
@@ -143,7 +144,7 @@ public final class Xess {
 		if (unavailable() != null || lib != null) return unavailable();
 		if (!enabledOnDevice) return fail("the device was created without XeSS's extensions (restart after installing XeSS)");
 		try {
-			if (!DlssFiles.sha256(DIR.resolve(DLL)).equals(DLL_SHA256)) return fail(DLL + " does not match Intel's " + TAG + " release (delete it and download again)");
+			if (!DlssFiles.sha256(DIR.resolve(DLL)).equals(DLL_SHA256)) return fail(DAMAGED);
 			lib = SymbolLookup.libraryLookup(DIR.resolve(DLL), Arena.global());
 			createContext = fn("xessVKCreateContext", FunctionDescriptor.of(INT, PTR, PTR, PTR, ADDR));
 			init = fn("xessVKInit", FunctionDescriptor.of(INT, PTR, ADDR));

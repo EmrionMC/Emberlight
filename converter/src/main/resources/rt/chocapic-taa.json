@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "id": "chocapic-taa",
+  "pack": "Chocapic13 lineage (Bliss, Eclipse)",
+  "version": "any",
+  "detect": ["lib/TAA_jitter.glsl"],
+  "effects": {
+    "upscale": {
+      "options": {},
+      "needs": [],
+      "library": false,
+      "patches": [
+        {"function": "vec2[8] offsets", "body": "rt/chocapic/offsets8.glsl", "bare": true},
+        {"function": "vec2[4] offsets", "body": "rt/chocapic/offsets4.glsl", "bare": true},
+        {"function": "vec4 computeTAA(vec2,bool)", "body": "rt/chocapic/taa_off.glsl", "bare": true, "needs": ["colortex3"]}
+      ]
+    }
+  }
+}

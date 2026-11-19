@@ -1,21 +1,23 @@
 // Full resolution: soft sun/moon shadows (one ray to a random point of the light's disc, tinted by glass) and glossy
 // reflections (one GGX VNDF-sampled ray, its hit shaded with its own sun ray). Denoised in denoise.frag.glsl.
+#define BL_QUAD 1
 #include "/lib/rt.glsl"
 
-void main() {
-	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
-	if (any(greaterThanEqual(px, ivec2(el_screenSize)))) return;
-	float depth = texelFetch(el_depth, px, 0).r;
-	if (el_isSky(depth)) {
-		imageStore(sunRaw_img, px, vec4(1.0));
-		imageStore(reflRaw_img, px, vec4(0.0));
-		imageStore(el_motionDistance_img, px, vec4(0.0));
-		return;
-	}
+shared vec4 blqP[64]; // the mirrors' final hits (block-light ray origin, normal packed in w), to pool their tests over the 2x2 quad
+// a perfect mirror's final hit, its block light (times fF) still to add once the quad's tests are pooled
+ElHit fh;
+vec3 fF = vec3(0.0);
+bool fq = false;
+float maxL = 16.0; // the reflection's firefly clamp
+
+void direct(ivec2 px, out vec4 sunOut, out vec4 refl, out float motion) {
+	sunOut = vec4(1.0); refl = vec4(0.0); motion = 0.0;
+	float depth = texelFetch(el_depthNoHand, px, 0).r;
+	if (el_isSky(depth)) return;
 	vec3 world = el_screenToWorld((vec2(px) + 0.5) / el_screenSize, depth);
 	GNormal g = decodeGNormal(texelFetch(gNormal, px, 0));
 	Mat m = decodeMat(texelFetch(gMat, px, 0));
-	vec3 p = world + g.geo * (0.004 + 0.0015 * length(world));
+	vec3 p = world + g.geo * rayLift(world);
 
 	// ---- sun / moon (the geometric normal decides what faces the light: normal maps shade, they do not self-shadow) ----
 	// a: water caustics, not denoised (crisp, animated): >= 0 multiplies the sun light that came through water,
@@ -39,10 +41,9 @@ void main() {
 	}
 #endif
 #endif
-	imageStore(sunRaw_img, px, vec4(vis, caustic));
+	sunOut = vec4(vis, caustic);
 
 	// ---- reflections ----
-	vec4 refl = vec4(0.0);
 #if REFLECTIONS != REFLECTIONS_OFF
 	float rough = roughnessOf(m.smoothness);
 	if (rough <= REFL_MAX_ROUGH && m.smoothness > 0.05) {
@@ -54,6 +55,7 @@ void main() {
 		// the reflected image sits behind the surface (the denoiser reprojects the history by it).
 		vec3 thr = vec3(1.0);
 		float path = 0.0;
+		hitBlockLightTraced = rough >= 0.005; // glossy: its history averages the one-ray block light (denoise.frag.glsl aRf)
 		for (int b = 0; b < MIRROR_BOUNCES; b++) {
 			// the first-person body too: a mirror shows the player (shadows already trace it)
 			ElHit h = el_traceClosest(p, rd, 256.0, MASK_SOLID | EL_MASK_PLAYER);
@@ -93,9 +95,15 @@ void main() {
 				// lightmap. Not for the last mirror of a chain: shaded as a wall, its cached light made bright panels with
 				// black holes wherever the screen did not see it; the lightmap lets the corridor of images fade out.
 				vec3 cg;
+				bool cached = !mirror && cachedGi(h.position, cg);
+				fq = !hitBlockLightTraced && !cached; // its block light in main(), tested and summed with the quad's
+				if (fq) fh = h;
+				vec3 amb = cached ? cg : fq ? hitAmbientSky(h) : hitAmbient(h);
 				// (the last silver mirror: its light only, the iron block's texture must not show at the end of the corridor)
-				if (mirror && abs(hm.f0 - 237.0) < 0.5) refl.rgb += thr * matF0(hm, lin) * hitAmbient(h);
-				else refl.rgb += thr * shadeHitAmb(h, rd, true, true, !mirror && cachedGi(h.position, cg) ? cg : hitAmbient(h));
+				vec3 alb = matF0(hm, lin);
+				if (mirror && abs(hm.f0 - 237.0) < 0.5) refl.rgb += thr * alb * amb;
+				else refl.rgb += thr * shadeHitAmbA(h, rd, true, true, amb, alb);
+				fF = thr * alb * hitAo(h);
 				// a glowing hit: negative distance, so bloom gives the reflected neon its halo too (denoise.frag.glsl)
 				refl.a = hm.emission > 0.25 && max(thr.r, max(thr.g, thr.b)) > 0.1 ? -path : path;
 				break;
@@ -106,13 +114,46 @@ void main() {
 			rd = reflect(rd, h.normal);
 			p = h.position + h.normal * 0.003;
 		}
-		// fireflies: a glossy ray that happens to hit a flame or a glowstone stays a bright speck through every filter
-		float maxL = mix(16.0, 3.0, smoothstep(0.0, 0.15, rough));
-		refl.rgb *= min(1.0, maxL / max(el_luminance(refl.rgb), 1e-4));
+		maxL = mix(16.0, 3.0, smoothstep(0.0, 0.15, rough));
 	}
 #endif
-	imageStore(reflRaw_img, px, refl);
 	// a mirror shows the reflected image, refl.a behind it: the upscaler's motion vectors follow that, not the surface
-	bool mirror = m.smoothness >= 0.97 && isMetal(m.f0) && refl.a > 0.0;
-	imageStore(el_motionDistance_img, px, vec4(mirror ? length(world) + refl.a : 0.0));
+	bool mirror = m.smoothness >= 0.97 && isMetal(m.f0) && refl.a != 0.0; // negative = glowing hit, same distance
+	motion = mirror ? length(world) + abs(refl.a) : 0.0;
+}
+
+void main() {
+	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+	bool inside = all(lessThan(px, ivec2(el_screenSize)));
+	vec4 sunOut = vec4(1.0), refl = vec4(0.0);
+	float motion = 0.0;
+	if (inside) direct(px, sunOut, refl, motion);
+#if REFLECTIONS != REFLECTIONS_OFF
+	// the quad's members whose hits lie close by share the block light's visibility tests (lib/rt.glsl BL_QUAD); every
+	// invocation reaches both barriers
+	uint li = gl_LocalInvocationIndex;
+	vec3 fp = fq ? fh.position + fh.normal * 0.05 : vec3(1e9); // (hitBlockLight's ray origin)
+	blqP[li] = vec4(fp, uintBitsToFloat(packSnorm4x8(vec4(fq ? fh.normal : vec3(0.0), 0.0))));
+	barrier();
+	blQuad = int(li & 1u) | int((li >> 3) & 1u) << 1;
+	blT = uint[2](0u, 0u);
+	if (fq) {
+		// close by and not facing away: not the other side of a door or a pane (the floor and wall at a corner share)
+		for (int x = 1; x < 4; x++) {
+			vec4 o = blqP[li ^ uint((x & 1) | (x >> 1) * 8)];
+			if (distance(o.xyz, fp) < 0.4 && dot(unpackSnorm4x8(floatBitsToUint(o.w)).xyz, fh.normal) > -0.5) blNear |= 1u << (blQuad ^ x);
+		}
+		blPhase = 1;
+		hitBlockLight(fh);
+	}
+	blqT[li] = uvec2(blT[0], blT[1]);
+	barrier();
+	if (fq) { blPhase = 2; refl.rgb += fF * hitBlockLight(fh); }
+	// fireflies: a glossy ray that happens to hit a flame or a glowstone stays a bright speck through every filter
+	refl.rgb *= min(1.0, maxL / max(el_luminance(refl.rgb), 1e-4));
+#endif
+	if (!inside) return;
+	imageStore(sunRaw_img, px, sunOut);
+	imageStore(reflRaw_img, px, refl);
+	imageStore(el_motionDistance_img, px, vec4(motion));
 }

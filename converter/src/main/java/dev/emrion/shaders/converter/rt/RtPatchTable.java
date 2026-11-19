@@ -23,7 +23,7 @@ import java.util.Map;
 public record RtPatchTable(String id, List<String> detect, Map<String, Effect> effects, Integer schema, String pack, String version,
                            Map<String, String> files, Map<String, Map<String, String>> packSettings) {
 	/** Bundled tables tried in order after the pack's own; the first whose detect files all exist wins. */
-	public static final List<String> TABLES = List.of("rt/complementary-r5.json");
+	public static final List<String> TABLES = List.of("rt/complementary-r5.json", "rt/chocapic-taa.json");
 	/** Newest table format this converter reads. */
 	public static final int SCHEMA = 1;
 	/** A pack's own table; its snippet paths are relative to {@link #PACK_DIR}. */

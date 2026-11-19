@@ -1,0 +1,1 @@
+vec3 shadowPos = GetShadowPos(playerPosM); emrRtTerrainMin = subsurfaceMode == 2 ? 1.0 : 0.0; if (subsurfaceMode == 0 && !centerShadowBias) { emrRtRecvPos = playerPos; emrRtRecvN = worldGeoNormal; emrRtRecvXY = shadowPos.xy; } else emrRtRecvXY = vec2(-1.0);

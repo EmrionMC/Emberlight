@@ -140,10 +140,10 @@ public final class FrameGen {
 			generator.dispatch(cb, in, hudless, backbufferImage, backbufferView, out);
 			Profiler.mark(cb, "frame generation");
 			interpThisFrame = out;
-			slotFrames[si] = frameNumber + 1;
 			FfxPasses.barrier(cb);
 			FrameCapture.record(ctx, cb, out.image, backbufferImage, genDW, genDH);
 			if (dev.emrion.shaders.mod.hdr.Hdr.active()) interpThisFrame = dev.emrion.shaders.mod.hdr.Hdr.encodeInterpolated(ctx, cb, si, out, backbufferView, hudless);
+			slotFrames[si] = frameNumber + 1; // last: on a throw above no presenter copy of this slot will ever be signalled
 		} catch (RuntimeException e) {
 			fail(generatorMode.label + " failed: " + e.getMessage(), e);
 			interpThisFrame = null;
@@ -186,7 +186,12 @@ public final class FrameGen {
 	/** VulkanGpuSurface.present HEAD; false = MC presents itself (FG off). */
 	public static boolean present(long swapchain, long[] images, int width, int height, int imageIndex, long presentSemaphore) {
 		if (!presentThisFrame) {
-			if (Presenter.running()) Presenter.stop(VulkanContext.get());
+			if (Presenter.running()) {
+				VulkanContext ctx = VulkanContext.get();
+				Presenter.stop(ctx);
+				// FG switched off: give the generator and slots back (ensure() rebuilds them); a photo only pauses it
+				if (!dev.emrion.shaders.mod.photo.PhotoMode.frozen()) destroy(ctx);
+			}
 			return false;
 		}
 		presentThisFrame = false;

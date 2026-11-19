@@ -3,6 +3,7 @@
 // full-res pixel of its 2x2 block, rotating every frame.
 #define HIT_EMISSION_SCALE 5.0
 #define GI_SKIP_LISTED_EMITTERS 1
+#define HIT_SUN_DISC 1
 #include "/lib/restir.glsl"
 
 // share of the cached light a bounce passes on (< 1 keeps the feedback loop from running away on bright albedo)
@@ -34,16 +35,17 @@ vec3 blockLights(ivec2 hp, vec3 p, vec3 n, inout Rng rng) {
 }
 
 void main() {
-	ivec2 hp = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 hp = ivec2(EL_GLOBAL_ID.xy);
 	if (any(greaterThanEqual(hp, imageSize(giRaw_img)))) return;
+	hitBlockLightTraced = true;
 	ivec2 px = min(hp * 2 + giJitter(), ivec2(el_screenSize) - 1);
-	float depth = texelFetch(el_depth, px, 0).r;
+	float depth = texelFetch(el_depthNoHand, px, 0).r;
 	if (el_isSky(depth)) { imageStore(giRaw_img, hp, vec4(0.0)); rsStore(hp, 1, RS_EMPTY); return; }
 	Rng rng = rngInit(hp, 2);
 	vec3 world = el_screenToWorld((vec2(px) + 0.5) / el_screenSize, depth);
 	GNormal g = decodeGNormal(texelFetch(gNormal, px, 0));
 	vec3 n = g.geo; // GI is low frequency: sample around the geometric normal (stable under normal maps)
-	vec3 p = world + n * (0.004 + 0.0015 * length(world));
+	vec3 p = world + n * rayLift(world);
 
 	vec3 radiance = vec3(0.0);
 #if GI_BOUNCES > 0
@@ -56,7 +58,7 @@ void main() {
 		if (!h.hit) { radiance += throughput * missRadiance(dir, b == 0 ? max(sky, 0.25 * (1.0 - caveFactor)) : sky); break; }
 		// emitters of the light list are sampled by blockLights() (and the lightmap at bounce hits): hitting them as well
 		// counted them twice and turned small flames and lantern faces into fireflies
-		// Many bounces for free: a hit that was on screen last frame takes the GI accumulated there (giAcc, not yet
+		// Many bounces for free: a hit that was on screen last frame takes the GI filtered there (giFilt, not yet
 		// written this frame) as the light it receives, instead of the lightmap estimate. That light already holds its
 		// own bounces, so rooms lit through a window or by a glowstone wall fill up instead of staying black next to
 		// their bright patches. Rejected unless last frame saw this very hit at that pixel (view distance).
@@ -71,7 +73,9 @@ void main() {
 		bool last = b + 1 == GI_BOUNCES;
 		radiance += throughput * shadeHitAmb(h, dir, b == 0, true, last ? hitAmbient(h) : hitBlockLight(h) * mix(1.0, h.color.a, 0.6));
 		if (!last) {
-			throughput *= el_srgbToLinear(el_hitAlbedo(h).rgb * h.color.rgb);
+			vec3 srgb = el_hitAlbedo(h).rgb * h.color.rgb, alb = el_srgbToLinear(srgb);
+			Mat hm = hitMaterial(h, srgb);
+			throughput *= isMetal(hm.f0) ? matF0(hm, alb) : alb; // (as shadeHitAmb)
 			o = h.position + h.normal * 0.01;
 			nn = h.normal;
 			sky = h.light.y;

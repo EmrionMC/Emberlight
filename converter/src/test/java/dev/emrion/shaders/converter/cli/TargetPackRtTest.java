@@ -30,7 +30,7 @@ class TargetPackRtTest {
 	static final Path SETTINGS = ROOT.resolve("ComplementaryUnbound_r5.9.3 + EuphoriaPatches_1.10.5.txt");
 	/** sha256 over the RT-off output (paths + bytes); changes only with an intended output change and a Converter.VERSION bump. */
 
-	static final String RT_OFF_GOLDEN = "ca39a3bc5f7eabba7914ad565b6a7d53fff12ccff42c4bd4453e2b954d0cbe34";
+	static final String RT_OFF_GOLDEN = "62e9ddcff7855a821157273e2320ed039446c150ea14631804dc6758b94539ed";
 
 	static Converter.Result convert(Path out, Set<String> rt) {
 		try (var compiler = new ShadercSpirvCompiler()) {
@@ -65,6 +65,25 @@ class TargetPackRtTest {
 		var kinds = r.manifest().dimensions().get("world0").resources().stream().map(x -> x.kind() + ":" + x.builtin()).toList();
 		assertTrue(kinds.contains("acceleration_structure:emrion_tlas"), kinds.toString());
 		assertTrue(kinds.contains("storage_buffer:emrion_rt_sections"), kinds.toString());
+	}
+
+	@Test
+	void prepassStopsTerrainAfterTheAlphaTest(@TempDir Path out) throws Exception {
+		assumeTrue(Files.isDirectory(PACK) && Files.isRegularFile(SETTINGS));
+		var r = convert(out, Set.of("prepass"));
+		assertEquals(0, r.stagesFailed());
+		assertEquals(List.of("prepass"), r.manifest().rt().effects(), r.manifest().rt().unavailable().toString());
+		String fsh = Files.readString(r.outputDir().resolve("src/world0/gbuffers_terrain.fsh.glsl"));
+		assertTrue(fsh.contains("if (emr_draw.emr_alphaTestRef > 1.5) { emr_FragData0 = vec4(3.0); return; }"), "prepass exit after the alpha test");
+		assertFalse(fsh.contains("emrRt"), "bare: no RT library");
+		// the pack's defaults (IPBR) have Euphoria's snow-layer dither discard after the alpha test: the shading pass skips it
+		try (var compiler = new ShadercSpirvCompiler()) {
+			var d = ConverterCli.defaultConverter(compiler).convert(new Converter.Request(PACK, null, out.resolve("defaults"), null,
+					Converter.ProgressListener.NONE, false, Set.of("prepass")));
+			assertEquals(List.of("prepass"), d.manifest().rt().effects(), d.manifest().rt().unavailable().toString());
+			assertTrue(Files.readString(d.outputDir().resolve("src/world0/gbuffers_terrain.fsh.glsl"))
+					.contains("if (dither + 0.25 < snowFadeOut && emr_draw.emr_alphaTestRef > -1.5) discard;"));
+		}
 	}
 
 	@Test

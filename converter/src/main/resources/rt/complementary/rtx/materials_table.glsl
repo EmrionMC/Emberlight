@@ -7,7 +7,9 @@ vec2 emrRtxMaterial(int mat) {
 		: mat == 10248 ? vec2(0.45, 1.0)
 		: (mat == 10316 || mat == 10336) ? vec2(0.85, 0.09) : mat == 10372 ? vec2(0.82, 0.04) : mat == 10364 ? vec2(0.6, 0.04)
 		: (mat == 10384 || mat == 10388) ? vec2(0.92, 0.02) : mat == 10436 ? vec2(0.75, 0.04)
-		: (mat == 10096 || mat == 10100 || mat == 10104 || mat == 10112 || mat == 10480 || mat == 10712) ? vec2(0.58, 0.04)
+		// polished granite / diorite only: the pack's polished andesite, deepslate, blackstone and tuff ids also hold bricks,
+		// mud, plain tuff and blackstone, which turned into grazing sky mirrors
+		: (mat == 10096 || mat == 10100) ? vec2(0.58, 0.04)
 		: (mat == 10328 || mat == 10352 || mat == 10608) ? vec2(0.7, 0.04)
 		: vec2(0.0); // rougher blocks (concrete, smooth stone) are left out: barely visible, but a reflection ray per pixel
 }

@@ -62,6 +62,8 @@ final class NativeGlsl {
 	final NativeManifest m;
 	final NativeOptions options;
 	final boolean upscaling;
+	/** RT pipelines on the device (request "raygen"): passes with "raygen" compile as ray generation shaders. */
+	boolean raygen;
 	/** DLSS Ray Reconstruction runs and the pack writes its guides (§14.4): EL_RR_ACTIVE and the el_rr* images. */
 	final boolean rr;
 	final Diagnostics diagnostics;
@@ -113,7 +115,7 @@ final class NativeGlsl {
 				String target = i.screen() ? "colortex" + colortex.get(i.name()) : i.name();
 				boolean nearest = i.integer();
 				add(i.name(), "uniform " + sampler(i) + " " + i.name(), new Manifest.Resource(0, "sampled_image", null, target, null, null,
-						new Manifest.SamplerDef(nearest ? "nearest" : "linear", i.mipmaps() ? "linear" : "none", "clamp", null)));
+						new Manifest.SamplerDef(nearest ? "nearest" : "linear", i.mipmaps() ? (nearest ? "nearest" : "linear") : "none", "clamp", null)));
 			}
 			for (var i : m.images()) {
 				if (!i.storage()) continue;
@@ -353,8 +355,14 @@ final class NativeGlsl {
 		StringBuilder b = new StringBuilder("#version 460\n#extension GL_GOOGLE_cpp_style_line_directive : require\n");
 		if (raytracing) b.append("#extension GL_EXT_ray_query : require\n#extension GL_EXT_buffer_reference : require\n"
 				+ "#extension GL_EXT_buffer_reference_uvec2 : require\n");
+		// the pass runs as a raygen shader of a raygen-only RT pipeline (ShadercSpirvCompiler reads the pragma; RtRaygen); its
+		// traces stay ray queries
+		boolean raygen = st == StageType.COMPUTE && this.raygen && p.raygen();
+		if (raygen) b.append("#pragma shader_stage(raygen)\n#extension GL_EXT_ray_tracing : require\n");
 		b.append("#line 1 \"emberlight-prelude\"\n");
-		if (st == StageType.COMPUTE) b.append("layout(local_size_x = ").append(p.localSize()[0]).append(", local_size_y = ").append(p.localSize()[1])
+		if (raygen) b.append("#define EL_STAGE_RAYGEN 1\n#define EL_GLOBAL_ID gl_LaunchIDEXT\n");
+		else if (st == StageType.COMPUTE) b.append("#define EL_GLOBAL_ID gl_GlobalInvocationID\n");
+		if (st == StageType.COMPUTE && !raygen) b.append("layout(local_size_x = ").append(p.localSize()[0]).append(", local_size_y = ").append(p.localSize()[1])
 				.append(", local_size_z = ").append(p.localSize()[2]).append(") in;\n");
 		// ---- defines (§7.1)
 		b.append("#define EL_STAGE_").append(switch (st) {

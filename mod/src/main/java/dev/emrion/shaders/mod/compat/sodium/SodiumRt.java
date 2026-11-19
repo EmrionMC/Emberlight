@@ -8,6 +8,7 @@ import com.mojang.renderpearl.backend.vulkan.VulkanGpuBuffer;
 import dev.emrion.shaders.mod.EmrionShadersClient;
 import dev.emrion.shaders.mod.mixin.sodium.SectionRenderDataStorageAccessor;
 import dev.emrion.shaders.mod.mixin.sodium.SodiumWorldRendererAccessor;
+import dev.emrion.shaders.mod.rt.RtConfig;
 import dev.emrion.shaders.mod.rt.RtScene;
 import dev.emrion.shaders.mod.runtime.Formats;
 import dev.emrion.shaders.mod.vertex.EmrionVertexFormats;
@@ -117,6 +118,7 @@ public final class SodiumRt {
 	public void update(VkCommandBuffer cb, Vec3 cam) {
 		frame++;
 		scene.external.clear();
+		double maxDist = RtConfig.distanceBlocks();
 		var renderer = SodiumWorldRenderer.instanceNullable();
 		var sections = renderer == null ? null : ((SodiumWorldRendererAccessor) renderer).emrion$sections();
 		// our arenas hold EmrionChunkVertex only while a pack is active (ChunkMeshFormatsMixin); anything else is not read
@@ -126,18 +128,19 @@ public final class SodiumRt {
 			wrongFormatWarned = true;
 		}
 		if (sections != null && ours)
-			for (RenderRegion region : sections.regions.getLoadedRegions()) sync(region);
+			for (RenderRegion region : sections.regions.getLoadedRegions()) sync(region, cam, maxDist);
+		for (RtScene.Entry e : scene.external) if (scene.keepInRange(e, pending, cam, maxDist)) e.queued = frame;
 		regions.values().removeIf(r -> {
 			if (r.frame == frame) return false;
 			dropAll(r);
 			return true;
 		});
-		build(cb);
+		build(cb, cam, maxDist);
 		scene.external.removeIf(e -> !e.built()); // built just now count: the section is in this frame's TLAS, no gap after a rebuild
 		scene.log();
 	}
 
-	private void sync(RenderRegion region) {
+	private void sync(RenderRegion region, Vec3 cam, double maxDist) {
 		var resources = region.getResources();
 		long base = 0, size = 0;
 		if (resources != null && resources.getGeometryBuffer() instanceof VulkanGpuBuffer buf && (buf.usage() & Formats.USAGE_RT_INPUT) != 0) {
@@ -183,10 +186,13 @@ public final class SodiumRt {
 						if (quads > 0) {
 							entries[id] = new RtScene.Entry(LAYERS[p], (region.getChunkX() + LocalSectionIndex.unpackX(id)) << 4,
 									(region.getChunkY() + LocalSectionIndex.unpackY(id)) << 4, (region.getChunkZ() + LocalSectionIndex.unpackZ(id)) << 4, quads);
-							// a changed section (a redstone clock rebuilds it every few ticks) goes first, so it is never out of the TLAS for a frame
-							entries[id].queued = frame;
-							if (replaced) pending.addFirst(entries[id]);
-							else pending.add(entries[id]);
+							// a changed section (a redstone clock rebuilds it every few ticks) goes first, so it is never out of the TLAS for a frame;
+							// new ones are queued by update once they are within the RT distance
+							if (replaced && RtScene.near(entries[id], cam, maxDist, RtScene.QUEUE_MARGIN)) {
+								entries[id].queued = frame;
+								entries[id].waiting = true;
+								pending.addFirst(entries[id]);
+							}
 						}
 					}
 				}
@@ -201,7 +207,7 @@ public final class SodiumRt {
 	}
 
 	/** Decodes the positions of the next pending entries (up to the BLAS budget and the position buffer), then builds them. */
-	private void build(VkCommandBuffer cb) {
+	private void build(VkCommandBuffer cb, Vec3 cam, double maxDist) {
 		if (pending.isEmpty()) return;
 		long tris = 0, offset = 0, posBase = scene.address(positions.handle);
 		// this frame's uploads into the arenas (RAW), last frame's builds from the position buffer (WAR) and into the shared
@@ -213,17 +219,18 @@ public final class SodiumRt {
 			while (!pending.isEmpty() && tris < RtScene.BUDGET && batch.size() < RtScene.MAX_BUILDS) {
 				RtScene.Entry e = pending.peek();
 				long bytes = e.quads * 4L * 12;
-				if (e.removed || e.vertexAddr == 0) { // dropped, or outside its buffer (cannot happen for a well-formed arena)
-					pending.poll();
+				// dropped, outside its buffer (cannot happen for a well-formed arena), or out of RT range since it was queued
+				if (e.removed || e.vertexAddr == 0 || !RtScene.near(e, cam, maxDist, RtScene.QUEUE_MARGIN)) {
+					pending.poll().waiting = false;
 					continue;
 				}
 				if (bytes > POSITIONS) {
 					EmrionShadersClient.LOG.warn("RT: Sodium section with {} quads exceeds the position buffer, skipped", e.quads);
-					pending.poll();
+					pending.poll().waiting = false;
 					continue;
 				}
 				if (offset + bytes > POSITIONS) break;
-				pending.poll();
+				pending.poll().waiting = false;
 				maxWait = Math.max(maxWait, frame - e.queued);
 				e.posAddr = posBase + offset;
 				e.posStride = 12;

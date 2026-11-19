@@ -197,6 +197,44 @@ class PackRtTableTest {
 	}
 
 	@Test
+	void stageWithOnlyOptionalMatchesIsLeftAlone(@TempDir Path tmp) throws Exception {
+		// gbuffers_water has the optional patch's anchor but not the required getShadow (like the Nether's composite without
+		// world-space reflections): it is not one of the effect's stages, the effect stays available for gbuffers_terrain
+		String table = TABLE.replace("{\"function\": \"float getShadow(vec3)\", \"body\": \"shadow_body.glsl\"}",
+				"{\"function\": \"float getShadow(vec3)\", \"body\": \"shadow_body.glsl\", \"programs\": [\"gbuffers_terrain\", \"gbuffers_water\"]},"
+						+ " {\"function\": \"void main()\", \"after\": \"color.a = 1.0;\", \"body\": \"extra.glsl\", \"programs\": [\"gbuffers_terrain\", \"gbuffers_water\"], \"optional\": true}");
+		Map<String, String> files = pack(table);
+		files.put("shaders/gbuffers_terrain.fsh", files.get("shaders/gbuffers_terrain.fsh").replace("1.0);\n}", "1.0);\n\tcolor.a = 1.0;\n}"));
+		files.put("shaders/gbuffers_water.vsh", files.get("shaders/gbuffers_terrain.vsh"));
+		files.put("shaders/gbuffers_water.fsh", "#version 150\n/* RENDERTARGETS: 0 */\nout vec4 color;\nvoid main() {\n\tcolor = vec4(0.5);\n\tcolor.a = 1.0;\n}\n");
+		files.put("shaders/emberlight/extra.glsl", "color.rgb *= 0.99;\n");
+		var r = convert(folder(tmp.resolve("Tiny"), files), tmp.resolve("out"), Set.of("shadows"));
+		assertShadowsApplied(r);
+		assertTrue(Files.readString(r.outputDir().resolve("src/gbuffers_terrain.fsh.glsl")).contains("color.rgb *= 0.99;"));
+		assertFalse(Files.readString(r.outputDir().resolve("src/gbuffers_water.fsh.glsl")).contains("0.99"));
+		assertTrue(r.diagnostics().stream().anyMatch(d -> d.message().contains("gbuffers_water left out: only optional patches matched")));
+	}
+
+	@Test
+	void globalInitialiserPatch(@TempDir Path tmp) throws Exception {
+		// "type name" instead of a signature: the initialiser of that global is replaced (Bliss/Eclipse's TAA jitter table)
+		String table = TABLE.replace("\"float getShadow(vec3)\", \"body\": \"shadow_body.glsl\"", "\"vec2[2] jitter\", \"body\": \"zero.glsl\", \"bare\": true");
+		Map<String, String> files = pack(table);
+		files.put("shaders/gbuffers_terrain.vsh", files.get("shaders/gbuffers_terrain.vsh")
+				.replace("out vec3 playerPos;", "out vec3 playerPos;\nconst vec2[2] jitter = vec2[2](vec2(0.5), vec2(-0.5));")
+				.replace("gl_Position = projectionMatrix * view;", "gl_Position = projectionMatrix * view; gl_Position.xy += jitter[0];"));
+		files.put("shaders/emberlight/zero.glsl", "vec2[2](vec2(0.0), vec2(0.0))\n");
+		var r = convert(folder(tmp.resolve("Tiny"), files), tmp.resolve("out"), Set.of("shadows"));
+		assertEquals(Map.of(), r.manifest().rt().unavailable());
+		assertEquals(0, r.stagesFailed());
+		assertEquals("tiny-rt", r.manifest().rt().table());
+		String vsh = Files.list(r.outputDir().resolve("src")).filter(f -> f.getFileName().toString().startsWith("gbuffers_terrain.vsh"))
+				.map(f -> { try { return Files.readString(f); } catch (Exception e) { throw new RuntimeException(e); } }).findFirst().orElseThrow();
+		assertTrue(vsh.contains("jitter = vec2[2](vec2(0.0), vec2(0.0))"), vsh);
+		assertFalse(vsh.contains("vec2(0.5)"), vsh);
+	}
+
+	@Test
 	void authorErrorsAreReported(@TempDir Path tmp) throws Exception {
 		assertTrue(unavailable(tmp.resolve("a"), TABLE.replace("\"schema\": 1", "\"schema\": 99")).contains("schema 99 is not supported"));
 		assertTrue(unavailable(tmp.resolve("b"), TABLE.replace("\"schema\": 1,", "")).contains("missing \"schema\""));

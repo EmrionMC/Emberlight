@@ -81,6 +81,8 @@ final class MemoryPackSource implements PackSource {
 			for (ZipEntry e; (e = zin.getNextEntry()) != null; ) {
 				budget.count(e.getName());
 				if (!e.isDirectory()) raw.put(e.getName().replace('\\', '/'), budget.read(zin, e.getName()));
+				// the next getNextEntry() would inflate the rest unmetered (a zip bomb hidden behind a "dir/" name)
+				else if (zin.read() != -1) throw new IOException("directory entry with data: " + e.getName());
 			}
 		}
 		String root = findRoot(raw.keySet());

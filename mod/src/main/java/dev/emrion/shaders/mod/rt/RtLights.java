@@ -87,6 +87,10 @@ public final class RtLights {
 	/** Uploaded every frame; {@code back} is rebuilt (on the render thread or a worker, see {@link #upload}) and then swapped in. */
 	private Lists front = new Lists(), back = new Lists();
 	private @Nullable CompletableFuture<Void> building;
+	/** clearedAt when {@code building} started: a job that read the previous level's sections is dropped, not swapped in. */
+	private long buildingCleared;
+	/** clearedAt when the lists in {@code front} were built. */
+	private long frontCleared = Long.MIN_VALUE;
 	/** The last rebuild's duration: a slower one runs on a worker, so a lava sea never stalls a frame. */
 	private volatile long rebuildNs;
 	private static final long SYNC_REBUILD_NS = 4_000_000L;
@@ -199,7 +203,22 @@ public final class RtLights {
 		// shortcut: the snapshot a compile reads is taken before it begins; a section emptied in between still publishes (rare: queue latency)
 		if (start <= clearedAt || gone != null && gone >= start) return; // began before the world was cleared or the section emptied: its lights are gone
 		int[] f = FOUND.get();
-		int[] prev = f[0] == 0 ? SECTIONS.remove(section.asLong()) : SECTIONS.put(section.asLong(), java.util.Arrays.copyOfRange(f, 1, f[0] + 1));
+		int[] published = f[0] == 0 ? null : java.util.Arrays.copyOfRange(f, 1, f[0] + 1);
+		// checked again under the entry's lock: emptied() and clear() mark before they remove, so a compile that went stale since
+		// the check above neither restores old lights nor overwrites a newer compile's
+		int[][] prevOut = new int[1][];
+		boolean[] stale = new boolean[1];
+		SECTIONS.compute(section.asLong(), (k, old) -> {
+			Long g = EMPTIED.get(k);
+			if (start <= clearedAt || g != null && g >= start) {
+				stale[0] = true;
+				return old;
+			}
+			prevOut[0] = old;
+			return published;
+		});
+		if (stale[0]) return;
+		int[] prev = prevOut[0];
 		// a recompile with the same lights (most of them: a block edit, a neighbour's change) needs no rebuild
 		if ((prev != null || f[0] > 0) && !(prev != null && java.util.Arrays.equals(prev, 0, prev.length, f, 1, f[0] + 1))) {
 			VERSION.incrementAndGet();
@@ -267,8 +286,11 @@ public final class RtLights {
 		if (building != null && building.isDone()) {
 			building.join();
 			building = null;
-			swap();
-			rebuilt = true;
+			if (buildingCleared == clearedAt) {
+				swap();
+				frontCleared = buildingCleared;
+				rebuilt = true;
+			} // else clear() bumped VERSION: the rebuild below starts over in this frame
 		}
 		// one rebuild in flight, and none right after a swap: each list's remap must map the list uploaded before it
 		if (building == null && !rebuilt && (v != builtVersion || nx != wantX || ny != wantY || nz != wantZ)) {
@@ -277,11 +299,17 @@ public final class RtLights {
 			next.ox = wantX = nx;
 			next.oy = wantY = ny;
 			next.oz = wantZ = nz;
-			if (rebuildNs < SYNC_REBUILD_NS) {
+			// right after a clear the old level's lists must not stay up while a worker builds (the sections are nearly empty then)
+			if (rebuildNs < SYNC_REBUILD_NS || frontCleared != clearedAt) {
+				long c = clearedAt;
 				next.rebuild(prev);
 				swap();
+				frontCleared = c;
 				rebuilt = true;
-			} else building = CompletableFuture.runAsync(() -> next.rebuild(prev));
+			} else {
+				buildingCleared = clearedAt;
+				building = CompletableFuture.runAsync(() -> next.rebuild(prev));
+			}
 		}
 		Lists f = front;
 		int ox = f.ox, oy = f.oy, oz = f.oz, lightCount = f.lightCount, allCount = f.allCount, prevCount = f.prevCount, indexCount = f.indexCount;
@@ -332,7 +360,7 @@ public final class RtLights {
 			MemoryUtil.memIntBuffer(base + BLOCK, BLOCK_SLOTS).put(f.block);
 			MemoryUtil.memIntBuffer(base + INDEX, Math.max(indexCount, 1)).put(f.index, 0, Math.max(indexCount, 1));
 		}
-		Barriers.memory(cb, Barriers.FRAGMENT | Barriers.COMPUTE, Barriers.STORAGE_READ, Barriers.TRANSFER, Barriers.TRANSFER_WRITE);
+		Barriers.memory(cb, Barriers.FRAGMENT | Barriers.COMPUTE | Barriers.RAYGEN, Barriers.STORAGE_READ, Barriers.TRANSFER, Barriers.TRANSFER_WRITE);
 		try (MemoryStack stack = MemoryStack.stackPush()) {
 			VkBufferCopy.Buffer regions = VkBufferCopy.calloc(10, stack);
 			int n = 0;
@@ -354,7 +382,7 @@ public final class RtLights {
 			regions.limit(n);
 			vkCmdCopyBuffer(cb, staging.handle, buffer.handle, regions);
 		}
-		Barriers.memory(cb, Barriers.TRANSFER, Barriers.TRANSFER_WRITE, Barriers.FRAGMENT | Barriers.COMPUTE, Barriers.STORAGE_READ);
+		Barriers.memory(cb, Barriers.TRANSFER, Barriers.TRANSFER_WRITE, Barriers.FRAGMENT | Barriers.COMPUTE | Barriers.RAYGEN, Barriers.STORAGE_READ);
 	}
 
 	private void swap() {

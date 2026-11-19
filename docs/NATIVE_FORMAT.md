@@ -226,6 +226,15 @@ HDR). It runs at **output resolution** even when upscaling (§14.1).
 
 Compute passes write through storage images (`<image>_img`, §7.3) and buffers; they have no colour attachments.
 
+`"raygen": true` (compute passes with `"raytracing": true`, experimental): on NVIDIA GPUs with RT pipelines
+(VK_KHR_ray_tracing_pipeline, setting `rt.raygen`, default on) the pass is compiled as a ray generation shader and run as
+a raygen-only RT pipeline instead of a compute dispatch: the same code, one invocation per `workgroups` invocation, the
+traces stay ray queries. The Emberlight RTX GI pass took up to 0.2 ms (30 %) less GPU time that way; a light pass like
+its ReSTIR candidates got slower, so measure. Elsewhere it runs as compute.
+Write the pass so it works both ways: use `EL_GLOBAL_ID` instead of `gl_GlobalInvocationID` (defined in every compute
+pass), and no `shared` memory, barriers, workgroup or subgroup built-ins (`EL_STAGE_RAYGEN` is defined in the raygen
+build).
+
 ## 6. Resources
 
 ### 6.1 Images

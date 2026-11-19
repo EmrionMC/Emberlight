@@ -107,8 +107,19 @@ effect `upscale`, bare patches, no RT library):
 
 `TAA` stays defined, so the pack keeps its frame-animated noise (dithered shadows, clouds, SSAO, reflections), which the
 upscaler now accumulates. The effect name `upscale` rides in the converter's effect set (and cache key) like the RT effects;
-the mod adds it while a mode other than Off is selected, so Off keeps the empty set. Packs without a matching table keep
-their TAA: the upscaler still works but stacks on the pack's TAA (status line says so).
+the mod adds it while a mode other than Off is selected, so Off keeps the empty set.
+
+Other packs:
+
+| Pack family | What happens with an upscaler on |
+|---|---|
+| Bliss, Eclipse (Chocapic13 lineage, `lib/TAA_jitter.glsl`) | bundled table `rt/chocapic-taa.json`, effect `upscale`: the jitter array `offsets` becomes zeros (every vertex shader and every reconstruction that subtracts the jitter reads it), `computeTAA` returns the current frame. No masks. Not with the pack's own `TAA_UPSCALING` (render scale < 1): the bypass reads the full frame, not the scaled region. |
+| Photon (`uniform.vec2.taa_offset`) | the mod writes 0 into that custom uniform while an upscaler runs (runtime only, no reconversion); its TAA resolve still runs in front of the upscaler |
+| anything else | keeps its TAA: the upscaler still works but stacks on the pack's jitter and TAA |
+
+Why the pack's jitter has to go: FSR/DLSS are told only our jitter. A second, unknown sub-pixel offset per frame
+makes static edges shimmer, and the pack's own history reprojection (`projMAD(gbufferPreviousProjection, …)`)
+drops our jitter, so its resolve blurs it away before the upscaler sees it.
 
 Because the patch changes the conversion, switching Off ↔ FSR/DLSS goes through the pack reload path (reconvert or cache
 hit, swap between frames, no restart). FSR ↔ DLSS, preset and sharpness changes only rebuild the runtime (a resize).

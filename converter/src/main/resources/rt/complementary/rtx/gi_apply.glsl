@@ -2,7 +2,18 @@
 // bounced block light C, which emrRtxGi leaves in emrRtxGiBlock (pack blockLighting units) for the caller to add.
 uniform sampler2D emrGiFCSampler;
 vec3 emrRtxGiBlock = vec3(0.0);
+bool emrRtxGiNoSearch = false; // rtx/gi_scene_lighting_water.glsl: no nearest-surface search for the water surface
 const vec2 EMR_GI_RING[8] = vec2[8](vec2(1, 0), vec2(-1, 0), vec2(0, 1), vec2(0, -1), vec2(0.7, 0.7), vec2(-0.7, 0.7), vec2(0.7, -0.7), vec2(-0.7, -0.7));
+
+// Raster draws over this fragment later, as rtx/blocklight.glsl emrRtxBlHidden decides it from RTX block light's view ray
+// (emrBlG, declared by this effect too; without RTX block light nothing writes it, it stays cleared and nothing is hidden).
+bool emrRtxGiHidden() {
+	ivec2 size = textureSize(emrBlGSampler, 0);
+	float w = texelFetch(emrBlGSampler, clamp(ivec2(gl_FragCoord.xy), ivec2(0), size - 1), 0).w;
+	vec4 v = gbufferProjectionInverse * vec4(gl_FragCoord.xy / vec2(size) * 2.0 - 1.0, gl_FragCoord.z * 2.0 - 1.0, 1.0);
+	float d = length(v.xyz / v.w);
+	return w > 0.0 && d > w + emrRt_gi_hiddenMargin + 0.05 * d;
+}
 
 vec3 emrRtxGi(vec3 packAmbient, vec3 lightCol, vec3 ambientCol, vec3 playerPos, vec3 n, vec3 baseCol) {
 	emrRtxGiBlock = vec3(0.0);
@@ -27,6 +38,8 @@ vec3 emrRtxGi(vec3 packAmbient, vec3 lightCol, vec3 ambientCol, vec3 playerPos, 
 		k += w * texelFetch(emrGiFCSampler, q, 0);
 		ws += w;
 	}
+	if (ws <= 0.0 && emrRtxGiNoSearch && emrRt_gi_debug == 0) return packAmbient;
+	if (ws <= 0.0 && emrRt_gi_debug == 0 && emrRtxGiHidden()) return packAmbient; // drawn over later: not worth the search below
 	if (ws <= 0.0) {
 		// No GI surface matches (what the trace's view ray did not hit as raster drew it: an entity over the BLAS budget, a
 		// mip-dependent cutout edge): take the nearest one facing the same way.

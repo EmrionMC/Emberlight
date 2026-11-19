@@ -105,6 +105,11 @@ class PackSourceTest {
 			for (int i = 0; i <= MemoryPackSource.MAX_FILES; i++) zo.putNextEntry(new ZipEntry("shaders/" + i));
 		}
 		assertThrows(java.io.IOException.class, () -> PackSource.open(many));
+		var dir = assertThrows(java.io.IOException.class, () -> PackSource.open(zip("dir.zip", "shaders/", "hidden data", "shaders/a.fsh", "x")));
+		assertTrue(dir.getMessage().contains("directory entry with data"), dir.getMessage());
+		try (PackSource ok = PackSource.open(zip("emptydir.zip", "shaders/", "", "shaders/a.fsh", "x"))) {
+			assertTrue(ok.read("shaders/a.fsh").isPresent(), "plain directory entries still load");
+		}
 		try (PackSource ok = PackSource.open(bomb("ok.zip", 1, 20))) {
 			assertEquals(20 << 20, ok.read("shaders/f0.glsl").orElseThrow().length, "packs below the limits still load");
 		}

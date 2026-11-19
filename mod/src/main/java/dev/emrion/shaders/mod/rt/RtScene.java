@@ -41,6 +41,8 @@ import org.lwjgl.vulkan.VkAccelerationStructureBuildSizesInfoKHR;
 import org.lwjgl.vulkan.VkAccelerationStructureCreateInfoKHR;
 import org.lwjgl.vulkan.VkAccelerationStructureDeviceAddressInfoKHR;
 import org.lwjgl.vulkan.VkAccelerationStructureGeometryKHR;
+import org.lwjgl.vulkan.VkCopyAccelerationStructureInfoKHR;
+import org.lwjgl.vulkan.VkQueryPoolCreateInfo;
 import org.lwjgl.vulkan.VkAccelerationStructureInstanceKHR;
 import org.lwjgl.vulkan.VkAccelerationStructureTrianglesOpacityMicromapEXT;
 import org.lwjgl.vulkan.VkMicromapUsageEXT;
@@ -66,8 +68,16 @@ public final class RtScene {
 	/** Fixed capacity: the TLAS and section table never move, so descriptor sets written once per runtime stay valid. */
 	private static final int CAPACITY = Integer.getInteger("emrion.rt.maxInstances", 65536);
 	/** The TLAS is rebuilt every frame, so fast build is the default. */
-	private static final int TLAS_FLAGS = Boolean.getBoolean("emrion.rt.tlasFastTrace") ? VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR
-			: VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR;
+	private static final int TLAS_FLAGS = (Boolean.getBoolean("emrion.rt.tlasFastTrace") ? VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR
+			: VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR) | VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+	/** A TLAS with the same instances (same BLAS, mask, flags, order) as the last build is refitted, at most this many frames in a row (0: never). */
+	private static final int TLAS_REFITS = Integer.getInteger("emrion.rt.tlasRefits", 30);
+	/**
+	 * Section BLAS compaction (-Demrion.rt.compact=false: off): each build's compacted size is queried, read back when the
+	 * frame's ring slot comes round again, and a BLAS that shrinks by 10 % or more is copied into a buffer of that size.
+	 */
+	private static final boolean COMPACT = !"false".equals(System.getProperty("emrion.rt.compact"));
+	private static final int COMPACT_SLOTS = 2048; // size queries per ring slot; builds beyond them stay uncompacted
 	private static final long AS_BUILD = KHRSynchronization2.VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
 	private static final long AS_READ = KHRSynchronization2.VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
 	private static final long AS_WRITE = KHRSynchronization2.VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
@@ -92,11 +102,15 @@ public final class RtScene {
 		public long posAddr;
 		public int posStride = STRIDE;
 		long blas, blasAddr, blasSize, scratchAddr;
+		/** Which build the BLAS is (the scene's build counter): a size query is only applied to the build it was made for. */
+		long buildId;
 		@Nullable RawBuffer storage;
 		/** Cutout layers with opacity micromaps (RtOmm): the micromap and this layer's per-triangle index into it. */
 		RtOmm.@Nullable Map omm;
 		@Nullable RawBuffer ommIndices;
 		public boolean removed;
+		/** In a build queue; entries beyond the RT distance stay unqueued until the camera comes near (keepInRange). */
+		public boolean waiting;
 
 		Entry(SectionRenderDispatcher.RenderSection section, CompiledSectionMesh mesh, ChunkSectionLayer layer) {
 			this.section = section;
@@ -156,8 +170,15 @@ public final class RtScene {
 	// stats
 	private long blasBytes, triangles, built, gpuBuildNs, maxFrameBuildNs, tlasBytes;
 	private int instanceCount, sectionInstances;
+	private long sectionKey, tlasKey; // hash of the last built TLAS's instances (BLAS address, mask, flags), see recordTlasBuild
+	private int tlasRefitsLeft, tlasRefitCount, tlasBuiltCount;
 	private boolean deferEntities;
 	private final GpuTimer timer = new GpuTimer(2);
+	private long compactPool;
+	@SuppressWarnings("unchecked")
+	private final List<Entry>[] compactEntries = new List[RING];
+	private final long[][] compactIds = new long[RING][COMPACT_SLOTS];
+	private long compactSaved, compactCount;
 	private final boolean[] timed = new boolean[RING];
 	private int timerSlot;
 	private long lastLog;
@@ -167,6 +188,13 @@ public final class RtScene {
 			var as = VkPhysicalDeviceAccelerationStructurePropertiesKHR.calloc(stack).sType$Default();
 			vkGetPhysicalDeviceProperties2(ctx.vk.getPhysicalDevice(), VkPhysicalDeviceProperties2.calloc(stack).sType$Default().pNext(as));
 			scratchAlign = Math.max(1, as.minAccelerationStructureScratchOffsetAlignment());
+		}
+		if (COMPACT) try (MemoryStack stack = MemoryStack.stackPush()) {
+			LongBuffer p = stack.mallocLong(1);
+			check(vkCreateQueryPool(ctx.vk, VkQueryPoolCreateInfo.calloc(stack).sType$Default().queryType(VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR)
+					.queryCount(RING * COMPACT_SLOTS), null, p), "vkCreateQueryPool");
+			compactPool = p.get(0);
+			for (int r = 0; r < RING; r++) compactEntries[r] = new ArrayList<>();
 		}
 		scratch = new RawBuffer(ctx, SCRATCH_SIZE + scratchAlign, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false, "rt blas scratch");
 		ensureCapacity();
@@ -240,6 +268,10 @@ public final class RtScene {
 			s.tlasScratch.destroyLater();
 		}
 		s.timer.close();
+		if (s.compactPool != 0) {
+			long q = s.compactPool;
+			s.ctx.destroyLater(() -> vkDestroyQueryPool(s.ctx.vk, q, null));
+		}
 		if (s.sodium != null) s.sodium.destroy();
 		if (s.omm != null) s.omm.destroy();
 		RtLights.collecting = false;
@@ -251,6 +283,8 @@ public final class RtScene {
 	// ---- BLAS ---------------------------------------------------------------------------------------------------------------
 
 	private void update(SectionRenderDispatcher dispatcher) {
+		Vec3 cam = Minecraft.getInstance().gameRenderer.mainCamera().position();
+		double maxDist = RtConfig.distanceBlocks();
 		for (Entry e : uploaded) {
 			var slice = dispatcher.getRenderSectionSlice(e.mesh, e.layer);
 			var draw = e.mesh.getSectionDraw(e.layer);
@@ -262,7 +296,7 @@ public final class RtScene {
 			Entry[] arr = entries.computeIfAbsent(e.mesh, k -> new Entry[LAYERS]);
 			if (arr[e.layer.ordinal()] != null) drop(arr[e.layer.ordinal()]);
 			arr[e.layer.ordinal()] = e;
-			pending.add(e);
+			keepInRange(e, pending, cam, maxDist);
 		}
 		uploaded.clear();
 		for (SectionMesh m; (m = released.poll()) != null; ) {
@@ -309,6 +343,8 @@ public final class RtScene {
 	/** Records BLAS builds for queued entries until {@code budget} triangles or {@code maxBuilds} builds; the rest stays queued. Returns the triangles built. */
 	public long buildPending(VkCommandBuffer cb, ArrayDeque<Entry> pending, long budget, int maxBuilds) {
 		long start = System.nanoTime(), builtBefore = built;
+		Vec3 cam = Minecraft.getInstance().gameRenderer.mainCamera().position();
+		double maxDist = RtConfig.distanceBlocks();
 		List<Entry> batch = new ArrayList<>();
 		long tris = 0, scratchOffset = 0;
 		try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -324,7 +360,8 @@ public final class RtScene {
 			RtOmm.Map micromap = omm != null && ommOn && !pending.isEmpty() ? omm.prepare(cb) : null;
 			while (!pending.isEmpty() && tris < budget && built - builtBefore < maxBuilds) {
 				Entry e = pending.poll();
-				if (e.removed) continue;
+				e.waiting = false;
+				if (e.removed || !near(e, cam, maxDist, QUEUE_MARGIN)) continue; // left the range while queued: queued again on the way back
 				ensureIndices(e.quads);
 				if (micromap != null && e.layer == ChunkSectionLayer.CUTOUT) omm.attach(e, micromap);
 				fillGeometry(geom.get(0), e, ommGeom, ommUsage);
@@ -348,6 +385,7 @@ public final class RtScene {
 				check(vkCreateAccelerationStructureKHR(ctx.vk, create, null, p), "vkCreateAccelerationStructureKHR");
 				e.blas = p.get(0);
 				e.blasAddr = vkGetAccelerationStructureDeviceAddressKHR(ctx.vk, addrInfo.accelerationStructure(e.blas));
+				e.buildId = built;
 				e.scratchAddr = align(address(scratch.handle), scratchAlign) + scratchOffset; // the buffer base itself may be less aligned
 				scratchOffset += scratchSize;
 				batch.add(e);
@@ -384,6 +422,7 @@ public final class RtScene {
 			}
 			vkCmdBuildAccelerationStructuresKHR(cb, infos, pRanges);
 			if (omm != null) for (Entry e : batch) omm.built(e);
+			if (compactPool != 0) queryCompactedSizes(cb, batch);
 		} finally {
 			geoms.free();
 			infos.free();
@@ -406,9 +445,81 @@ public final class RtScene {
 	}
 
 	private static void blasInfo(VkAccelerationStructureBuildGeometryInfoKHR info, VkAccelerationStructureGeometryKHR.Buffer geom, long dst, long scratchAddr) {
-		info.sType$Default().type(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR).flags(VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR)
+		info.sType$Default().type(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR)
+				.flags(VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR | (COMPACT ? VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR : 0))
 				.mode(VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR).dstAccelerationStructure(dst).pGeometries(geom).geometryCount(1);
 		info.scratchData().deviceAddress(scratchAddr);
+	}
+
+	/** After a batch's builds: their compacted sizes into this ring slot's queries (reset in the same command buffer). */
+	private void queryCompactedSizes(VkCommandBuffer cb, List<Entry> batch) {
+		List<Entry> list = compactEntries[frame];
+		int first = list.size(), n = Math.min(batch.size(), COMPACT_SLOTS - first);
+		if (n <= 0) return;
+		Barriers.memory(cb, AS_BUILD, AS_WRITE, AS_BUILD, AS_READ);
+		vkCmdResetQueryPool(cb, compactPool, frame * COMPACT_SLOTS + first, n);
+		LongBuffer handles = MemoryUtil.memAllocLong(n);
+		try {
+			for (int i = 0; i < n; i++) {
+				Entry e = batch.get(i);
+				handles.put(i, e.blas);
+				compactIds[frame][first + i] = e.buildId;
+				list.add(e);
+			}
+			vkCmdWriteAccelerationStructuresPropertiesKHR(cb, handles, VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR, compactPool, frame * COMPACT_SLOTS + first);
+		} finally {
+			MemoryUtil.memFree(handles);
+		}
+	}
+
+	/**
+	 * At the start of the frame that reuses ring slot r: the sizes queried there RING frames ago. Every BLAS still the same
+	 * build that shrinks by 10 % or more is copied into its compacted size (before this frame's TLAS build, which then
+	 * points at the copy); the original goes through the destroy queue, so frames in flight keep tracing it.
+	 */
+	private void compact(VkCommandBuffer cb, int r) {
+		List<Entry> list = compactEntries[r];
+		int n = list.size();
+		if (n == 0) return;
+		LongBuffer res = MemoryUtil.memAllocLong(2 * n); // (size, availability) per query
+		try (MemoryStack stack = MemoryStack.stackPush()) {
+			int rc = vkGetQueryPoolResults(ctx.vk, compactPool, r * COMPACT_SLOTS, n, res, 16, VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+			if (rc != VK_SUCCESS && rc != VK_NOT_READY) return;
+			var create = VkAccelerationStructureCreateInfoKHR.calloc(stack).sType$Default();
+			var addrInfo = VkAccelerationStructureDeviceAddressInfoKHR.calloc(stack).sType$Default();
+			var copy = VkCopyAccelerationStructureInfoKHR.calloc(stack).sType$Default().mode(VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR);
+			LongBuffer p = stack.mallocLong(1);
+			for (int i = 0; i < n; i++) {
+				Entry e = list.get(i);
+				long size = res.get(2 * i);
+				if (res.get(2 * i + 1) == 0 || e.removed || e.blas == 0 || e.buildId != compactIds[r][i] || size == 0 || size > e.blasSize * 9 / 10) continue;
+				RawBuffer storage;
+				try { // optional: out of memory keeps the original (the rest of this slot too)
+					storage = new RawBuffer(ctx, size, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false, "rt blas");
+				} catch (IllegalStateException ex) {
+					break;
+				}
+				create.buffer(storage.handle).offset(0).size(size).type(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR);
+				if (vkCreateAccelerationStructureKHR(ctx.vk, create, null, p) != VK_SUCCESS) {
+					storage.destroyLater();
+					break;
+				}
+				long old = e.blas;
+				vkCmdCopyAccelerationStructureKHR(cb, copy.src(old).dst(p.get(0)));
+				ctx.destroyLater(() -> vkDestroyAccelerationStructureKHR(ctx.vk, old, null));
+				e.storage.destroyLater();
+				e.storage = storage;
+				e.blas = p.get(0);
+				e.blasAddr = vkGetAccelerationStructureDeviceAddressKHR(ctx.vk, addrInfo.accelerationStructure(e.blas));
+				blasBytes -= e.blasSize - size;
+				compactSaved += e.blasSize - size;
+				compactCount++;
+				e.blasSize = size;
+			}
+		} finally {
+			MemoryUtil.memFree(res);
+			list.clear();
+		}
 	}
 
 	/** RtQuadIndices: 0,1,2, 2,3,0 + 4k (MC's quad winding) for at least {@code quads} quads; grown by doubling. */
@@ -432,6 +543,34 @@ public final class RtScene {
 
 	public void drop(Entry e) {
 		e.removed = true;
+		unbuild(e);
+	}
+
+	/** Blocks beyond the RT distance (on top of where the TLAS takes sections) before an entry is queued, and before its BLAS is freed again. */
+	public static final double QUEUE_MARGIN = 24, FREE_MARGIN = 56;
+
+	/** Section e is within the RT distance plus {@code margin} blocks (maxDist 0 = unlimited). */
+	public static boolean near(Entry e, Vec3 cam, double maxDist, double margin) {
+		return maxDist <= 0 || Math.max(Math.abs(e.x + 8 - cam.x), Math.abs(e.z + 8 - cam.z)) <= maxDist + margin;
+	}
+
+	/**
+	 * Builds only what RT can trace: queues an unbuilt entry once it is near, frees the BLAS of one that is well beyond the
+	 * RT distance (the mesh stays in MC's or Sodium's heap, so it is built again on the way back). Returns true if queued.
+	 */
+	public boolean keepInRange(Entry e, ArrayDeque<Entry> queue, Vec3 cam, double maxDist) {
+		if (e.removed) return false;
+		if (e.blas != 0) {
+			if (!near(e, cam, maxDist, FREE_MARGIN)) unbuild(e);
+			return false;
+		}
+		if (e.waiting || !near(e, cam, maxDist, QUEUE_MARGIN)) return false;
+		e.waiting = true;
+		queue.add(e);
+		return true;
+	}
+
+	private void unbuild(Entry e) {
 		if (omm != null) omm.release(e);
 		if (e.blas == 0) return;
 		long blas = e.blas;
@@ -444,14 +583,19 @@ public final class RtScene {
 
 	// ---- TLAS ---------------------------------------------------------------------------------------------------------------
 
-	/** levelStart, outside any MC render pass: rebuilds the TLAS over every BLAS whose mesh is its section's current one. */
-	public void buildTlas(VkCommandBuffer cb) {
+	/**
+	 * levelStart, outside any MC render pass: rebuilds the TLAS over every BLAS whose mesh is its section's current one.
+	 * {@code earlyReaders}: a pass reads the TLAS before the shadow pass ends; without one, a frame whose entities come from
+	 * the shadow pass builds the TLAS only there ({@link #refreshEntities}).
+	 */
+	public void buildTlas(VkCommandBuffer cb, boolean earlyReaders) {
 		Vec3 cam = Minecraft.getInstance().gameRenderer.mainCamera().position();
 		if (omm != null && RtConfig.omm != ommOn) {
 			ommOn = RtConfig.omm;
 			rebuildSections();
 		}
 		frame = (frame + 1) % RING;
+		if (compactPool != 0) compact(cb, frame);
 		batchesSinceTlas = frameBuilds = 0;
 		frameTris = 0;
 		if (sodium != null) {
@@ -468,13 +612,18 @@ public final class RtScene {
 		long start = System.nanoTime();
 		double maxDist = RtConfig.distanceBlocks();
 		int i = 0;
+		sectionKey = 0;
 		for (Entry[] arr : entries.values())
-			for (Entry e : arr)
-				if (e != null && e.blas != 0 && e.section.getSectionMesh() == e.mesh) i = instance(inst, sec, i, e, cam, maxDist); // else a newer mesh is not complete yet
+			for (Entry e : arr) {
+				if (e == null) continue;
+				keepInRange(e, pending, cam, maxDist);
+				if (e.blas != 0 && e.section.getSectionMesh() == e.mesh) i = instance(inst, sec, i, e, cam, maxDist); // else a newer mesh is not complete yet
+			}
 		for (Entry e : external) i = instance(inst, sec, i, e, cam, maxDist);
 		sectionInstances = i;
 		if (entities != null && !deferEntities) i = entities.writeInstances(inst, sec, i, CAPACITY, frame * CAPACITY, cam);
-		recordTlasBuild(cb, i);
+		// shortcut: a frame whose shadow pass then does not run (a pack switch) keeps last frame's TLAS, one frame off
+		if (earlyReaders || !deferEntities) recordTlasBuild(cb, i, entities != null && !deferEntities);
 		dev.emrion.shaders.mod.debug.HitchLog.add(dev.emrion.shaders.mod.debug.HitchLog.TLAS, start);
 		start = System.nanoTime();
 		lights.upload(cb, cam, frame);
@@ -491,31 +640,41 @@ public final class RtScene {
 		entities.keepShadowCapture();
 		Profiler.mark(cb, "RT: entity BLAS");
 		long inst = instances[frame].mapped, sec = sections.mapped + (long) frame * CAPACITY * 16;
-		recordTlasBuild(cb, entities.writeInstances(inst, sec, sectionInstances, CAPACITY, frame * CAPACITY, cam));
+		recordTlasBuild(cb, entities.writeInstances(inst, sec, sectionInstances, CAPACITY, frame * CAPACITY, cam), true);
 		Profiler.mark(cb, "RT: TLAS build (entities)");
 	}
 
-	private void recordTlasBuild(VkCommandBuffer cb, int i) {
+	private void recordTlasBuild(VkCommandBuffer cb, int i, boolean withEntities) {
 		instanceCount = i;
+		// The instance translations are camera-relative, so they all change with every camera move, but by the same offset:
+		// a refit keeps the build's tree as good as new. Only entities moving inside it loosen it, hence a rebuild every
+		// TLAS_REFITS frames. A refit needs the same instances in the same order (BLAS, mask, flags; transforms may change).
+		// (keys hashed while the instances were written: the mapped instance memory may be uncached for reads)
+		long key = (i * 0x9E3779B97F4A7C15L + sectionKey) * 0x9E3779B97F4A7C15L + (withEntities ? entities.instanceKey : 1);
+		boolean refit = key == tlasKey && i == tlasBuiltCount && tlasRefitsLeft > 0;
+		tlasRefitsLeft = refit ? tlasRefitsLeft - 1 : TLAS_REFITS;
+		tlasKey = key;
+		tlasBuiltCount = i;
+		if (refit) tlasRefitCount++;
 		// previous ray queries and BLAS builds (WAR on the TLAS, RAW on BLAS) before this build
-		Barriers.memory(cb, AS_BUILD | Barriers.COMPUTE | Barriers.FRAGMENT, AS_WRITE | AS_READ, AS_BUILD, AS_WRITE | AS_READ);
+		Barriers.memory(cb, AS_BUILD | Barriers.COMPUTE | Barriers.FRAGMENT | Barriers.RAYGEN, AS_WRITE | AS_READ, AS_BUILD, AS_WRITE | AS_READ);
 		try (MemoryStack stack = MemoryStack.stackPush()) {
 			var geom = VkAccelerationStructureGeometryKHR.calloc(1, stack);
 			geom.get(0).sType$Default().geometryType(VK_GEOMETRY_TYPE_INSTANCES_KHR).geometry().instances().sType$Default().arrayOfPointers(false)
 					.data().deviceAddress(address(instances[frame].handle));
 			var info = VkAccelerationStructureBuildGeometryInfoKHR.calloc(1, stack).sType$Default().type(VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR)
-					.flags(TLAS_FLAGS).mode(VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR)
-					.dstAccelerationStructure(tlas).pGeometries(geom).geometryCount(1);
+					.flags(TLAS_FLAGS).mode(refit ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR : VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR)
+					.srcAccelerationStructure(refit ? tlas : VK_NULL_HANDLE).dstAccelerationStructure(tlas).pGeometries(geom).geometryCount(1);
 			info.scratchData().deviceAddress(align(address(tlasScratch.handle), scratchAlign));
 			var range = VkAccelerationStructureBuildRangeInfoKHR.calloc(1, stack).primitiveCount(i);
 			vkCmdBuildAccelerationStructuresKHR(cb, info, stack.pointers(range));
 		}
-		Barriers.memory(cb, AS_BUILD, AS_WRITE, Barriers.COMPUTE | Barriers.FRAGMENT, AS_READ | Barriers.STORAGE_READ);
+		Barriers.memory(cb, AS_BUILD, AS_WRITE, Barriers.COMPUTE | Barriers.FRAGMENT | Barriers.RAYGEN, AS_READ | Barriers.STORAGE_READ);
 	}
 
 	/** Writes e's TLAS instance and section-table entry at slot i unless it is beyond the RT distance or the TLAS is full; returns the next slot. */
 	private int instance(long inst, long sec, int i, Entry e, Vec3 cam, double maxDist) {
-		if (maxDist > 0 && Math.max(Math.abs(e.x + 8 - cam.x), Math.abs(e.z + 8 - cam.z)) > maxDist + 8) return i;
+		if (!near(e, cam, maxDist, 8)) return i;
 		if (i == CAPACITY) {
 			if (!overflowWarned) EmrionShadersClient.LOG.warn("RT: more than {} instances, the rest is left out (-Demrion.rt.maxInstances)", CAPACITY);
 			overflowWarned = true;
@@ -533,6 +692,7 @@ public final class RtScene {
 		MemoryUtil.memPutInt(a + 48, (frame * CAPACITY + i) | mask << 24); // instanceCustomIndex = section table entry
 		MemoryUtil.memPutInt(a + 52, VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR << 24);
 		MemoryUtil.memPutLong(a + 56, e.blasAddr);
+		sectionKey = sectionKey * 0x9E3779B97F4A7C15L + e.blasAddr * 4 + mask;
 		long s = sec + i * 16L; // EmrionRtSections: uvec2 vertexAddr, uint layer, uint vertex format
 		MemoryUtil.memPutLong(s, e.vertexAddr);
 		MemoryUtil.memPutInt(s + 8, e.layer.ordinal());
@@ -570,7 +730,7 @@ public final class RtScene {
 			vkGetAccelerationStructureBuildSizesKHR(ctx.vk, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, info, stack.ints(cap), sizes);
 			tlasBytes = sizes.accelerationStructureSize();
 			tlasStorage = new RawBuffer(ctx, tlasBytes, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false, "rt tlas");
-			tlasScratch = new RawBuffer(ctx, sizes.buildScratchSize() + scratchAlign, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false, "rt tlas scratch");
+			tlasScratch = new RawBuffer(ctx, Math.max(sizes.buildScratchSize(), sizes.updateScratchSize()) + scratchAlign, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false, "rt tlas scratch");
 			LongBuffer p = stack.mallocLong(1);
 			check(vkCreateAccelerationStructureKHR(ctx.vk, VkAccelerationStructureCreateInfoKHR.calloc(stack).sType$Default().buffer(tlasStorage.handle)
 					.size(tlasBytes).type(VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR), null, p), "vkCreateAccelerationStructureKHR");
@@ -656,9 +816,9 @@ public final class RtScene {
 		if (now - lastLog < 5_000_000_000L) return;
 		lastLog = now;
 		long ring = RING * (long) CAPACITY * (VkAccelerationStructureInstanceKHR.SIZEOF + 16);
-		EmrionShadersClient.LOG.info("RT: {} BLAS ({} pending, longest wait {} frames), {} triangles, BLAS {} MiB (avg {} B/tri), TLAS {} instances {} KiB, scratch {} MiB, "
+		EmrionShadersClient.LOG.info("RT: {} BLAS ({} pending, longest wait {} frames), {} triangles, BLAS {} MiB (avg {} B/tri), TLAS {} instances {} KiB ({} refits), {} BLAS compacted (-{} MiB), scratch {} MiB, "
 						+ "instance+table rings {} MiB; GPU BLAS build time so far {} ms for {} builds, worst frame {} us",
-				entriesBuilt(), pending.size() + (sodium == null ? 0 : sodium.pendingCount()), sodium == null ? 0 : sodium.takeMaxWait(), triangles, blasBytes >> 20, triangles == 0 ? 0 : blasBytes / triangles, instanceCount, tlasBytes >> 10,
+				entriesBuilt(), pending.size() + (sodium == null ? 0 : sodium.pendingCount()), sodium == null ? 0 : sodium.takeMaxWait(), triangles, blasBytes >> 20, triangles == 0 ? 0 : blasBytes / triangles, instanceCount, tlasBytes >> 10, tlasRefitCount, compactCount, compactSaved >> 20,
 				SCRATCH_SIZE >> 20, ring >> 20, gpuBuildNs / 1_000_000, built, maxFrameBuildNs / 1000);
 		if (entities != null) EmrionShadersClient.LOG.info("RT: {}", entities.summary());
 		if (omm != null && ommOn) EmrionShadersClient.LOG.info("RT: {}", omm.summary());

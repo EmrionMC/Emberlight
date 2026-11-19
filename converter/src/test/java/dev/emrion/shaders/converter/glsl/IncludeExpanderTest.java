@@ -60,6 +60,16 @@ class IncludeExpanderTest {
 	}
 
 	@Test
+	void longLinesIncludedManyTimesStopAtTheCharacterCap() {
+		String big = "x".repeat(1 << 20); // 1M chars, included 200 times = 200M chars unbounded
+		List<String> main = java.util.Collections.nCopies(200, "#include \"big.glsl\"");
+		var e = IncludeExpander.expand("/a.glsl", p -> p.equals("/a.glsl") ? main : List.of(big));
+		assertTrue(e.text().length() <= IncludeExpander.MAX_CHARS);
+		assertEquals(1, e.errors().size(), e.errors().toString());
+		assertTrue(e.errors().getFirst().message().contains("characters"));
+	}
+
+	@Test
 	void includeBombAndDeepChainStopWithAnError() {
 		// 40 files, each including the next twice: 2^40 lines unbounded
 		java.util.Map<String, List<String>> bomb = new java.util.HashMap<>();

@@ -11,18 +11,19 @@ void main() {
 	if (imageLoad(emrGiCk, emrGcAt(i, 0)).r == 0u) return; // empty: its sums are 0 too
 	uint cw = imageLoad(emrGiCs, emrGcAt(i, 9)).r;
 	float m = float(cw & 0x7FFFFFFFu);
-	vec4 a = imageLoad(emrGiCr, emrGcAt(i, 0)), b = imageLoad(emrGiCr, emrGcAt(i, 1)), c = imageLoad(emrGiCr, emrGcAt(i, 2));
-	if (m == 0.0) {
+	if (m == 0.0) { // untouched entry (most of them): only its age changes, the light is rewritten on eviction only
+		vec4 b = imageLoad(emrGiCr, emrGcAt(i, 1));
 		b.w += 1.0;
 		if (b.w > emrRt_gi_cacheStale) {
 			imageStore(emrGiCk, emrGcAt(i, 0), uvec4(0u));
-			a = b = c = vec4(0.0);
+			imageStore(emrGiCr, emrGcAt(i, 0), vec4(0.0));
+			imageStore(emrGiCr, emrGcAt(i, 2), vec4(0.0));
+			b = vec4(0.0);
 		}
 		imageStore(emrGiCr, emrGcAt(i, 1), b);
-		imageStore(emrGiCr, emrGcAt(i, 0), a);
-		imageStore(emrGiCr, emrGcAt(i, 2), c);
 		return;
 	}
+	vec4 a = imageLoad(emrGiCr, emrGcAt(i, 0)), b = imageLoad(emrGiCr, emrGcAt(i, 1)), c = imageLoad(emrGiCr, emrGcAt(i, 2));
 	vec3 s[3];
 	for (int r = 0; r < 3; r++) {
 		s[r] = vec3(imageLoad(emrGiCs, emrGcAt(i, r * 3)).r, imageLoad(emrGiCs, emrGcAt(i, r * 3 + 1)).r, imageLoad(emrGiCs, emrGcAt(i, r * 3 + 2)).r) / EMR_GC_SCALE;

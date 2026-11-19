@@ -77,11 +77,15 @@ final class RtAoPass {
 				.add(7, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, cs).build(ctx, true);
 		layout = Descriptors.pipelineLayout(ctx, 0, setLayout);
 		params = new RawBuffer(ctx, (long) SLOT * UboRing.REGIONS, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true, "rt ao params");
-		long trace = module("rt_ao.comp"), filter = module("rt_ao_filter.comp");
-		tracePipeline = ComputePipelines.create(ctx, trace, layout, ctx.pipelineCache().handle);
-		filterPipeline = ComputePipelines.create(ctx, filter, layout, ctx.pipelineCache().handle);
-		ShaderModules.destroy(ctx, trace);
-		ShaderModules.destroy(ctx, filter);
+		long trace = module("rt_ao.comp"), filter = 0;
+		try {
+			filter = module("rt_ao_filter.comp");
+			tracePipeline = ComputePipelines.create(ctx, trace, layout, ctx.pipelineCache().handle);
+			filterPipeline = ComputePipelines.create(ctx, filter, layout, ctx.pipelineCache().handle);
+		} finally {
+			ShaderModules.destroy(ctx, trace);
+			ShaderModules.destroy(ctx, filter);
+		}
 		int usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
 		for (int i = 0; i < 2; i++) history[i] = new RawImage(ctx, VK_FORMAT_R16G16B16A16_SFLOAT, width, height, 1, 1, usage, "rt ao history " + i);
 		RawImage out = new RawImage(ctx, VK_FORMAT_R32_SFLOAT, width, height, 1, 1, usage, "rt ao");

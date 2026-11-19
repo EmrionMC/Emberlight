@@ -86,6 +86,8 @@ public final class PbrAtlases {
 	private boolean built, building;
 	/** Base atlas animation ticks since its upload. */
 	private int ticks;
+	/** Bumped by release(): a build started before it must not upload (pack toggled off mid-build). */
+	private int epoch;
 
 	private PbrAtlases(Layout layout) {
 		this.layout = layout;
@@ -179,15 +181,17 @@ public final class PbrAtlases {
 		labPbr = labPbr(resources);
 		long start = System.nanoTime();
 		Layout l = layout;
+		int e = epoch;
 		CompletableFuture.supplyAsync(() -> load(l, resources), Util.backgroundExecutor())
-				.whenCompleteAsync((loaded, error) -> finish(loaded, error, start), Minecraft.getInstance());
+				.whenCompleteAsync((loaded, error) -> finish(loaded, error, start, e), Minecraft.getInstance());
 	}
 
 	private void release() {
 		if (normals != null) normals.close();
 		if (specular != null) specular.close();
 		normals = specular = null;
-		built = false;
+		built = building = false; // an in-flight build is stale now; a new request starts over
+		epoch++;
 	}
 
 	// ---- background: decode, resize, mipmaps ---------------------------------------------------------------------------
@@ -225,7 +229,7 @@ public final class PbrAtlases {
 				return null;
 			}
 			if (frame.width() != r.width() || frame.height() != r.height()) {
-				NativeImage scaled = PbrImages.scale(image, w / frame.width() * r.width(), h / frame.height() * r.height());
+				NativeImage scaled = PbrImages.scale(image, w / frame.width() * r.width(), h / frame.height() * r.height(), w / frame.width(), h / frame.height());
 				image.close();
 				image = scaled;
 			}
@@ -253,7 +257,7 @@ public final class PbrAtlases {
 		try (InputStream in = resource.get().open()) {
 			var properties = new Properties();
 			properties.load(in);
-			return properties.getProperty("format", "").split("/")[0].equals("lab-pbr");
+			return properties.getProperty("format", "").split("/", -1)[0].equals("lab-pbr");
 		} catch (IOException | IllegalArgumentException e) {
 			return false;
 		}
@@ -276,12 +280,12 @@ public final class PbrAtlases {
 
 	// ---- render thread: upload -----------------------------------------------------------------------------------------
 
-	private void finish(@Nullable Loaded loaded, @Nullable Throwable error, long start) {
-		building = false;
+	private void finish(@Nullable Loaded loaded, @Nullable Throwable error, long start, int buildEpoch) {
+		if (buildEpoch == epoch) building = false; // else a newer build owns the flag
 		Layout l = layout;
 		Identifier location = l.base().location();
 		// replaced by a reload, or the pack turned off meanwhile: drop the result (the current instance builds on demand)
-		boolean stale = ATLASES.get(location) != this || PackManager.selected() == null;
+		boolean stale = ATLASES.get(location) != this || PackManager.selected() == null || buildEpoch != epoch;
 		if (error != null || stale) {
 			if (error != null) EmrionShadersClient.LOG.error("Building the PBR atlases of {} failed", location, error);
 			if (error != null && !stale) built = true; // no retry loop: the flat defaults stay bound until the next reload
@@ -293,6 +297,8 @@ public final class PbrAtlases {
 		normals = upload(l, Type.NORMAL, loaded.normals());
 		specular = upload(l, Type.SPECULAR, loaded.specular());
 		built = true;
+		// a runtime created while this built bound the flat defaults: the bump makes PackManager rebuild it with these views
+		if (location.equals(TextureAtlas.LOCATION_BLOCKS) && (normals != null || specular != null)) generation++;
 		long bytesPerAtlas = 0;
 		for (int level = 0; level <= l.mipLevel(); level++) bytesPerAtlas += 4L * (l.width() >> level) * (l.height() >> level);
 		EmrionShadersClient.LOG.info("PBR atlases of {} {}x{} ({} mips, {} sprites): {} normal maps, {} specular maps; load {} ms (background), "
@@ -327,7 +333,7 @@ public final class PbrAtlases {
 		var states = ((TextureAtlasAccessor) (Object) atlas).emrion$animationStates();
 		if (ticks > 0 && !states.isEmpty()) {
 			for (var state : states) {
-				for (int i = 0; i < ticks; i++) state.tick();
+				fastForward(state, ticks);
 				((AnimationStateAccessor) state).emrion$setDirty(true);
 			}
 			((TextureAtlasAccessor) (Object) atlas).emrion$uploadAnimationFrames();
@@ -335,6 +341,17 @@ public final class PbrAtlases {
 		// The GPU holds everything now (animation frames have their own textures): free the CPU images early.
 		sprites.values().forEach(s -> s.contents().close());
 		return atlas;
+	}
+
+	/** {@code ticks} ticks from frame 0, but at most two cycles of work (a late build after hours of play would replay them all). */
+	private static void fastForward(net.minecraft.client.renderer.texture.SpriteContents.AnimationState state, int ticks) {
+		var a = (AnimationStateAccessor) state;
+		int done = 0;
+		do {
+			state.tick();
+			done++;
+		} while (done < ticks && (a.emrion$frame() != 0 || a.emrion$subFrame() != 0));
+		if (done < ticks) for (int i = 0, rest = ticks % done; i < rest; i++) state.tick(); // done = cycle length
 	}
 
 	private static void close(Map<Identifier, TextureAtlasSprite> sprites) {

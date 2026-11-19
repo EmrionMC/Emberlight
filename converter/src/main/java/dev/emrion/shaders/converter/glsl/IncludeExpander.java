@@ -19,7 +19,7 @@ public final class IncludeExpander {
 	 * Untrusted packs: an include bomb (each file including the next twice) or a deep chain fails with an error instead of
 	 * running out of memory or stack. Real packs (2026-11): at most 11 levels and ~107k lines per stage (photon).
 	 */
-	static final int MAX_DEPTH = 100, MAX_LINES = 1_000_000;
+	static final int MAX_DEPTH = 100, MAX_LINES = 1_000_000, MAX_CHARS = 64 << 20;
 
 	/** Include-expanded text plus, for each 1-based line, the original file (absolute pack path) and line. */
 	public record Expanded(String text, List<String> files, int[] fileOfLine, int[] lineOfLine, List<Error> errors) {
@@ -100,6 +100,11 @@ public final class IncludeExpander {
 			for (int i = 0; i < lines.size(); i++) {
 				if (++work > MAX_LINES) {
 					if (work == MAX_LINES + 1) errors.add(new Error(path, i + 1, "#include expansion exceeds " + MAX_LINES + " lines (include bomb?)"));
+					break;
+				}
+				if (text.length() + lines.get(i).length() > MAX_CHARS) { // long lines included many times: the line cap alone does not bound memory
+					work = MAX_LINES + 2;
+					errors.add(new Error(path, i + 1, "#include expansion exceeds " + MAX_CHARS + " characters (include bomb?)"));
 					break;
 				}
 				String line = lines.get(i);

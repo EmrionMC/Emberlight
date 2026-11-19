@@ -37,7 +37,9 @@ public final class ShadercSpirvCompiler implements SpirvCompiler {
 			// The transpiler emits every set/binding/location explicitly; anything missing must fail, not be guessed.
 			shaderc_compile_options_set_auto_bind_uniforms(options, false);
 			shaderc_compile_options_set_auto_map_locations(options, false);
-			result = shaderc_compile_into_spv(compiler, source, kind(stage), fileName, entry, options);
+			// a native "raygen" pass on a device with RT pipelines (NativeGlsl): a compute pass compiled as a ray generation shader
+			int kind = stage == StageType.COMPUTE && glsl450.lastIndexOf("\n#pragma shader_stage(raygen)\n", 512) >= 0 ? shaderc_glsl_raygen_shader : kind(stage); // (header only)
+			result = shaderc_compile_into_spv(compiler, source, kind, fileName, entry, options);
 			if (result == 0) return new Result(null, List.of(Diagnostic.error(name, 0, "shaderc returned no result")));
 			List<Diagnostic> diagnostics = parseMessages(shaderc_result_get_error_message(result), name, lineMap);
 			if (shaderc_result_get_compilation_status(result) != shaderc_compilation_status_success) {

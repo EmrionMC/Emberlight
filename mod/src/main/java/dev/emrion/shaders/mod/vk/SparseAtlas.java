@@ -162,9 +162,14 @@ public final class SparseAtlas {
 					bindInfo.pImageOpaqueBinds(VkSparseImageOpaqueMemoryBindInfo.calloc(1, stack).image(image).pBinds(tail));
 				}
 				var pFence = stack.mallocLong(1);
-				vkCreateFence(device.vkDevice(), VkFenceCreateInfo.calloc(stack).sType$Default(), null, pFence);
+				int r = vkCreateFence(device.vkDevice(), VkFenceCreateInfo.calloc(stack).sType$Default(), null, pFence);
+				if (r != VK_SUCCESS) {
+					vkDestroyImage(device.vkDevice(), image, null);
+					Vma.vmaFreeMemory(device.vma(), memory);
+					return fail(info, oldFlags, "vkCreateFence " + r);
+				}
 				// Sparse binds are not ordered with later submits: wait here, before MC records anything with the image.
-				int r = vkQueueBindSparse(device.graphicsQueue().vkQueue(), bindInfo, pFence.get(0));
+				r = vkQueueBindSparse(device.graphicsQueue().vkQueue(), bindInfo, pFence.get(0));
 				if (r == VK_SUCCESS) r = vkWaitForFences(device.vkDevice(), pFence, true, Long.MAX_VALUE);
 				vkDestroyFence(device.vkDevice(), pFence.get(0), null);
 				if (r != VK_SUCCESS) {
@@ -200,10 +205,21 @@ public final class SparseAtlas {
 				vkGetPhysicalDeviceProperties(device.vkDevice().getPhysicalDevice(), props);
 				supported = FEATURES.contains("sparseBinding") && FEATURES.contains("sparseResidencyImage2D") && FEATURES.contains("sparseResidencyAliased")
 						&& f.sparseBinding() && f.sparseResidencyImage2D() && f.sparseResidencyAliased()
-						&& props.sparseProperties().residencyStandard2DBlockShape();
+						&& props.sparseProperties().residencyStandard2DBlockShape() && graphicsQueueBindsSparse(device, stack);
 			}
 		}
 		return supported;
+	}
+
+	/** The binds go to MC's graphics queue, so its family must support them (every desktop driver does, the spec does not promise it). */
+	private static boolean graphicsQueueBindsSparse(VulkanDevice device, MemoryStack stack) {
+		var pd = device.vkDevice().getPhysicalDevice();
+		var count = stack.mallocInt(1);
+		vkGetPhysicalDeviceQueueFamilyProperties(pd, count, null);
+		var families = org.lwjgl.vulkan.VkQueueFamilyProperties.malloc(count.get(0), stack);
+		vkGetPhysicalDeviceQueueFamilyProperties(pd, count, families);
+		int family = device.graphicsQueue().queueFamilyIndex();
+		return family < count.get(0) && (families.get(family).queueFlags() & VK_QUEUE_SPARSE_BINDING_BIT) != 0;
 	}
 
 	/** VulkanGpuTexture.destroy TAIL (the image is gone and no submit uses it any more): frees a sparse atlas's memory. */

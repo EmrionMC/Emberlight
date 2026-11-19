@@ -34,6 +34,57 @@ void main() {
 	vec3 v = normalize(world);
 	float maxDist = el_isSky(depth) ? VOL_FAR : min(length(world), VOL_FAR);
 	float jitter = fract(ign(vec2(hp) + 5.588238 * float(el_frame & 63)) + 0.61803399 * float((el_frame >> 6) & 15));
+	if (el_eyeInWater == 1) {
+		// the ray ends at the water surface seen from below (el_depth holds it; the hand's depth is skipped) or the opaque scene
+		float sd = texelFetch(el_depth, px, 0).r;
+		if (sd >= 0.56 && sd < depth) maxDist = min(maxDist, length(el_screenToWorld(uv, sd)));
+		maxDist = min(maxDist, 96.0);
+	}
+
+	// ---- history (reprojected, rejected by view distance) ----
+	uint n = uint(vs.x * vs.y);
+	uint wr = uint(el_frame & 1) * n, rd = n - wr;
+	bool hasHist = 2u * n <= uint(volData.length());
+	vec4 h = vec4(0.0);
+	float cnt = 0.0, rest = 0.0;
+	bool reused = false; // the main history tap was itself only carried over last frame (bit 7 of the count)
+	// signed by medium: history from the other side of the water surface fails the distance test below
+	float medium = el_eyeInWater == 1 ? -1.0 : 1.0;
+	if (hasHist) {
+		vec2 mv = cameraMotion(v * maxDist);
+		rest = 1.0 - smoothstep(0.02, 0.5, length(mv * el_screenSize));
+		float expected = medium * min(length(v * maxDist + el_cameraPosition - el_prevCameraPosition), VOL_FAR);
+		vec2 hpos = (uv + mv) * vec2(vs) - 0.5;
+		ivec2 hb = ivec2(floor(hpos));
+		vec2 hf = hpos - vec2(hb);
+		float hn = 0.0, hw = 0.0, wMax = 0.0;
+		for (int i = 0; i < 4; i++) {
+			ivec2 o = ivec2(i & 1, i >> 1);
+			ivec2 q = hb + o;
+			vec2 bw = mix(1.0 - hf, hf, vec2(o));
+			float w = bw.x * bw.y;
+			if (w < 1e-3 || any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, vs))) continue;
+			uvec4 d = volData[rd + uint(q.y * vs.x + q.x)];
+			float stored = uintBitsToFloat(d.z);
+			uint dn = d.w & 127u;
+			if (dn == 0u || (stored < 0.0) != (medium < 0.0) || abs(stored - expected) > 0.05 * abs(expected) + 0.1) continue;
+			h += vec4(unpackHalf2x16(d.x), unpackHalf2x16(d.y)) * w;
+			hn += float(dn) * w;
+			if (w > wMax) { wMax = w; reused = (d.w & 128u) != 0u; }
+			hw += w;
+		}
+		if (hw > 0.05) { h /= hw; cnt = hn / hw * min(hw * 2.0, 1.0); }
+	}
+	// Temporal amortization: with 8+ frames of valid history, each pixel marches every other frame (checkerboard) and
+	// keeps its reprojected history in between. Fresh / disoccluded pixels march every frame; under water always (the
+	// shafts move with the waves). Never twice in a row along a history chain: panning by one texel per frame keeps the
+	// checker's parity, and such a pixel would inherit carried-over history forever.
+	if (cnt >= 8.0 && medium > 0.0 && !reused && ((hp.x + hp.y + el_frame) & 1) == 1) {
+		volData[wr + uint(hp.y * vs.x + hp.x)] = uvec4(packHalf2x16(h.rg), packHalf2x16(h.ba), floatBitsToUint(medium * maxDist), uint(min(cnt, 64.0)) | 128u);
+		imageStore(vol_img, hp, h);
+		return;
+	}
+
 	vec3 l = lightDir();
 	vec3 lc = lightColor();
 	vec3 scatter = vec3(0.0);
@@ -41,11 +92,7 @@ void main() {
 	if (el_eyeInWater == 1) {
 		// WATER medium: absorption + blue-green scattering (HG g = 0.6). Sun shafts: each sample's sunlight crosses the
 		// wave surface above it (one ray to the surface: refraction caustic of the waves there = the shafts' pattern,
-		// absorption over the path below it) and must reach the sky (one RT shadow ray). The ray ends at the water
-		// surface seen from below (el_depth holds it; the hand's depth is skipped) or the opaque scene.
-		float sd = texelFetch(el_depth, px, 0).r;
-		if (sd >= 0.56 && sd < depth) maxDist = min(maxDist, length(el_screenToWorld(uv, sd)));
-		maxDist = min(maxDist, 96.0);
+		// absorption over the path below it) and must reach the sky (one RT shadow ray).
 		vec3 sigS = waterScatter(), sigT = waterExtinction();
 		float ph = 4.0 * PI * phaseHG(dot(v, l), WATER_G) * 0.5 + 0.5;
 		vec3 amb = skyAmbient(vec3(0.0, 1.0, 0.0)) * (0.15 + 0.85 * el_eyeBrightness.y) * 0.3;
@@ -78,13 +125,19 @@ void main() {
 	float phase = fogPhase(dot(v, l));
 	vec3 albedo = airAlbedo();
 	vec3 amb = fogTint(v) * mix(0.6, 0.1, caveFactor);
+	bool lit = caveFactor < 0.5; // neighbouring steps mostly agree: the last one's visibility picks the cheaper ray order
 	for (int i = 0; i < VOL_STEPS; i++) {
 		float t; float ds = marchStep(i, maxDist, jitter, t);
 		vec3 p = v * t;
 		float dens = fogDensity(p.y + el_cameraPosition.y);
 		vec3 sunL = vec3(0.0);
 #if !defined(EL_DIMENSION_NETHER)
-		if (dot(lc, lc) > 1e-6) sunL = lc * phase * 0.8 * (0.6 + 0.4 * RTX_INTENSITY) * sunTransmission(p, l, false);
+		if (dot(lc, lc) > 1e-6) {
+			float c;
+			vec3 tr = sunTransmissionC(p, l, false, c, lit);
+			lit = tr.r + tr.g + tr.b > 0.0;
+			sunL = lc * phase * 0.8 * (0.6 + 0.4 * RTX_INTENSITY) * tr;
+		}
 #endif
 		float stepT = exp(-dens * ds);
 		scatter += T * (1.0 - stepT) * (sunL + amb) * albedo;
@@ -93,37 +146,10 @@ void main() {
 	}
 
 	// ---- temporal ----
-	uint n = uint(vs.x * vs.y);
-	uint wr = uint(el_frame & 1) * n, rd = n - wr;
 	vec4 cur = vec4(scatter, T);
-	if (2u * n <= uint(volData.length())) {
-		vec2 mv = cameraMotion(v * maxDist);
-		float rest = 1.0 - smoothstep(0.02, 0.5, length(mv * el_screenSize));
-		float expected = min(length(v * maxDist + el_cameraPosition - el_prevCameraPosition), VOL_FAR);
-		vec2 hpos = (uv + mv) * vec2(vs) - 0.5;
-		ivec2 hb = ivec2(floor(hpos));
-		vec2 hf = hpos - vec2(hb);
-		vec4 h = vec4(0.0);
-		float hn = 0.0, hw = 0.0;
-		for (int i = 0; i < 4; i++) {
-			ivec2 o = ivec2(i & 1, i >> 1);
-			ivec2 q = hb + o;
-			vec2 bw = mix(1.0 - hf, hf, vec2(o));
-			float w = bw.x * bw.y;
-			if (w < 1e-3 || any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, vs))) continue;
-			uvec4 d = volData[rd + uint(q.y * vs.x + q.x)];
-			if (d.w == 0u || abs(uintBitsToFloat(d.z) - expected) > 0.05 * expected + 0.1) continue;
-			h += vec4(unpackHalf2x16(d.x), unpackHalf2x16(d.y)) * w;
-			hn += float(d.w) * w;
-			hw += w;
-		}
-		float cnt = 0.0;
-		if (hw > 0.05) {
-			h /= hw;
-			cnt = hn / hw * min(hw * 2.0, 1.0);
-			cur = mix(h, cur, 1.0 / min(cnt + 1.0, mix(8.0, 24.0, rest)));
-		}
-		volData[wr + uint(hp.y * vs.x + hp.x)] = uvec4(packHalf2x16(cur.rg), packHalf2x16(cur.ba), floatBitsToUint(maxDist), uint(min(cnt + 1.0, 64.0)));
+	if (hasHist) {
+		if (cnt > 0.0) cur = mix(h, cur, 1.0 / min(cnt + 1.0, mix(8.0, 24.0, rest)));
+		volData[wr + uint(hp.y * vs.x + hp.x)] = uvec4(packHalf2x16(cur.rg), packHalf2x16(cur.ba), floatBitsToUint(medium * maxDist), uint(min(cnt + 1.0, 64.0)));
 	}
 	imageStore(vol_img, hp, cur);
 }

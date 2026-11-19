@@ -7,7 +7,8 @@
 // Returns t < 0 on a miss.
 float emrRtRfTrace(vec3 o, vec3 d, float tMin, float tMax, uint mask, out int inst, out uint prim, out vec2 bary) {
 	rayQueryEXT rq;
-	rayQueryInitializeEXT(rq, emrRtTlas, gl_RayFlagsNoneEXT, mask, o, tMin, d, tMax);
+	// with translucents in the mask every candidate is confirmed below: the hardware finds the closest one itself
+	rayQueryInitializeEXT(rq, emrRtTlas, (mask & 0x02u) != 0u ? gl_RayFlagsOpaqueEXT : gl_RayFlagsNoneEXT, mask, o, tMin, d, tMax);
 	bool more;
 	for (int guard = 0; (more = rayQueryProceedEXT(rq)) && guard < 32; guard++) {
 		if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;

@@ -17,7 +17,7 @@ public record Profiles(Map<String, Map<String, String>> profiles, Map<String, Li
 			Map<String, String> v = new LinkedHashMap<>();
 			List<String> d = new ArrayList<>();
 			try {
-				resolve(name, new ArrayList<>(), tree, options, v, d, warnings);
+				resolve(name, new ArrayList<>(), new java.util.HashSet<>(), tree, options, v, d, warnings);
 			} catch (IllegalArgumentException e) {
 				// Iris fails to load the pack here; we report and keep what was resolved.
 				warnings.accept(e.getMessage());
@@ -28,7 +28,7 @@ public record Profiles(Map<String, Map<String, String>> profiles, Map<String, Li
 		return new Profiles(values, disabled);
 	}
 
-	private static void resolve(String name, List<String> parents, Map<String, List<String>> tree, OptionSet options,
+	private static void resolve(String name, List<String> parents, java.util.Set<String> done, Map<String, List<String>> tree, OptionSet options,
 	                            Map<String, String> values, List<String> disabled, Consumer<String> warnings) {
 		List<String> entries = tree.get(name);
 		if (entries == null) throw new IllegalArgumentException("Profile \"" + name + "\" does not exist");
@@ -38,8 +38,11 @@ public record Profiles(Map<String, Map<String, String>> profiles, Map<String, Li
 			} else if (e.startsWith("profile.")) {
 				String dep = e.substring("profile.".length());
 				if (parents.contains(dep)) throw new IllegalArgumentException("Profile \"" + name + "\" includes itself via " + dep);
-				parents.add(dep);
-				resolve(dep, parents, tree, options, values, disabled, warnings);
+				if (done.contains(dep)) continue; // a shared base (diamond) applies once: not a cycle, and no exponential re-expansion
+				List<String> path = new ArrayList<>(parents); // cycles are per branch
+				path.add(dep);
+				resolve(dep, path, done, tree, options, values, disabled, warnings);
+				done.add(dep);
 			} else if (e.startsWith("!")) {
 				values.put(e.substring(1), "false");
 			} else if (e.contains("=")) {

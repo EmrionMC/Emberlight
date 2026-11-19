@@ -28,6 +28,8 @@ public final class VulkanContext {
 	public final boolean storageWriteWithoutFormat;
 	/** Wireframe (polygon mode LINE); requested the same way. */
 	public final boolean fillModeNonSolid;
+	/** Pipeline-statistics queries (the adaptive terrain prepass); requested the same way. */
+	public final boolean pipelineStatisticsQuery;
 
 	private VulkanContext(VulkanDevice device) {
 		this.device = device;
@@ -41,6 +43,7 @@ public final class VulkanContext {
 			VK10.vkGetPhysicalDeviceFeatures(vk.getPhysicalDevice(), features);
 			storageWriteWithoutFormat = features.shaderStorageImageWriteWithoutFormat();
 			fillModeNonSolid = features.fillModeNonSolid();
+			pipelineStatisticsQuery = features.pipelineStatisticsQuery();
 		}
 	}
 

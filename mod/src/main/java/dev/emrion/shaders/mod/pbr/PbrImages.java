@@ -6,8 +6,9 @@ import com.mojang.blaze3d.platform.NativeImage;
 final class PbrImages {
 	private PbrImages() {}
 
-	static NativeImage scale(NativeImage src, int w, int h) {
-		int sw = src.getWidth(), sh = src.getHeight();
+	/** {@code cols} x {@code rows} animation frames: bilinear taps stay inside the frame (else a seam row from the next frame). */
+	static NativeImage scale(NativeImage src, int w, int h, int cols, int rows) {
+		int sw = src.getWidth(), sh = src.getHeight(), fw = sw / cols, fh = sh / rows, dw = w / cols, dh = h / rows;
 		NativeImage out = new NativeImage(w, h, false);
 		boolean nearest = w % sw == 0 && h % sh == 0;
 		float sx = (float) sw / w, sy = (float) sh / h;
@@ -17,8 +18,9 @@ final class PbrImages {
 					out.setPixel(x, y, src.getPixel((int) ((x + 0.5F) * sx), (int) ((y + 0.5F) * sy)));
 					continue;
 				}
-				float fx = Math.clamp((x + 0.5F) * sx - 0.5F, 0, sw - 1), fy = Math.clamp((y + 0.5F) * sy - 0.5F, 0, sh - 1);
-				int x0 = (int) fx, y0 = (int) fy, x1 = Math.min(x0 + 1, sw - 1), y1 = Math.min(y0 + 1, sh - 1);
+				int left = x / dw * fw, top = y / dh * fh;
+				float fx = Math.clamp((x + 0.5F) * sx - 0.5F, left, left + fw - 1), fy = Math.clamp((y + 0.5F) * sy - 0.5F, top, top + fh - 1);
+				int x0 = (int) fx, y0 = (int) fy, x1 = Math.min(x0 + 1, left + fw - 1), y1 = Math.min(y0 + 1, top + fh - 1);
 				float tx = fx - x0, ty = fy - y0;
 				out.setPixel(x, y, bilinear(src.getPixel(x0, y0), src.getPixel(x1, y0), src.getPixel(x0, y1), src.getPixel(x1, y1), tx, ty));
 			}

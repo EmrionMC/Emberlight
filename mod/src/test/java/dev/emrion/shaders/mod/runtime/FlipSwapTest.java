@@ -48,6 +48,15 @@ class FlipSwapTest {
 	}
 
 	@Test
+	void aSmallerAttachmentInTheSamePassBlocksTheSwap() {
+		var half = new Manifest.Target("colortex2", "color", "RGBA8", "RGBA8", 2, new float[] {0.5f, 0.5f}, null, 1, true, false, null, false, 0);
+		var frame = List.of(full("a", 0, "colortex1"), full("a", 0, "colortex3", "colortex2"), copy("colortex1"), copy("colortex3"));
+		var dim = new Manifest.Dimension(Map.of("a", program(1f, "off")), List.of(), List.of(target("colortex1", 1), half, target("colortex3", 1)),
+				List.of(new Manifest.FlipState(0, List.of())), frame, List.of(), null);
+		assertEquals(Set.of("colortex1"), FlipSwap.swappable(dim, p -> false, null));
+	}
+
+	@Test
 	void findsDiscardInstructions() {
 		var b = java.nio.ByteBuffer.allocate(4 * 7).order(java.nio.ByteOrder.LITTLE_ENDIAN);
 		b.putInt(0x07230203).putInt(0).putInt(0).putInt(10).putInt(0);

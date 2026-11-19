@@ -10,13 +10,15 @@ vec3 emrRtxShGlass(vec4 c) {
 }
 
 vec3 emrRtxShTint; // emrRtxShVisibility: product of the translucent faces the ray passed (1 = none)
+int emrRtxRecvRays = 0; // set by rtx/shadow_receiver_water.glsl: rays for this receiver (0 = the usual count)
 float emrRtxShWaterT; // emrRtxShVisibility: nearest water face any ray passed since the caller reset it (1e9 = none)
 
 float emrRtxShVisibility(vec3 origin, vec3 dir, float tMin, float tMax, uint mask) {
 	vec3 tint = vec3(1.0);
 	rayQueryEXT rq;
 	rayQueryInitializeEXT(rq, emrRtTlas, gl_RayFlagsTerminateOnFirstHitEXT, mask | 0x02u, origin, tMin, dir, tMax);
-	for (int guard = 0; guard < 48 && rayQueryProceedEXT(rq); guard++) {
+	bool more;
+	for (int guard = 0; (more = rayQueryProceedEXT(rq)) && guard < 48; guard++) {
 		if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;
 		int ci = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false);
 		EmrRtVerts v = emrRtVerts(ci);
@@ -35,29 +37,34 @@ float emrRtxShVisibility(vec3 origin, vec3 dir, float tMin, float tMax, uint mas
 		if (emrRtHitAlpha(ci, v, tri, b) >= 0.1) rayQueryConfirmIntersectionEXT(rq);
 	}
 	emrRtxShTint = tint;
-	return rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT ? 1.0 : 0.0;
+	// more candidates than the guard (deep foliage, many glass panes) count as blocked: the rest may hold the blocker
+	return !more && rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT ? 1.0 : 0.0;
 }
 
 // Coloured sun visibility; the map adds the water colour and caustics only where no glass coloured the light already.
 vec3 emrRtxShadowTerm(vec3 shadowPos, float n, int rays, float tMin, bool useMap, float colorMult, float colorPow) {
 	if (gl_HelperInvocation) return vec3(1.0); // helper lanes only feed derivatives, nobody differentiates this
 	if (emrRtHitRays > 0) rays = emrRtHitRays;
-	vec3 origin = emrRtShadowOrigin(shadowPos);
+	vec3 origin = emrRtRayOrigin(shadowPos);
 	vec3 l = normalize(shadowModelViewInverse[2].xyz);
 	vec3 t = normalize(cross(l, abs(l.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
 	vec3 bt = cross(l, t);
 	vec3 vis = vec3(0.0);
 	bool glass = false;
 	emrRtxShWaterT = 1e9;
+	float m = emrRtDiskJitter(n);
 	for (int i = 0; i < rays; i++) {
-		vec2 d = emrRtDisk(fract(n + float(i) / float(rays))) * emrRt_shadows_sun;
-		float v = emrRtxShVisibility(origin, normalize(l + t * d.x + bt * d.y), tMin, 512.0, emrRt_shadows_entities != 0 ? 0x0Du : 0x01u);
+		vec2 d = emrRtDiskSample(i, rays, n, m) * emrRt_shadows_sun;
+		vec3 dir = normalize(l + t * d.x + bt * d.y);
+		uint mask = emrRt_shadows_entities != 0 ? 0x0Du : 0x01u;
+		float v = emrRtNearEntities(emrRtxShVisibility(origin, dir, max(tMin, emrRtTerrainMin), 512.0, mask), origin, dir, tMin, mask);
 		vis += v * emrRtxShTint;
 		glass = glass || (v > 0.0 && emrRtxShTint != vec3(1.0));
 	}
 	vis /= float(rays);
 	if (!useMap || glass || max(vis.r, max(vis.g, vis.b)) <= 0.0) return vis;
-	if (shadow2D(shadowtex1, shadowPos).x > 0.5) return vis * SampleShadow(shadowPos, colorMult, colorPow);
+	float s1 = shadow2D(shadowtex1, shadowPos).x;
+	if (s1 > 0.5) return vis * emrRtMapTint(shadowPos, s1, colorMult, colorPow);
 	// The map's opaque depth has a mob or the player in it that these rays passed (its map shadow is wider or offset). Under
 	// water plain sunlight there drew an untinted rim around squid and player shadows: take the water's light from the map
 	// on a ring around the receiver instead, where its opaque depth is clear.
@@ -66,7 +73,8 @@ vec3 emrRtxShadowTerm(vec3 shadowPos, float n, int rays, float tMin, bool useMap
 		float k = 0.0;
 		for (int i = 0; i < 8; i++) {
 			vec3 q = GetShadowPos(p + (a * cos(float(i) * 0.785398) + b * sin(float(i) * 0.785398)) * 1.5);
-			if (shadow2D(shadowtex1, q).x > 0.5) { sum += SampleShadow(q, colorMult, colorPow); k += 1.0; }
+			float sq = shadow2D(shadowtex1, q).x;
+			if (sq > 0.5) { sum += emrRtMapTint(q, sq, colorMult, colorPow); k += 1.0; }
 		}
 		if (k > 0.0) return vis * sum / k;
 	}

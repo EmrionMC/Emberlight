@@ -11,7 +11,7 @@ layout(location = EL_OUT_lit) out vec4 outLit;
 
 void main() {
 	ivec2 px = ivec2(gl_FragCoord.xy);
-	float depth = texelFetch(el_depth, px, 0).r;
+	float depth = texelFetch(el_depthNoHand, px, 0).r;
 	vec3 world = el_screenToWorld(el_uv, depth);
 	vec3 v = normalize(world);
 	if (el_isSky(depth)) { outLit = vec4(skyRadiance(v), 1.0); return; }
@@ -106,6 +106,7 @@ void main() {
 	c = kd * diffuse + spec;
 #endif
 	c += emissiveColor(albedo) * m.emission * EMISSIVE_STRENGTH * 2.0 * rtxBoost();
+	c = min(c, vec3(6.0e4)); // a low sun on polished ice/metal can exceed the RGBA16F range: Inf turns into black/NaN in post
 	// a = bloom gain (bloom.frag.glsl): own glow, or the share of the image that is glowing neon seen in a reflection
 	float glowShare = el_luminance(reflGlow) / max(el_luminance(c), 1e-4);
 	outLit = vec4(c, 1.0 + 8.0 * NEON_GLOW * max(m.emission, min(glowShare, 1.0)));

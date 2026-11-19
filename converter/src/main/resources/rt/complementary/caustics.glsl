@@ -34,14 +34,16 @@ vec2 emrRtCaRipple(vec2 p, float t, vec2 d, float k, float slope) {
 }
 vec2 emrRtCaWaves(vec2 xz, vec2 wind) {
 	float t = -wind.y / 0.045; // seconds (times the speed option): the wind in emrRtCaSlope is -0.045 per second
-	return emrRtCaRipple(xz, t, vec2(0.9659, 0.2588), 2.42, 0.25) + emrRtCaRipple(xz, t, vec2(-0.5736, 0.8192), 3.70, 0.20)
+	// x4: these slopes were tuned at bump 1.0, the default is 0.25 for the pack's texture octaves
+	return 4.0 * (emrRtCaRipple(xz, t, vec2(0.9659, 0.2588), 2.42, 0.25) + emrRtCaRipple(xz, t, vec2(-0.5736, 0.8192), 3.70, 0.20)
 		+ emrRtCaRipple(xz, t, vec2(-0.3420, -0.9397), 5.71, 0.18) + emrRtCaRipple(xz, t, vec2(0.9063, -0.4226), 8.38, 0.18)
 		+ emrRtCaRipple(xz, t, vec2(0.1736, 0.9848), 12.57, 0.18) + emrRtCaRipple(xz, t, vec2(-0.9397, -0.3420), 16.98, 0.16)
-		+ emrRtCaRipple(xz, t, vec2(0.4226, -0.9063), 10.47, 0.18) + emrRtCaRipple(xz, t, vec2(-0.9397, 0.3420), 20.94, 0.12);
+		+ emrRtCaRipple(xz, t, vec2(0.4226, -0.9063), 10.47, 0.18) + emrRtCaRipple(xz, t, vec2(-0.9397, 0.3420), 20.94, 0.12));
 }
 
 // Height-field slope of the water at world xz (surface height y): the pack's own water normal octaves (lifted from its
-// gbuffers_water), at the pack's water scale and wind; emrRtCaWaves when it has none.
+// gbuffers_water), at the pack's water scale and wind; emrRtCaWaves when it has none. The texture octaves are far steeper
+// and noisier than real ripples: at bump 1 the floor focused into frosted grain instead of a caustic network.
 vec2 emrRtCaSlope(vec2 xz, float y) {
 	vec2 waterPosM = 0.08 * (xz + 2.0 * y);
 	vec2 wind = vec2(0.0, -0.045 * frameTimeCounter * emrRt_caustics_speed);
@@ -78,7 +80,9 @@ float emrRtCaIntensity(vec3 p) {
 	vec2 dz = emrRtCaLand(x + vec2(0.0, e), y, depth, inc) - emrRtCaLand(x - vec2(0.0, e), y, depth, inc);
 	float det = abs(dx.x * dz.y - dx.y * dz.x) / (4.0 * e * e);
 	float c = min(1.0 / max(det, 0.01), emrRt_caustics_max);
-	return mix(1.0, c, emrRt_caustics_strength * (1.0 - smoothstep(32.0, 64.0, length(p.xz))) * smoothstep(0.15, 0.5, emrRtCaNdotL));
+	// Rain and night soften it: overcast light is diffuse, and crisp lines under the dim moon looked lit by a lamp
+	float weather = (1.0 - 0.65 * rainStrength) * mix(0.35, 1.0, smoothstep(-0.05, 0.1, sin(6.2831853 * sunAngle)));
+	return mix(1.0, c, emrRt_caustics_strength * weather * (1.0 - smoothstep(32.0, 64.0, length(p.xz))) * smoothstep(0.15, 0.5, emrRtCaNdotL));
 }
 
 // The water's light colour without the pack's pattern: mean shadowcolor0 on a 1.5-block ring (clear texels left out).

@@ -223,7 +223,7 @@ int el_blockId() { return emr_blockId(); }
 vec2 el_midUV() { return emr_midUV(); }
 vec3 el_midBlock() { return emr_midBlock().xyz / 64.0; }
 float el_vertexEmission() { return emr_midBlock().w; }
-vec4 el_project(vec3 view) { return emr_phase.emr_ProjMat * vec4(view, 1.0); }
+vec4 el_project(vec3 view) { vec4 c = emr_phase.emr_ProjMat * vec4(view, 1.0); c.xy += emr_phase.emr_Jitter * c.w; return c; } // upscaler jitter: not in emr_ProjMat
 int el_entityId() { return emr_entityIds().x; }
 int el_blockEntityId() { return emr_entityIds().y; }
 int el_itemId() { return emr_entityIds().z; }

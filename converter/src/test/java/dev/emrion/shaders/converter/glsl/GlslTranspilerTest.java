@@ -385,7 +385,9 @@ class GlslTranspilerTest {
 				""", "#version 130\nvarying vec3 n;\nvoid main() { gl_FragData[0] = vec4(n, 1.0); }\n");
 		assertTrue(o.vs().contains("mat3(transpose(inverse(mat3(emr_terrain.ModelViewMat)))) * emr_in_Normal"));
 		assertTrue(o.vs().contains("gl_Position = emr_phase.emr_ProjMat * emr_terrain.ModelViewMat *"));
-		assertTrue(o.vs().contains("uniform EmrionPhase { layout(offset = 0) mat4 emr_ProjMat; layout(offset = 64) mat4 emr_ProjMatInverse; layout(offset = 128) int renderStage; } emr_phase;"));
+		assertTrue(o.vs().contains("uniform EmrionPhase { layout(offset = 0) mat4 emr_ProjMat; layout(offset = 64) mat4 emr_ProjMatInverse; layout(offset = 128) int renderStage; layout(offset = 136) vec2 emr_Jitter; } emr_phase;"));
+		// the upscaler's jitter after the pack's own projection (packs drop it from gl_ProjectionMatrix with projMAD)
+		assertTrue(o.vs().contains("emr_main();\n\tgl_Position.xy += emr_phase.emr_Jitter * gl_Position.w;\n\tgl_Position.z = (gl_Position.z + gl_Position.w) * 0.5;\n}"));
 	}
 
 	@Test

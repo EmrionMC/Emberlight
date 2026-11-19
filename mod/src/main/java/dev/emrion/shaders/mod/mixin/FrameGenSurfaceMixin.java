@@ -50,6 +50,9 @@ abstract class FrameGenSurfaceMixin {
 		emrion$fgImages = dev.emrion.shaders.mod.framegen.FrameGenConfig.effective() != dev.emrion.shaders.mod.framegen.FrameGenConfig.Mode.OFF;
 		if (!emrion$fgImages) return count;
 		int want = Math.max(count, caps.minImageCount() + Presenter.SLOTS);
+		if (caps.maxImageCount() != 0 && want > caps.maxImageCount())
+			dev.emrion.shaders.mod.EmrionShadersClient.LOG.warn("Frame generation: the surface allows only {} swapchain images ({} wanted); some interpolated frames will be skipped",
+					caps.maxImageCount(), want);
 		return caps.maxImageCount() == 0 ? want : Math.min(want, caps.maxImageCount());
 	}
 

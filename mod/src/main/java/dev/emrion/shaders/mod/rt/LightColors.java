@@ -34,7 +34,7 @@ public final class LightColors {
 			"soul", "redstone_torch", "redstone_wall_torch", "repeater", "comparator", "redstone_ore", "redstone_lamp", "lava", "magma", "campfire", "fire",
 			"jack_o_lantern", "torch", "lantern", "glowstone", "shroomlight", "sea_lantern", "conduit", "beacon", "end_rod",
 			"amethyst", "ochre_froglight", "verdant_froglight", "pearlescent_froglight", "crying_obsidian", "respawn_anchor",
-			"glow_lichen", "sculk", "copper_bulb", "furnace", "smoker", "nether_portal", "end_portal", "end_gateway", "enchanting",
+			"glow_lichen", "sculk", "copper_bulb", "furnace", "smoker", "nether_portal", "end_portal", "enchanting",
 			"brewing_stand", "light", "candle", "cave_vines", "glow_berries", "firefly", "creaking_heart",
 	};
 	private static final float[][] RGB = {
@@ -44,7 +44,7 @@ public final class LightColors {
 			{0.65f, 0.90f, 1.0f}, {0.65f, 0.90f, 1.0f}, {0.75f, 0.95f, 1.0f}, {0.95f, 0.90f, 1.0f},
 			{0.70f, 0.40f, 1.0f}, {1.0f, 0.85f, 0.45f}, {0.60f, 1.0f, 0.50f}, {1.0f, 0.60f, 0.90f}, {0.60f, 0.20f, 1.0f}, {0.70f, 0.30f, 1.0f},
 			{0.60f, 0.95f, 0.80f}, {0.20f, 0.80f, 0.90f}, {1.0f, 0.75f, 0.50f}, {1.0f, 0.55f, 0.20f}, {1.0f, 0.55f, 0.20f},
-			{0.65f, 0.25f, 1.0f}, {0.45f, 0.55f, 1.0f}, {0.45f, 0.55f, 1.0f}, {0.70f, 0.50f, 1.0f},
+			{0.65f, 0.25f, 1.0f}, {0.45f, 0.55f, 1.0f}, {0.70f, 0.50f, 1.0f},
 			{1.0f, 0.75f, 0.45f}, {1.0f, 0.95f, 0.90f}, {1.0f, 0.65f, 0.30f}, {1.0f, 0.70f, 0.30f}, {1.0f, 0.70f, 0.30f}, {0.80f, 1.0f, 0.40f}, {1.0f, 0.55f, 0.20f},
 	};
 	private static final String[] DYES = {"white", "light_gray", "gray", "black", "brown", "red", "orange", "yellow", "lime", "green", "cyan",
@@ -110,6 +110,10 @@ public final class LightColors {
 
 	private static int resolve(BlockState state) {
 		String name = BuiltInRegistries.BLOCK.getKey(state.getBlock()).getPath();
+		// End portals and gateways: their light leaves through the portal surface and the vanilla floodfill wraps it round the
+		// bedrock; as a point source RT left every bedrock face turned away from the block centre at the ambient floor (black
+		// gateway sides in the End, where nothing else fills them). The pack lights them alone, as with RT off.
+		if (name.equals("end_portal") || name.equals("end_gateway")) return -1;
 		if (state.getLightEmission() > 0) return vanilla(name);
 		Block b = state.getBlock();
 		if (b instanceof RedstoneWireBlock && state.getValue(RedstoneWireBlock.POWER) == 0) return -1;

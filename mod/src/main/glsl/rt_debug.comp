@@ -7,14 +7,24 @@
 layout(local_size_x = 8, local_size_y = 8) in;
 layout(set = 0, binding = 0) uniform accelerationStructureEXT tlas;
 layout(set = 0, binding = 1, rgba8) uniform writeonly image2D outImg;
-layout(set = 0, binding = 2, std430) readonly buffer Sections { uvec4 sections[]; }; // xy vertex address, z layer
+layout(set = 0, binding = 2, std430) readonly buffer Sections { uvec4 sections[]; }; // xy vertex address, z layer, w format
 layout(set = 0, binding = 3) uniform sampler2D atlas;
-layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Verts { float f[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Verts { uint d[]; };
 layout(push_constant) uniform Push { mat4 invViewProj; vec4 size; } pc;
 
-const uint STRIDE = 14u; // EMRION_BLOCK, 56 B
-vec3 pos(Verts v, uint i) { uint b = i * STRIDE; return vec3(v.f[b], v.f[b + 1u], v.f[b + 2u]); }
-vec2 uv(Verts v, uint i) { uint b = i * STRIDE + 4u; return vec2(v.f[b], v.f[b + 1u]); }
+// EMRION_BLOCK (56 B, float position, UV0 at words 4-5) or, format 1, EmrionChunkVertex on the Sodium path (40 B, Sodium's
+// 3x20-bit position at words 0-1 as in rt_sodium_positions.comp, 2x15-bit UV0 at word 3)
+vec3 pos(Verts v, bool sod, uint i) {
+    if (sod) {
+        uvec3 hi = (uvec3(v.d[i * 10u]) >> uvec3(0u, 10u, 20u)) & 0x3FFu, lo = (uvec3(v.d[i * 10u + 1u]) >> uvec3(0u, 10u, 20u)) & 0x3FFu;
+        return vec3((hi << 10u) | lo) * (32.0 / 1048576.0) - 8.0;
+    }
+    return uintBitsToFloat(uvec3(v.d[i * 14u], v.d[i * 14u + 1u], v.d[i * 14u + 2u]));
+}
+vec2 uv(Verts v, bool sod, uint i) {
+    if (sod) { uint t = v.d[i * 10u + 3u]; return vec2(uvec2(t, t >> 16u) & 0x7FFFu) / 32768.0; }
+    return uintBitsToFloat(uvec2(v.d[i * 14u + 4u], v.d[i * 14u + 5u]));
+}
 // RtQuadIndices: triangle 0 = (0,1,2), triangle 1 = (2,3,0) of each quad
 uvec3 tri(uint prim) { uint q = (prim >> 1) * 4u; return (prim & 1u) == 0u ? uvec3(q, q + 1u, q + 2u) : uvec3(q + 2u, q + 3u, q); }
 
@@ -28,18 +38,22 @@ void main() {
     rayQueryEXT q;
     rayQueryInitializeEXT(q, tlas, gl_RayFlagsNoneEXT, 0xFF, vec3(0.0), 0.05, dir, 2048.0);
     while (rayQueryProceedEXT(q)) {
-        Verts v = Verts(sections[rayQueryGetIntersectionInstanceCustomIndexEXT(q, false)].xy);
+        uvec4 s = sections[rayQueryGetIntersectionInstanceCustomIndexEXT(q, false)];
+        Verts v = Verts(s.xy);
+        bool sod = s.w == 1u;
         uvec3 t = tri(uint(rayQueryGetIntersectionPrimitiveIndexEXT(q, false)));
         vec2 b = rayQueryGetIntersectionBarycentricsEXT(q, false);
-        vec2 u = uv(v, t.x) * (1.0 - b.x - b.y) + uv(v, t.y) * b.x + uv(v, t.z) * b.y;
+        vec2 u = uv(v, sod, t.x) * (1.0 - b.x - b.y) + uv(v, sod, t.y) * b.x + uv(v, sod, t.z) * b.y;
         if (textureLod(atlas, u, 0.0).a >= 0.1) rayQueryConfirmIntersectionEXT(q);
     }
     vec3 color = vec3(0.0);
     if (rayQueryGetIntersectionTypeEXT(q, true) == gl_RayQueryCommittedIntersectionTriangleEXT) {
-        Verts v = Verts(sections[rayQueryGetIntersectionInstanceCustomIndexEXT(q, true)].xy);
+        uvec4 s = sections[rayQueryGetIntersectionInstanceCustomIndexEXT(q, true)];
+        Verts v = Verts(s.xy);
+        bool sod = s.w == 1u;
         uvec3 t = tri(uint(rayQueryGetIntersectionPrimitiveIndexEXT(q, true)));
-        vec3 p0 = pos(v, t.x);
-        vec3 n = normalize(cross(pos(v, t.y) - p0, pos(v, t.z) - p0));
+        vec3 p0 = pos(v, sod, t.x);
+        vec3 n = normalize(cross(pos(v, sod, t.y) - p0, pos(v, sod, t.z) - p0));
         if (dot(n, dir) > 0.0) n = -n;
         float d = rayQueryGetIntersectionTEXT(q, true);
         color = (n * 0.5 + 0.5) * mix(1.0, 0.4, clamp(d / 256.0, 0.0, 1.0));

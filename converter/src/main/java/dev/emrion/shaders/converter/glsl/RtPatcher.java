@@ -148,7 +148,7 @@ public final class RtPatcher {
 				diagnostics.add(Diagnostic.warning(null, 0, "RT " + name + " unavailable: " + reason));
 			}
 		}
-		return new Result(pack, new Manifest.Rt(applied, unavailable, patched, List.copyOf(anyHitIds)), diagnostics, frees);
+		return new Result(pack, new Manifest.Rt(applied, unavailable, patched, List.copyOf(anyHitIds), table == null ? null : table.id()), diagnostics, frees);
 	}
 
 	/** Shrinks pack buffers and images an applied effect made unused (no live program reads them); bindings stay. */
@@ -219,10 +219,19 @@ public final class RtPatcher {
 					String program = programs.get(p).name();
 					List<Match> m = matches(GlslParser.parse(t), t, effect, program);
 					if (m.isEmpty()) continue;
-					for (var patch : effect.patches()) // a stage that matches part of a program's patch set is never half-patched
-						if (!patch.optional() && patch.programs() != null && patch.programs().contains(program) && m.stream().noneMatch(x -> x.patch() == patch))
-							throw new Unavailable(d.getKey() + ": patch '" + patch.function() + "' matched no function in " + program
-									+ " (the pack's version or settings differ)");
+					var missing = effect.patches().stream() // a stage that matches part of a program's patch set is never half-patched
+							.filter(patch -> !patch.optional() && patch.programs() != null && patch.programs().contains(program) && m.stream().noneMatch(x -> x.patch() == patch))
+							.findFirst();
+					if (missing.isPresent()) {
+						// only optional extras matched (the Nether's composite without world-space reflections): not one of this effect's stages
+						if (m.stream().allMatch(x -> x.patch().optional())) {
+							diagnostics.add(new Diagnostic(Diagnostic.Severity.INFO, null, 0, null, null, "RT " + name + ": " + d.getKey() + "/" + program
+									+ " left out: only optional patches matched (no '" + missing.get().function() + "')"));
+							continue;
+						}
+						throw new Unavailable(d.getKey() + ": patch '" + missing.get().function() + "' matched no function in " + program
+								+ " (the pack's version or settings differ)");
+					}
 					found.add(new StageMatch(p, s, m));
 				}
 			}
@@ -268,8 +277,10 @@ public final class RtPatcher {
 		if (effect.images() != null) {
 			props = new java.util.LinkedHashMap<>(props);
 			for (var i : effect.images().entrySet()) {
-				if (props.containsKey("image." + i.getKey())) throw new Unavailable("the pack already declares image." + i.getKey());
-				props.put("image." + i.getKey(), substitute(i.getValue(), effect, opts));
+				String v = substitute(i.getValue(), effect, opts), old = props.get("image." + i.getKey());
+				// the same image from another effect is shared (RTX GI reads RTX block light's emrBlG)
+				if (old != null && !old.equals(v)) throw new Unavailable("the pack already declares image." + i.getKey());
+				props.put("image." + i.getKey(), v);
 			}
 		}
 		return new ResolvedPack(pack.source(), pack.options(), props, pack.idMaps(), pack.dimensionMap(), dims);
@@ -324,6 +335,14 @@ public final class RtPatcher {
 	static List<Match> matches(List<Item> items, List<Token> t, RtPatchTable.Effect effect, String program) {
 		List<Match> out = new ArrayList<>();
 		for (Item it : items) {
+			if (it.kind == ItemKind.DECL && it.decls.size() == 1 && it.decls.getFirst().hasInit()) { // "type name": a global's initialiser
+				var d = it.decls.getFirst(); // "vec2[8] offsets" or "vec2 offsets[8]", as the pack writes it
+				String decl = GlslParser.text(t, it.typeStart, it.typeEnd) + " " + d.name() + (d.hasArray() ? GlslParser.text(t, d.arrStart(), d.arrEnd()) : "");
+				for (var p : effect.patches())
+					if ((p.programs() == null || p.programs().contains(program)) && !p.function().contains("(") && sameFunction(p.function(), decl))
+						out.add(new Match(it, p));
+				continue;
+			}
 			if (it.kind != ItemKind.FUNCTION) continue;
 			String sig = signature(t, it);
 			for (var p : effect.patches())
@@ -444,6 +463,11 @@ public final class RtPatcher {
 		for (Match m : ms) {
 			String raw = table.text(m.patch().body());
 			Set<String> known = declaredBefore.get(m.function());
+			if (m.function().kind == ItemKind.DECL) {
+				var d = m.function().decls.getFirst();
+				edits.put(d.initStart(), new Object[]{d.initEnd() - 1, oneLine(raw)});
+				continue;
+			}
 			if (m.patch().after() != null) {
 				int at = anchor(t, m, label);
 				edits.put(at, new Object[]{at, t.get(at).text + " " + lifts.expand(raw, Lifts.known(known, t, m.function(), at))});

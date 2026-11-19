@@ -337,7 +337,8 @@ public final class PackRuntime {
 	private void initMasks(Manifest.FlipState flip) {
 		var rt = manifest.rt();
 		String folder = manifest.dimensions().entrySet().stream().filter(e -> e.getValue() == dim).map(java.util.Map.Entry::getKey).findFirst().orElse("");
-		if (rt == null || !rt.patched().getOrDefault("upscale", List.of()).contains(folder + "/composite6.fsh")) return;
+		// only Complementary's patch writes masks (Bliss/Eclipse's patch empties their TAA in composite6 too, colortex2 is theirs)
+		if (rt == null || "chocapic-taa".equals(rt.table()) || !rt.patched().getOrDefault("upscale", List.of()).contains(folder + "/composite6.fsh")) return;
 		Img masks = read("colortex2", flip);
 		if (masks == null) return;
 		this.masks = otherMasks = masks;
@@ -537,9 +538,9 @@ public final class PackRuntime {
 	private Img whiteDepth() {
 		var tex = RenderSystem.getDevice().createTexture("emrion white depth", MC_USAGE,
 				GpuFormat.D32_FLOAT, 1, 1, 1, 1);
+		ownedTextures.add(tex); // owned before anything below can throw
 		RenderSystem.getDevice().createCommandEncoder().clearDepthTexture(tex, 1.0);
 		var view = RenderSystem.getDevice().createTextureView(tex);
-		ownedTextures.add(tex);
 		ownedViews.add(view);
 		Img img = new Img("emrion white depth", null);
 		img.sampled = ((VulkanGpuTextureView) view).vkImageView();
@@ -557,9 +558,9 @@ public final class PackRuntime {
 		try (source) {
 			var tex = RenderSystem.getDevice().createTexture(label, GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_TEXTURE_BINDING,
 					GpuFormat.RGBA8_UNORM, source.getWidth(), source.getHeight(), 1, 1);
+			ownedTextures.add(tex); // owned before the upload can throw
 			RenderSystem.getDevice().createCommandEncoder().writeToTexture(tex, source);
 			var view = RenderSystem.getDevice().createTextureView(tex);
-			ownedTextures.add(tex);
 			ownedViews.add(view);
 			Img img = new Img(label, null);
 			img.sampled = ((VulkanGpuTextureView) view).vkImageView();

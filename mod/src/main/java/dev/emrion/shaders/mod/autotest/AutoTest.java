@@ -896,6 +896,11 @@ public final class AutoTest {
 				});
 				return true;
 			}
+			case "prop" -> { // "prop KEY VALUE": a system property (runtime switches such as emrion.perf.prepassAdaptive)
+				String[] kv = arg.split(" ", 2);
+				System.setProperty(kv[0], kv.length > 1 ? kv[1] : "");
+				return true;
+			}
 			case "mdi" -> { // "mdi on|off": vanilla terrain multi-draw indirect (F3+M)
 				mc.multiDrawIndirect = arg.equals("on");
 				return ticks > 2;

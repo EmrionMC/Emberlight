@@ -172,11 +172,18 @@ public final class Reflex {
 
 	private static void sleep(MemoryStack stack, long sc) {
 		long value = ++sleepValue;
-		if (vkLatencySleepNV(device, sc, VkLatencySleepInfoNV.calloc(stack).sType$Default().signalSemaphore(semaphore).value(value)) != VK_SUCCESS) return;
+		int r = vkLatencySleepNV(device, sc, VkLatencySleepInfoNV.calloc(stack).sType$Default().signalSemaphore(semaphore).value(value));
+		if (r != VK_SUCCESS) { // like the timeout below; also hands frame pacing back to MC's limiter right away
+			sleepBroken = true;
+			appliedIntervalUs = 0;
+			EmrionShadersClient.LOG.warn("Reflex: latency sleep failed ({}); Reflex disabled for this session", r);
+			return;
+		}
 		var wait = VkSemaphoreWaitInfo.calloc(stack).sType$Default().semaphoreCount(1).pSemaphores(stack.longs(semaphore)).pValues(stack.longs(value));
 		// the driver signals within a frame; a missing signal (a layer that drops the call) must not stall the game
 		if (vkWaitSemaphores(device, wait, 200_000_000L) == VK_TIMEOUT) {
 			sleepBroken = true;
+			appliedIntervalUs = 0;
 			EmrionShadersClient.LOG.warn("Reflex: the driver did not end the latency sleep within 200 ms; Reflex disabled for this session");
 		}
 	}

@@ -83,13 +83,27 @@ final class FlipSwap {
 						boolean blends = mode != null && !"off".equals(mode.mode());
 						// shortcut: assumes the shader writes the output on every path; check stores if a pack breaks this
 						return c.cmd().equals("fullscreen") && !blends && p.viewportScale() == 1f && p.viewportOffset() == null
-								&& !mayDiscard.test(c.program()) ? Fate.OVERWRITTEN : Fate.READ;
+								&& !mayDiscard.test(c.program()) && sameSize(dim, target, c.writes()) ? Fate.OVERWRITTEN : Fate.READ;
 					}
 				}
 				default -> { return Fate.READ; }
 			}
 		}
 		return Fate.UNTOUCHED;
+	}
+
+	/** The render area is the attachments' intersection: a smaller one leaves the border of {@code target} unwritten. */
+	private static boolean sameSize(Manifest.Dimension dim, String target, List<Manifest.Attachment> writes) {
+		var t = target(dim, target);
+		for (var w : writes) {
+			var o = target(dim, w.target());
+			if (o == null || !java.util.Arrays.equals(o.relativeSize(), t.relativeSize()) || !java.util.Arrays.equals(o.absoluteSize(), t.absoluteSize())) return false;
+		}
+		return true;
+	}
+
+	private static Manifest.Target target(Manifest.Dimension dim, String name) {
+		return dim.targets().stream().filter(x -> x.name().equals(name)).findFirst().orElse(null);
 	}
 
 	private static Manifest.FlipState flip(Manifest.Dimension dim, int id) {

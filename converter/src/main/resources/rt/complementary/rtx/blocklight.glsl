@@ -34,6 +34,17 @@ bool emrRtxBlLookup(vec3 playerPos, vec3 n, out vec4 r, out bool hidden) {
 	return false;
 }
 
+// Raster draws over this fragment later: this pixel's view ray (rtx/bl_restir_a.csh) found a surface well in front of it.
+// The distance is the rasterised surface's (gl_FragCoord): parallax mapping moves playerPos into the surface. RTX GI has a
+// copy (rtx/gi_apply.glsl emrRtxGiHidden).
+bool emrRtxBlHidden() {
+	ivec2 size = textureSize(emrBlGSampler, 0);
+	float w = texelFetch(emrBlGSampler, clamp(ivec2(gl_FragCoord.xy), ivec2(0), size - 1), 0).w;
+	vec4 v = gbufferProjectionInverse * vec4(gl_FragCoord.xy / vec2(size) * 2.0 - 1.0, gl_FragCoord.z * 2.0 - 1.0, 1.0);
+	float d = length(v.xyz / v.w);
+	return w > 0.0 && d > w + emrRt_blocklight_hiddenMargin + 0.05 * d;
+}
+
 // The pack's light times the ratio q = S / U, as blocklight:strength and chroma calibrate it, faded to the far factor.
 vec3 emrRtxBlApply(vec3 pack, vec3 q, vec3 far, float fade) {
 	if (emrRt_blocklight_chroma != 1.0) { // how much of the ratio's own hue reaches the pack's light (1 = all, 0 = brightness only)

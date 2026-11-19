@@ -354,7 +354,9 @@ public final class PackManager {
 	private static RtSupport rtSupport(PackSource src) {
 		try {
 			if (dev.emrion.shaders.converter.nativefmt.NativeCompiler.isNative(src)) return new RtSupport(true, java.util.Set.of());
-			return new RtSupport(false, dev.emrion.shaders.converter.glsl.RtPatcher.tableEffects(src));
+			var effects = new java.util.HashSet<>(dev.emrion.shaders.converter.glsl.RtPatcher.tableEffects(src));
+			effects.remove("upscale"); // not ray tracing: a table with only the upscale patch (Bliss, Eclipse) still means no RT
+			return new RtSupport(false, java.util.Set.copyOf(effects));
 		} catch (Exception e) {
 			EmrionShadersClient.LOG.warn("Could not read the RT table of {}", src.name(), e);
 			return new RtSupport(false, java.util.Set.of());
@@ -472,6 +474,10 @@ public final class PackManager {
 	/** The converter's effect set: the RT effects plus "upscale" while an upscaler is selected (empty = plain conversion). */
 	private static java.util.Set<String> request(boolean nativePack) {
 		java.util.Set<String> s = new java.util.TreeSet<>(RtConfig.request());
+		if (nativePack) s.remove("prepass"); // a converter RT patch for Iris packs; native packs only see a changed cache key
+		// native "raygen" passes as ray generation shaders: measured faster on NVIDIA only (AMD advises inline ray queries)
+		s.remove("raygen"); // (not through rt.extra: only where the device has RT pipelines)
+		if (nativePack && RtConfig.raygen && dev.emrion.shaders.mod.rt.RtRaygen.supported && VulkanContext.get().properties.vendorID() == 0x10DE) s.add("raygen");
 		dev.emrion.shaders.mod.upscale.UpscaleConfig.addRequest(s, nativePack);
 		return s;
 	}
@@ -780,7 +786,7 @@ public final class PackManager {
 			EmrionVertexFormats.setIds(ids);
 			EmrionVertexFormats.setActive(true); // rebuilds chunks in the extended terrain format
 		}
-		if (uniforms instanceof IrisUniformSystem u) u.setBlockIdLookup(ids::block);
+		if (uniforms instanceof IrisUniformSystem u) u.setBlockIdLookup(s -> EmrionVertexFormats.ids().block(s)); // live: tag reloads replace the table
 		// the RT runtime owns the scene: created before its descriptor sets (TLAS, section table), gone with a non-RT runtime
 		var rt = l.manifest().rt();
 		if (rt != null && rt.effects().stream().anyMatch(e -> !e.equals("upscale")) && RtCapability.enabled) {
@@ -990,6 +996,7 @@ public final class PackManager {
 		switchStart = 0;
 		loaded = null;
 		next = null;
+		Prepared stale = prepared;
 		prepared = null;
 		selected = null;
 		status = what + ": " + t;
@@ -1000,6 +1007,7 @@ public final class PackManager {
 		dev.emrion.shaders.mod.gui.LoadingHud.failed(pack != null ? pack : "Emberlight", what + ": " + t.getMessage() + ", back to vanilla rendering");
 		Minecraft.getInstance().execute(() -> {
 			try {
+				if (stale != null) stale.pipelines().destroyLater();
 				deactivate();
 			} catch (Throwable inner) {
 				EmrionShadersClient.LOG.error("Tearing down {} failed too", pack, inner);

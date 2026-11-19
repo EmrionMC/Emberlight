@@ -38,9 +38,9 @@ public record Manifest(
 	 * RT variant (absent = no RT requested). effects: applied effects with options ("shadows:full");
 	 * unavailable: effect → reason; patched: effect → patched "dim/program.stage" list; anyHitIds: block ids (mc_Entity) whose
 	 * cutout hits a patched shader decides per id (an active skip list), so the mod's opacity micromaps never make them opaque
-	 * (absent in older caches = none).
+	 * (absent in older caches = none); table: id of the patch table that applied them (null = none, or an older cache).
 	 */
-	public record Rt(List<String> effects, Map<String, String> unavailable, Map<String, List<String>> patched, List<Integer> anyHitIds) {
+	public record Rt(List<String> effects, Map<String, String> unavailable, Map<String, List<String>> patched, List<Integer> anyHitIds, String table) {
 		public Rt {
 			anyHitIds = anyHitIds == null ? List.of() : anyHitIds;
 		}

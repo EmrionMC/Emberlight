@@ -166,6 +166,7 @@ public final class NativeCompiler {
 			if (req.rt().contains("upscale")) options.engine.add("EL_UPSCALING");
 			if (rr()) options.engine.add("EL_RR_ACTIVE");
 			glsl = new NativeGlsl(src, m, options, layout, req.rt().contains("upscale"), rr(), diagnostics);
+			glsl.raygen = req.rt().contains("raygen");
 			progress.progress("load", 1, 1);
 
 			// dimensions: the default plus one per override, filtered by the request
@@ -370,11 +371,12 @@ public final class NativeCompiler {
 			if (rq && Boolean.TRUE.equals(m.settings().get("rayTracedEntities"))) effects.add(RT_EFFECT + ":entities");
 			if (req.rt().contains("upscale")) effects.add("upscale");
 			if (rr()) effects.add("rr");
+			if (req.rt().contains("raygen")) effects.add("raygen"); // (kept: PackManager compares the request it reloads for)
 			Map<String, String> unavailable = new TreeMap<>();
 			for (String r : req.rt())
 				if (r.equals("rr") && !rr()) unavailable.put(r, "the pack writes no Ray Reconstruction guides (settings.rayReconstruction)");
-				else if (!r.equals("upscale") && !r.equals("rr")) unavailable.put(r, "native packs trace their own rays");
-			return effects.isEmpty() && unavailable.isEmpty() ? null : new Manifest.Rt(effects, unavailable, Map.of(), List.of());
+				else if (!r.equals("upscale") && !r.equals("rr") && !r.equals("raygen")) unavailable.put(r, "native packs trace their own rays");
+			return effects.isEmpty() && unavailable.isEmpty() ? null : new Manifest.Rt(effects, unavailable, Map.of(), List.of(), null);
 		}
 
 		/** Pack textures to textures/ (raw ones converted to tightly packed texels of the promoted format; .mcmeta applied). */

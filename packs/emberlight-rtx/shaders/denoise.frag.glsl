@@ -23,7 +23,7 @@ ivec2 giJitter() { int f = el_frame & 3; return ivec2(f & 1, f >> 1); }
 
 void main() {
 	ivec2 px = ivec2(gl_FragCoord.xy);
-	float depth = texelFetch(el_depth, px, 0).r;
+	float depth = texelFetch(el_depthNoHand, px, 0).r;
 	if (el_isSky(depth)) { outGi = vec4(0.0); outShadow = vec4(1.0, 1.0, 1.0, 1e5); outRefl = vec4(0.0); return; }
 	vec3 world = el_screenToWorld(el_uv, depth);
 	float dist = length(world);
@@ -47,6 +47,12 @@ void main() {
 	ivec2 hb = ivec2(floor(hpos));
 	vec2 hf = hpos - vec2(hb);
 	float hw = 0.0;
+	// A tap must lie on this surface: its view distance may differ by what two pixels span along the view ray on this
+	// plane (more at grazing angles), plus half-float rounding. The old 3 % of the distance (1.5 blocks at 50) let a
+	// surface uncovered behind a nearby object take that object's shadow and bounce light.
+	float pixAngle = 2.0 / (el_projection[1][1] * el_screenSize.y);
+	float cosV = abs(dot(n, world)) / max(dist, 1e-3);
+	float histTol = min(0.05 + prevDistExpected * (0.002 + 2.0 * pixAngle / max(cosV, 0.05)), 0.03 * prevDistExpected + 0.05);
 	for (int i = 0; i < 4; i++) {
 		ivec2 o = ivec2(i & 1, i >> 1);
 		ivec2 q = hb + o;
@@ -54,7 +60,7 @@ void main() {
 		float w = bw.x * bw.y;
 		if (w < 1e-3 || any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, size))) continue;
 		vec4 s = texelFetch(shadowAcc, q, 0);
-		if (abs(s.a - prevDistExpected) > 0.03 * prevDistExpected + 0.05) continue;
+		if (abs(s.a - prevDistExpected) > histTol) continue;
 		hSh += s * w; hGi += texelFetch(giAcc, q, 0) * w; hRf += texelFetch(reflAcc, q, 0) * w;
 		hw += w;
 	}
@@ -70,7 +76,7 @@ void main() {
 	for (int y = -R; y <= R; y++) for (int x = -R; x <= R; x++) {
 		ivec2 q = clamp(hc + ivec2(x, y) * int(wide), ivec2(0), hsize - 1);
 		ivec2 fq = min(q * 2 + giJitter(), size - 1);
-		float dq = texelFetch(el_depth, fq, 0).r;
+		float dq = texelFetch(el_depthNoHand, fq, 0).r;
 		if (el_isSky(dq)) continue;
 		vec3 wq = el_screenToWorld((vec2(fq) + 0.5) / el_screenSize, dq);
 		vec3 nq = decodeGNormal(texelFetch(gNormal, fq, 0)).geo;
@@ -82,11 +88,14 @@ void main() {
 	gi = wsum > 1e-4 ? gi / wsum : hGi.rgb;
 
 	// ---- sun visibility: 3x3 bilateral at full res, with its min/max for the history clamp ----
+	// Zoomed in (FOV below ~50) the taps spread with the zoom, so they cover the same piece of the world: a penumbra spans
+	// more pixels then, and the 1-pixel gather left player and leaf shadows grainy.
+	int sStep = int(wide) * int(clamp(round(el_projection[1][1] * 0.7), 1.0, 2.0));
 	vec3 sh = vec3(0.0), shMin = vec3(1e9), shMax = vec3(-1e9);
 	float ssum = 0.0;
 	for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
-		ivec2 q = clamp(px + ivec2(x, y) * int(wide), ivec2(0), size - 1);
-		float dq = texelFetch(el_depth, q, 0).r;
+		ivec2 q = clamp(px + ivec2(x, y) * sStep, ivec2(0), size - 1);
+		float dq = texelFetch(el_depthNoHand, q, 0).r;
 		vec3 nq = decodeGNormal(texelFetch(gNormal, q, 0)).geo;
 		vec3 wq = el_screenToWorld((vec2(q) + 0.5) / el_screenSize, dq);
 		float w = exp(-abs(dot(wq - world, n)) / (0.01 * dist + 0.03)) * pow(max(dot(n, nq), 0.0), 32.0) * (x == 0 && y == 0 ? 2.0 : 1.0);
@@ -108,7 +117,6 @@ void main() {
 	rf.a = abs(rf.a);
 	if (!RR && rough > 0.02 && rough <= REFL_MAX_ROUGH) { // rougher: no traced reflection (lighting uses its ambient estimate)
 		float alpha = rough;
-		float pixAngle = 2.0 / (el_projection[1][1] * el_screenSize.y);
 		float radius = min(0.5 * min(rf.a, 32.0) * alpha / (max(dist, 0.3) * pixAngle), 12.0) * wide; // ~ half-width of the lobe
 		vec3 acc = rf.rgb;
 		float rsum = 1.0;
@@ -117,7 +125,7 @@ void main() {
 			float r = sqrt((float(i) + 0.5) / 8.0) * radius;
 			float a = rot + float(i) * 2.3999632; // golden angle
 			ivec2 q = clamp(px + ivec2(round(vec2(cos(a), sin(a)) * r)), ivec2(0), size - 1);
-			float dq = texelFetch(el_depth, q, 0).r;
+			float dq = texelFetch(el_depthNoHand, q, 0).r;
 			if (el_isSky(dq)) continue;
 			vec3 wq = el_screenToWorld((vec2(q) + 0.5) / el_screenSize, dq);
 			vec3 nq = decodeGNormal(texelFetch(gNormal, q, 0)).geo;
@@ -139,7 +147,8 @@ void main() {
 	// A reflection seen in a floor sits behind the floor, at the hit distance along the view ray (exact for a plane
 	// mirror, close enough for a glossy lobe); following the surface instead dragged it along with the camera (a
 	// smeared glow on walls and floors while turning). Taps must still lie on this surface (view distance).
-	if (!RR && hist > 0.0 && rest < 0.99 && rough <= REFL_MAX_ROUGH && m.smoothness > 0.05) {
+	// (not for perfect mirrors: aRf below throws their history away)
+	if (!RR && hist > 0.0 && rest < 0.99 && rough >= 0.005 && rough <= REFL_MAX_ROUGH && m.smoothness > 0.05) {
 		vec3 vp = world + normalize(world) * min(rf.a, 128.0);
 		vec2 rpos = (el_uv + cameraMotion(vp)) * el_screenSize - 0.5;
 		ivec2 rb = ivec2(floor(rpos));
@@ -173,7 +182,7 @@ void main() {
 	float rfMove = rough < 0.02 ? 2.0 : clamp(rough * 200.0, 4.0, 16.0);
 	// perfect mirrors trace one fixed ray per pixel: nothing to average, and history only ghosted the reflected image
 	float aRf = RR || rough < 0.005 ? 1.0 : 1.0 / min(n1, mix(rfMove, 32.0, rest));
-	if (!RR && hist > 0.0 && rest < 0.99 && rough <= REFL_MAX_ROUGH) {
+	if (aRf < 1.0 && hist > 0.0 && rest < 0.99 && rough <= REFL_MAX_ROUGH) {
 		vec3 r1 = vec3(0.0), r2 = vec3(0.0);
 		for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
 			vec3 s = texelFetch(reflRaw, clamp(px + ivec2(x, y), ivec2(0), size - 1), 0).rgb;
@@ -183,7 +192,10 @@ void main() {
 		vec3 rsd = sqrt(max(r2 / 9.0 - r1 * r1, 0.0)) * 1.5 + 0.01;
 		hRf.rgb = mix(hRf.rgb, clamp(hRf.rgb, r1 - rsd, r1 + rsd), 1.0 - rest);
 	}
-	if (hist > 0.0) hSh.rgb = mix(hSh.rgb, clamp(hSh.rgb, shMin - 0.1, shMax + 0.1), 1.0 - rest);
+	// The sun history is clamped to this frame's neighbourhood at rest too (a little looser): a still camera kept 32 frames of
+	// a mob's or player's old shadow, a dark trail behind it. Fully lit or shadowed neighbourhoods are noise-free, so the
+	// clamp costs no convergence there; in a penumbra the 1-ray neighbourhood spans nearly 0-1 and leaves the history be.
+	if (hist > 0.0) { float m = mix(0.1, 0.2, rest); hSh.rgb = clamp(hSh.rgb, shMin - m, shMax + m); }
 	outGi = vec4(mix(hGi.rgb, gi, hist > 0.0 ? aGi : 1.0), min(n1, 255.0));
 	outShadow = vec4(mix(hSh.rgb, sh, hist > 0.0 ? aSh : 1.0), dist);
 	// a = how much of the reflection glows (lighting.frag.glsl passes it on to bloom)

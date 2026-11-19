@@ -12,7 +12,7 @@ import net.minecraft.client.Minecraft;
  * (true | false), {@code rt.shadowRays} (1–16), {@code rt.distance} (chunks, 0 = render distance), {@code rt.refraction},
  * {@code rt.caustics}, {@code rt.ao} (RT ambient occlusion instead of the pack's SSAO), {@code rt.shadowEntities} (entities cast
  * RT shadows, default true), {@code rt.blockLightRays} (0 = off, 1–16, default 4), {@code rt.gi} (off | low | medium | high, default low),
- * {@code rt.giCache} (RTX GI radiance cache, default true), {@code rt.style} (rtx | faithful, default rtx), {@code rt.omm} (opacity micromaps, default true), {@code rt.device} (read by {@link RtCapability} at boot).
+ * {@code rt.giCache} (RTX GI radiance cache, default true), {@code rt.style} (rtx | faithful, default rtx), {@code rt.omm} (opacity micromaps, default true), {@code rt.raygen} (native passes marked raygen as RT pipelines on NVIDIA, default true), {@code rt.device} (read by {@link RtCapability} at boot).
  */
 public final class RtConfig {
 	private RtConfig() {}
@@ -43,6 +43,7 @@ public final class RtConfig {
 	public static volatile String style = "rtx";
 	/** Opacity micromaps for cutout terrain where the GPU has them (RtOmm): same image, fewer alpha tests. */
 	public static volatile boolean omm = true;
+	public static volatile boolean raygen = true;
 	/** Tuning only: extra converter request entries, '+'-separated ({@code rt.extra=blocklight:strength=6+gi:debug=2}). */
 	public static volatile String extra = "";
 
@@ -66,6 +67,7 @@ public final class RtConfig {
 		style = STYLES.contains(st) ? st : "rtx";
 		extra = get(p, "extra", "");
 		omm = Boolean.parseBoolean(get(p, "omm", "true"));
+		raygen = Boolean.parseBoolean(get(p, "raygen", "true"));
 	}
 
 	public static boolean rtx() {
@@ -93,6 +95,7 @@ public final class RtConfig {
 		if (extra.isEmpty()) p.remove("rt.extra"); // cleared: a stale saved value must not come back
 		else p.setProperty("rt.extra", extra);
 		p.setProperty("rt.omm", Boolean.toString(omm));
+		p.setProperty("rt.raygen", Boolean.toString(raygen));
 		RtPreset preset = RtPreset.detect(p);
 		p.setProperty("rt.preset", preset == null ? "custom" : preset.name().toLowerCase(java.util.Locale.ROOT)); // informational: load derives it from the values
 	}
@@ -140,7 +143,11 @@ public final class RtConfig {
 			String debug = System.getProperty("emrion.rt.giDebug"); // 1 = history match (red), 2 = GI only (x4)
 			if (debug != null) s.add("gi:debug=" + debug);
 		}
-		for (String e : extra.split("\\+")) if (!e.isBlank()) s.add(e.strip());
+		// terrain depth prepass (packs with the patch, Complementary): RT terrain shades each pixel once instead of every overdrawn
+		// fragment (forest opaque 7.3 -> 3.5 ms; where nothing overlaps pipeline.TerrainPrepass skips it). Off: -Demrion.perf.prepass=false or rt.extra=noprepass
+		boolean prepass = !s.isEmpty() && !"false".equals(System.getProperty("emrion.perf.prepass")) && !extra.contains("noprepass");
+		if (prepass) s.add("prepass"); // with no RT effect it would only start the RT scene
+		for (String e : extra.split("\\+")) if (!e.isBlank() && !e.strip().equals("noprepass") && (prepass || !e.strip().startsWith("prepass"))) s.add(e.strip());
 		return s;
 	}
 

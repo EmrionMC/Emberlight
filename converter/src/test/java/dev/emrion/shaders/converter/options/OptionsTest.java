@@ -110,4 +110,28 @@ class OptionsTest {
 		assertEquals("CYCLE", p.detect(new OptionValues(s, Map.of("Q", "2"))), "a profile without constraints always matches");
 		assertFalse(warnings.isEmpty());
 	}
+
+	@Test
+	void sharedBaseProfileIsNotACycle() {
+		OptionSet s = discover(Map.of("/a.glsl", "#define A\n#define Q 1 //[1 2 3]\n"));
+		Map<String, List<String>> tree = new LinkedHashMap<>();
+		tree.put("BASE", List.of("Q=2"));
+		tree.put("B", List.of("profile.BASE"));
+		tree.put("C", List.of("profile.BASE", "!A"));
+		tree.put("TOP", List.of("profile.B", "profile.C"));
+		List<String> w = new java.util.ArrayList<>();
+		Profiles p = Profiles.parse(tree, s, w::add);
+		assertEquals(List.of(), w);
+		assertEquals(Map.of("Q", "2", "A", "false"), p.profiles().get("TOP"));
+		// a chain of 40 diamonds: 2^40 expansions without the visited set
+		Map<String, List<String>> chain = new LinkedHashMap<>();
+		chain.put("D0", List.of("Q=1"));
+		for (int i = 1; i <= 40; i++) {
+			chain.put("L" + i, List.of("profile.D" + (i - 1)));
+			chain.put("R" + i, List.of("profile.D" + (i - 1)));
+			chain.put("D" + i, List.of("profile.L" + i, "profile.R" + i));
+		}
+		assertEquals(Map.of("Q", "1"), Profiles.parse(chain, s, w::add).profiles().get("D40"));
+		assertEquals(List.of(), w);
+	}
 }

@@ -45,3 +45,10 @@ bool emrRtReflHit(vec3 origin, vec3 dir, float tMin, out float t, out vec3 n, ou
 	emrRtFace.lightmap = vec2(lm.x * 0.99 + 0.001, lm.y);
 	return true;
 }
+
+// Reduced-rate RT reflection for rough opaque reflectors (smoothness < halfBelow): the pack accumulates its reflections over
+// ~30 frames (colortex7, 3.5 % new per frame below smoothness ~0.7), so each 16x16 tile (halfTile 4) traces one frame in
+// halfRate and takes halfRate times the blend then. Tiles keep whole warps on one side; smooth surfaces, translucents and
+// entities trace every frame.
+bool emrRtReflHalf = false;
+bool emrRtReflSkip = false;

@@ -38,6 +38,7 @@ public final class TerrainStats {
 	/** A pipeline was bound in a geometry pass; {@code name} is its vanilla name. */
 	public static void bound(VkCommandBuffer cb, @Nullable String name) {
 		String next = name != null && name.contains("terrain") ? name : null;
+		if (next != null && dev.emrion.shaders.mod.pipeline.GbufferPipelines.terrainMode == dev.emrion.shaders.mod.pipeline.GbufferPipelines.Context.TERRAIN_PREPASS) next += " (prepass)";
 		if (java.util.Objects.equals(next, open)) return;
 		close(cb);
 		open = next;

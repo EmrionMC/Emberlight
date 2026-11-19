@@ -70,7 +70,7 @@ public final class PipelineCacheStore {
 			} finally {
 				MemoryUtil.memFree(data);
 			}
-		} catch (IOException e) {
+		} catch (IOException | RuntimeException e) { // best effort: e.g. VK_INCOMPLETE when another thread grew the cache in between
 			EmrionShadersClient.LOG.warn("Could not save pipeline cache {}", file, e);
 		}
 	}

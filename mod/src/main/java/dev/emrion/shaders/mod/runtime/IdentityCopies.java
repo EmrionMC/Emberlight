@@ -50,7 +50,7 @@ final class IdentityCopies {
 		if (mode != null && !"off".equals(mode.mode()) || p.blend() != null && !p.blend().perTarget().isEmpty()) return null;
 		Copy copy = match(fragmentSpv.apply(c.program()));
 		var w = c.writes().get(0);
-		if (copy == null || copy.location() != w.location()) return null;
+		if (copy == null || copy.location() != w.location() || !w.target().startsWith("colortex")) return null; // shadowcomp flips are not tracked here
 		var res = dim.resources().stream().filter(r -> r.binding() == copy.binding()).findFirst().orElse(null);
 		if (res == null || !"sampled_image".equals(res.kind()) || !w.target().equals(res.target())) return null;
 		var t = dim.targets().stream().filter(x -> x.name().equals(w.target())).findFirst().orElse(null);

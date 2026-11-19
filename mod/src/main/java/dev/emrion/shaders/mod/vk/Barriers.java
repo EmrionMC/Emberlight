@@ -19,6 +19,8 @@ public final class Barriers {
 
 	public static final long FRAGMENT = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
 	public static final long COMPUTE = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+	/** Ray tracing shaders (native "raygen" passes, RtRaygen); 0 on a device without RT pipelines (the bit is invalid there). */
+	public static volatile long RAYGEN;
 	public static final long COLOR_OUT = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
 	public static final long DEPTH = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
 	public static final long TRANSFER = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
@@ -47,7 +49,7 @@ public final class Barriers {
 
 	/** Storage image/buffer written by compute, then read by fragment or compute. */
 	public static void storageToRead(VkCommandBuffer cb) {
-		memory(cb, COMPUTE, STORAGE_WRITE, FRAGMENT | COMPUTE, SAMPLED_READ | STORAGE_READ);
+		memory(cb, COMPUTE, STORAGE_WRITE, FRAGMENT | COMPUTE | RAYGEN, SAMPLED_READ | STORAGE_READ);
 	}
 
 	/** An image that a pass sampled is written next as a color target (write-after-read: execution dependency only). */

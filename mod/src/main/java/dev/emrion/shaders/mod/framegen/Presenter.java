@@ -419,8 +419,9 @@ public final class Presenter {
 
 	/** vkAcquireNextImageKHR without ever blocking inside the lock (the other side may need it to free an image). */
 	static int acquire(org.lwjgl.vulkan.VkDevice device, long swapchain, long semaphore, java.nio.IntBuffer index) {
-		// with VSync (FIFO) this waits for the next vblank to free an image; after 1 s the interpolated frame is skipped
-		return pollAcquire(() -> stop ? VK_ERROR_OUT_OF_DATE_KHR : vkAcquireNextImageKHR(device, swapchain, 0L, semaphore, VK_NULL_HANDLE, index), 1_000_000_000L);
+		// with VSync (FIFO) this waits for the next vblank to free an image; after 50 ms (1.5 vblanks at 30 Hz) the interpolated
+		// frame is skipped: the real frame waits behind it, and on a swapchain with too few images every frame would stall
+		return pollAcquire(() -> stop ? VK_ERROR_OUT_OF_DATE_KHR : vkAcquireNextImageKHR(device, swapchain, 0L, semaphore, VK_NULL_HANDLE, index), 50_000_000L);
 	}
 
 	/** Polls {@code acquire} (one try with timeout 0) under the lock until it is no longer NOT_READY/TIMEOUT, for up to 5 s. */
@@ -449,14 +450,15 @@ public final class Presenter {
 			var info = VkPresentInfoKHR.calloc(stack).sType$Default().pWaitSemaphores(stack.longs(waitSemaphore)).swapchainCount(1)
 					.pSwapchains(stack.longs(f.swapchain())).pImageIndices(stack.ints(index));
 			if (real) Reflex.chainPresent(info, f.reflexId(), stack);
-			Reflex.oobMarker(f.swapchain(), f.reflexId(), true);
 			LOCK.lock();
 			try {
-				if (stop) return VK_ERROR_OUT_OF_DATE_KHR; // abandoned: the swapchain may be destroyed
-				return vkQueuePresentKHR(vkQueue, info);
+				if (stop) return VK_ERROR_OUT_OF_DATE_KHR; // abandoned: the swapchain may be destroyed (the markers use it too)
+				Reflex.oobMarker(f.swapchain(), f.reflexId(), true);
+				int r = vkQueuePresentKHR(vkQueue, info);
+				Reflex.oobMarker(f.swapchain(), f.reflexId(), false);
+				return r;
 			} finally {
 				LOCK.unlock();
-				Reflex.oobMarker(f.swapchain(), f.reflexId(), false);
 			}
 		}
 	}

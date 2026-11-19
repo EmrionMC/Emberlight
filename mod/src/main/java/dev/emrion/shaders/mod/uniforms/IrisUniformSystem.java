@@ -5,6 +5,7 @@ import dev.emrion.shaders.converter.expr.HostValues;
 import dev.emrion.shaders.converter.expr.UniformCatalog;
 import dev.emrion.shaders.format.Manifest;
 import dev.emrion.shaders.mod.EmrionShadersClient;
+import dev.emrion.shaders.mod.upscale.Upscaling;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
@@ -49,9 +50,10 @@ public final class IrisUniformSystem implements UniformSystem, HostValues {
 	private final CustomUniformRuntime customs;
 	private final int[] customIndex, customSlot;
 	private final byte[] customKind; // 0 bool, 1 int, 2 float, 3.. vecN (n = kind − 1)
+	private final int packJitterSlot; // Photon's taa_offset (vec2), zeroed while an upscaler jitters instead; -1 = none
 
 	private final BlockPlan frame;
-	private final int phaseProj, phaseProjInv, phaseStage;
+	private final int phaseProj, phaseProjInv, phaseStage, phaseJitter;
 	private final Vector4f clearColor = new Vector4f(0, 0, 0, 1);
 
 	public IrisUniformSystem(Manifest.UniformLayout layout, Manifest.Shadow shadow, Manifest.IdMaps idMaps, Directives directives) {
@@ -97,6 +99,10 @@ public final class IrisUniformSystem implements UniformSystem, HostValues {
 		for (int k = 0; k < perTick.length; k++) perTick[k] = ticks.get(k);
 		customIndex = cIdx.stream().mapToInt(Integer::intValue).toArray();
 		customSlot = cSlots.stream().mapToInt(Integer::intValue).toArray();
+		int jitter = -1;
+		for (int k = 0; k < customIndex.length; k++)
+			if (customs.name(customIndex[k]).equals("taa_offset") && customs.type(customIndex[k]).equals("vec2")) jitter = customSlot[k];
+		packJitterSlot = jitter;
 		customKind = new byte[kinds.size()];
 		for (int k = 0; k < customKind.length; k++) customKind[k] = kinds.get(k);
 
@@ -105,6 +111,7 @@ public final class IrisUniformSystem implements UniformSystem, HostValues {
 		phaseProj = po.get("emr_ProjMat");
 		phaseProjInv = po.get("emr_ProjMatInverse");
 		phaseStage = po.get("renderStage");
+		phaseJitter = po.getOrDefault("emr_Jitter", -1); // -1: a manifest from before the slot
 	}
 
 	/** Uses the manifest's layout, the dimension's shadow settings, id maps and pack properties. */
@@ -155,6 +162,7 @@ public final class IrisUniformSystem implements UniformSystem, HostValues {
 				}
 			}
 		}
+		if (packJitterSlot >= 0 && Upscaling.active()) store[packJitterSlot] = store[packJitterSlot + 1] = 0; // FSR/DLSS know only our jitter
 		clearColor.set(b.fogColor.x, b.fogColor.y, b.fogColor.z, 1.0f);
 	}
 
@@ -166,9 +174,11 @@ public final class IrisUniformSystem implements UniformSystem, HostValues {
 	@Override
 	public void writePhaseBlock(ByteBuffer dst, Phase phase) {
 		Matrix4fc p, inv;
+		boolean jitter = phaseJitter >= 0 && (phase == Phase.WORLD || phase == Phase.HAND);
 		switch (phase) {
-			case WORLD -> { p = b.projection; inv = b.projectionInv; }
-			case HAND -> { p = b.handProjection; inv = b.handProjectionInv; }
+			// the upscaler's jitter goes to clip space (emr_Jitter), not into the projection: see GlslTranspiler.JITTER
+			case WORLD -> { p = jitter ? Upscaling.unjittered : b.projection; inv = b.projectionInv; }
+			case HAND -> { p = jitter ? Upscaling.unjitteredHand : b.handProjection; inv = b.handProjectionInv; }
 			case SHADOW -> { p = b.shadowRender; inv = b.shadowRenderInv; }
 			default -> { p = IrisMath.COMPOSITE_PROJECTION; inv = COMPOSITE_INV; }
 		}
@@ -176,6 +186,10 @@ public final class IrisUniformSystem implements UniformSystem, HostValues {
 		putMat4(dst, base + phaseProj, p);
 		putMat4(dst, base + phaseProjInv, inv);
 		dst.putInt(base + phaseStage, b.renderStage);
+		if (phaseJitter >= 0) {
+			dst.putFloat(base + phaseJitter, jitter ? Upscaling.ndcJitterX() : 0f);
+			dst.putFloat(base + phaseJitter + 4, jitter ? Upscaling.ndcJitterY() : 0f);
+		}
 	}
 
 	private static void putMat4(ByteBuffer dst, int at, Matrix4fc m) {

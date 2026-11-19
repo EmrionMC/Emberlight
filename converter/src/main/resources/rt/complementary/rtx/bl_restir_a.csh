@@ -10,55 +10,114 @@ layout(rgba16f) uniform writeonly image2D emrBlG;
 layout(rgba16f) uniform readonly image2D emrBlGH;
 layout(rgba16f) uniform writeonly image2D emrBlU;
 
+// One candidate of the cell's list (source i with its emrBlPos / emrBlCol records): U's parts and the weighted draw.
+// emrBlSourceAt and emrBlColor inlined on the loaded records.
+void emrBlCandidate(uint i, vec4 bp, vec4 bc, vec3 q, vec3 qa, vec3 n, inout vec3 front, inout vec3 flush, inout vec3 back,
+		inout float best, inout float bestFlush, inout float sum, inout float chosen, inout uint li, inout uint h) {
+	vec4 l = vec4(bp.xyz + emrRtLightOrigin.xyz, bp.w);
+	float rr = fract(l.w);
+	if (bc.a < 0.0) l = vec4(l.xyz + clamp(q - l.xyz, -rr, rr) + n * 0.5, l.w);
+	else {
+		float hh = dot(n, l.xyz - q);
+		if (!(rr < 0.3 || hh >= -0.05 || hh < -0.7)) l = vec4(l.xyz + clamp(q - l.xyz, -rr, rr) + n * 0.5, floor(l.w) + 0.28);
+	}
+	vec3 dv = l.xyz - q;
+	float level = floor(l.w), dd = length(dv), r = dd / max(level, 1.0), win = max(1.0 - r * r, 0.0);
+	float base = level / 15.0 * win * win / (1.0 + EMR_BL_FALLOFF * dd * dd);
+	if (base <= 0.0) return;
+	vec3 c = bc.rgb * bc.rgb * abs(bc.a);
+	vec3 a = abs(l.xyz - qa);
+	if (l.w != bp.w) { // a vanilla emitter flush with the surface, as emrBlOpen
+		flush += c * base;
+		bestFlush = max(bestFlush, level - (a.x + a.y + a.z));
+	} else if (dot(n, l.xyz - q) >= -0.05) {
+		front += c * base;
+		if (bc.a > 0.0) best = max(best, level - (a.x + a.y + a.z));
+	} else back += c * base;
+	float tgt = emrBlLum(c) * base * clamp((dot(n, dv) / max(dd, 1e-3) + EMR_BL_WRAP) / (1.0 + EMR_BL_WRAP), 0.0, 1.0);
+	if (tgt <= 0.0) return;
+	sum += tgt;
+	h = h * 747796405u + 2891336453u;
+	if (float(h >> 8u) / 16777216.0 * sum < tgt) {
+		li = i;
+		chosen = tgt;
+	}
+}
+
+// The cell's list staged through shared memory, 64 records at a time, when every pixel of the 8x8 group with a surface reads
+// the same cell (most groups): one coalesced load per record instead of a dependent index -> position -> colour chain per
+// pixel and source. Groups that straddle cells walk the list directly. Same candidates in the same order either way.
+shared uint emrBlSFirst, emrBlSEnd, emrBlSMixed;
+shared uint emrBlSIdx[64];
+shared vec4 emrBlSPos[64], emrBlSCol[64];
+
 void main() {
 	ivec2 p = ivec2(gl_GlobalInvocationID.xy), size = imageSize(emrBlG);
-	if (any(greaterThanEqual(p, size))) return;
-	vec3 n, eye = gbufferModelViewInverse[3].xyz, d = emrBlDir(p, size);
-	float t, lm;
-	if (!emrBlPrimary(eye, d, t, n, lm)) {
-		imageStore(emrBlG, p, vec4(0.0));
-		imageStore(emrBlU, p, vec4(0.0));
-		imageStore(emrBlRes, p, EMR_BL_EMPTY);
-		return;
+	uint lid = gl_LocalInvocationIndex;
+	// no early return before the barriers below: inactive invocations still take part in the staging
+	bool go = false;
+	vec3 n = vec3(0.0), pos = vec3(0.0), q = vec3(0.0), qa = vec3(0.0);
+	float t = 0.0, lm = 0.0;
+	uint first = 0u, end = 0u;
+	if (all(lessThan(p, size))) {
+		vec3 eye = gbufferModelViewInverse[3].xyz, d = emrBlDir(p, size);
+		if (!emrBlPrimary(eye, d, t, n, lm)) {
+			imageStore(emrBlG, p, vec4(0.0));
+			imageStore(emrBlU, p, vec4(0.0));
+			imageStore(emrBlRes, p, EMR_BL_EMPTY);
+		} else {
+			pos = eye + d * t;
+			q = pos + n * 0.02;
+			qa = pos + n * 0.5;
+			imageStore(emrBlG, p, vec4(n, length(pos)));
+			if (emrRtLightFade(q) <= 0.0 || !emrBlCellRange(q, first, end)) {
+				imageStore(emrBlU, p, vec4(0.0));
+				imageStore(emrBlRes, p, EMR_BL_EMPTY);
+			} else go = true;
+		}
 	}
-	vec3 pos = eye + d * t, q = pos + n * 0.02, qa = pos + n * 0.5;
-	float dist = length(pos);
-	imageStore(emrBlG, p, vec4(n, dist));
-	uint first, end;
-	if (emrRtLightFade(q) <= 0.0 || !emrBlCellRange(q, first, end)) {
-		imageStore(emrBlU, p, vec4(0.0));
-		imageStore(emrBlRes, p, EMR_BL_EMPTY);
-		return;
+	if (lid == 0u) {
+		emrBlSFirst = ~0u;
+		emrBlSEnd = 0u;
+		emrBlSMixed = 0u;
 	}
+	barrier();
+	if (go) {
+		atomicMin(emrBlSFirst, first);
+		atomicMax(emrBlSEnd, end);
+	}
+	barrier();
+	if (go && (first != emrBlSFirst || end != emrBlSEnd)) atomicOr(emrBlSMixed, 1u);
+	barrier();
+	uint sFirst = emrBlSFirst, sEnd = emrBlSEnd;
+	bool staged = emrBlSMixed == 0u && sFirst < sEnd; // the same in the whole group
 	// one pass over the cell: U's parts (rtx/bl_common.glsl emrBlOpen) and the weighted draw (emrBlPick)
 	vec3 front = vec3(0.0), flush = vec3(0.0), back = vec3(0.0);
 	float best = -99.0, bestFlush = -99.0, sum = 0.0, chosen = 0.0;
 	uint li = ~0u, h = emrBlHash(uvec3(p, uint(frameCounter)));
-	for (uint k = first; k < end; k++) {
-		uint i = emrBlIndex[k];
-		vec4 l = emrBlSourceAt(i, q, n);
-		vec3 dv = l.xyz - q;
-		float level = floor(l.w), dd = length(dv), r = dd / max(level, 1.0), win = max(1.0 - r * r, 0.0);
-		float base = level / 15.0 * win * win / (1.0 + EMR_BL_FALLOFF * dd * dd);
-		if (base <= 0.0) continue;
-		vec3 c = emrBlColor(i);
-		vec3 a = abs(l.xyz - qa);
-		if (l.w != emrBlPos[i].w) { // a vanilla emitter flush with the surface, as emrBlOpen
-			flush += c * base;
-			bestFlush = max(bestFlush, level - (a.x + a.y + a.z));
-		} else if (dot(n, l.xyz - q) >= -0.05) {
-			front += c * base;
-			if (emrBlCol[i].a > 0.0) best = max(best, level - (a.x + a.y + a.z));
-		} else back += c * base;
-		float tgt = emrBlLum(c) * base * clamp((dot(n, dv) / max(dd, 1e-3) + EMR_BL_WRAP) / (1.0 + EMR_BL_WRAP), 0.0, 1.0);
-		if (tgt <= 0.0) continue;
-		sum += tgt;
-		h = h * 747796405u + 2891336453u;
-		if (float(h >> 8u) / 16777216.0 * sum < tgt) {
-			li = i;
-			chosen = tgt;
+	if (staged) {
+		for (uint b0 = sFirst; b0 < sEnd; b0 += 64u) {
+			barrier(); // the previous chunk is read by everyone
+			if (b0 + lid < sEnd) {
+				uint i = emrBlIndex[b0 + lid];
+				emrBlSIdx[lid] = i;
+				emrBlSPos[lid] = emrBlPos[i];
+				emrBlSCol[lid] = emrBlCol[i];
+			}
+			barrier();
+			if (go) {
+				uint cnt = min(64u, sEnd - b0);
+				for (uint j = 0u; j < cnt; j++)
+					emrBlCandidate(emrBlSIdx[j], emrBlSPos[j], emrBlSCol[j], q, qa, n, front, flush, back, best, bestFlush, sum, chosen, li, h);
+			}
+		}
+	} else if (go) {
+		for (uint k = first; k < end; k++) {
+			uint i = emrBlIndex[k];
+			emrBlCandidate(i, emrBlPos[i], emrBlCol[i], q, qa, n, front, flush, back, best, bestFlush, sum, chosen, li, h);
 		}
 	}
+	if (!go) return;
 	vec3 u = front + flush * clamp((lm * 15.0 - best - 1.0) * 0.5, 0.0, 1.0)
 		+ back * clamp((lm * 15.0 - max(best, bestFlush) - 1.0) * 0.5, 0.0, 1.0);
 	if (emrBlLum(u) < 1e-6) {

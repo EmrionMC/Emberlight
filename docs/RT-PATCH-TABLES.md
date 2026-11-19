@@ -103,7 +103,7 @@ code that is live with the current settings.
 
 | key | |
 |---|---|
-| `function` | `returnType name(paramType,...)`, without parameter names. `in` is dropped, other qualifiers (`inout`, `out`) are kept. Whitespace doesn't matter <br>Several signatures separated by `\|` match any of them, for a function whose parameters differ between pack versions (Complementary with and without Euphoria Patches) |
+| `function` | `returnType name(paramType,...)`, without parameter names. `in` is dropped, other qualifiers (`inout`, `out`) are kept. Whitespace doesn't matter <br>Several signatures separated by `\|` match any of them, for a function whose parameters differ between pack versions (Complementary with and without Euphoria Patches) <br>`type name` without parentheses (`vec2[8] offsets`): a global variable with an initialiser; `body` replaces the initialiser (bare) |
 | `body` | snippet file. By default it **replaces the function body**, and it can use the parameters by name |
 | `after` | a statement in the function (GLSL tokens, whitespace ignored, must occur exactly once). The body is inserted after it |
 | `find` | a token sequence in the function (exactly once). It is replaced by the body |
@@ -180,7 +180,7 @@ shadow map, without its range or blur limits. **RTX** is allowed to light the sc
 ```json
 "shadows": {
   "helpers": "shadows.glsl", "patches": [ ... ],
-  "variants": { "rtx": { "helpers": "rtx/shadows.glsl", "options": {"sun": "0.03"}, "patches": [ ... ] } }
+  "variants": { "rtx": { "helpers": "rtx/shadows.glsl", "options": {"sun": "0.015"}, "patches": [ ... ] } }
 }
 ```
 

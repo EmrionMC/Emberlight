@@ -90,10 +90,15 @@ final class ShadowPass {
 
 		long t0 = System.nanoTime();
 		boolean sodium = dev.emrion.shaders.mod.compat.SodiumTerrain.LOADED;
-		if (sodium) collectSodium(cam, shadowView);
+		boolean terrain = prop(e.manifest(), "shadowTerrain") || prop(e.manifest(), "shadowTranslucent");
+		// block entity casters come from the section walk too; entities have their own culler
+		if (!terrain && !prop(e.manifest(), "shadowBlockEntities") && !prop(e.manifest(), "shadowLightBlockEntities")) {
+			SECTIONS.clear();
+			BLOCK_ENTITY_SECTIONS.clear();
+			sectionCount = 0;
+		} else if (sodium) collectSodium(cam, shadowView);
 		else collectSections(level, cam, shadowView);
 		long t1 = System.nanoTime();
-		boolean terrain = prop(e.manifest(), "shadowTerrain") || prop(e.manifest(), "shadowTranslucent");
 		ChunkSectionsToRender chunks = !terrain || sodium ? null : prepareTerrain(level, shadowView);
 		long t2 = System.nanoTime();
 		FeatureRenderDispatcher.PreparedFrame entities = prepareEntities(e, level, camera, shadowView);
@@ -101,17 +106,17 @@ final class ShadowPass {
 
 		var atlas = mc.getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS).getTextureView();
 		var sampler = RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST, true); // Iris: nearest, mipmapped
-		try (RenderPass pass = e.beginPhase(opaque, Context.SHADOW, UniformSystem.Phase.SHADOW, GeometryHooks.TERRAIN_SOLID)) {
-			RenderSystem.bindDefaultUniforms(pass);
-			if (chunks != null && prop(e.manifest(), "shadowTerrain")) chunks.renderGroup(ChunkSectionLayerGroup.OPAQUE, pass, sampler, atlas, false);
-			if (sodium && prop(e.manifest(), "shadowTerrain")) drawSodium(pass, false, u, shadowView, cam, sampler);
-		}
-		e.endPhase();
-		if (ShadowStats.ENABLED) {
-			ShadowStats.cpu(t1 - t0, t2 - t1, t3 - t2, System.nanoTime() - t3, level, cam, TERRAIN, SECTIONS);
-			if (sodium) ShadowStats.sodium(cam);
-		}
 		try {
+			try (RenderPass pass = e.beginPhase(opaque, Context.SHADOW, UniformSystem.Phase.SHADOW, GeometryHooks.TERRAIN_SOLID)) {
+				RenderSystem.bindDefaultUniforms(pass);
+				if (chunks != null && prop(e.manifest(), "shadowTerrain")) chunks.renderGroup(ChunkSectionLayerGroup.OPAQUE, pass, sampler, atlas, false);
+				if (sodium && prop(e.manifest(), "shadowTerrain")) drawSodium(pass, false, u, shadowView, cam, sampler);
+			}
+			e.endPhase();
+			if (ShadowStats.ENABLED) {
+				ShadowStats.cpu(t1 - t0, t2 - t1, t3 - t2, System.nanoTime() - t3, level, cam, TERRAIN, SECTIONS);
+				if (sodium) ShadowStats.sodium(cam);
+			}
 			Manifest.Command g = e.advanceTo("shadow_entities");
 			if (g != null && entities != null) {
 				try (RenderPass pass = e.beginPhase(g, Context.SHADOW, UniformSystem.Phase.SHADOW, GeometryHooks.ENTITIES)) {

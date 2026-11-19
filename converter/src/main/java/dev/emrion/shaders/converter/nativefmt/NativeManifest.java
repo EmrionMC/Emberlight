@@ -47,7 +47,7 @@ public record NativeManifest(
 	public record Pass(String name, int line, String kind, String phase, List<String> classes, Map<String, String> stages,
 	                   List<String> writes, Map<String, String> blend, Float alphaCutoff, Map<String, String> defines,
 	                   String enabled, int enabledLine, boolean raytracing, float scale, List<String> mipmaps, int[] localSize,
-	                   int[] count, float[] dispatchScale) {}
+	                   int[] count, float[] dispatchScale, boolean raygen) {}
 
 	/** A compute pass that writes RR guides: it only exists while Ray Reconstruction runs (§14.4). */
 	static boolean writesRrGuides(Pass p) { return p.writes().stream().anyMatch(RR_IMAGES::contains); }
@@ -493,7 +493,7 @@ public record NativeManifest(
 			int finals = 0;
 			for (JsonNode pn : arr(n, "passes")) {
 				var m = obj(pn, "pass", Set.of("name", "kind", "phase", "classes", "vertex", "fragment", "geometryShader", "compute",
-						"writes", "defines", "enabled", "raytracing", "blend", "alphaCutoff", "scale", "mipmaps", "workgroups"));
+						"writes", "defines", "enabled", "raytracing", "blend", "alphaCutoff", "scale", "mipmaps", "workgroups", "raygen"));
 				String name = req(m, "name", "a pass", pn);
 				if (name == null) continue;
 				String what = "pass \"" + name + "\"";
@@ -600,6 +600,8 @@ public record NativeManifest(
 				boolean rt = bool(m.get("raytracing"), what + ".raytracing", false);
 				if (rt && !requires.contains("ray_query")) error(m.get("raytracing"), what + " uses ray queries: add \"requires\": [\"ray_query\"]");
 				if (rt && kind.equals("geometry")) error(m.get("raytracing"), what + ": ray queries are for fullscreen, final and compute passes in format 1");
+				boolean raygen = bool(m.get("raygen"), what + ".raygen", false);
+				if (raygen && !(rt && kind.equals("compute"))) error(m.get("raygen"), what + ": raygen is for compute passes with \"raytracing\": true");
 
 				float scale = 1;
 				if (m.containsKey("scale")) {
@@ -629,7 +631,7 @@ public record NativeManifest(
 				}
 				if ("setup".equals(phase) && count == null && kind.equals("compute")) error(pn, what + ": setup passes need a fixed workgroups.count");
 				out.add(new Pass(name, pn.line(), kind, phase, classes, stages, writes, blend, cutoff, defines, enabled,
-						m.containsKey("enabled") ? m.get("enabled").line() : 0, rt, scale, mipmaps, local == null ? new int[]{8, 8, 1} : local, count, dispatch));
+						m.containsKey("enabled") ? m.get("enabled").line() : 0, rt, scale, mipmaps, local == null ? new int[]{8, 8, 1} : local, count, dispatch, raygen));
 			}
 			if (finals == 0 && !out.isEmpty()) error(n, "the graph needs one pass of kind \"final\"");
 			Map<String, Integer> perPhase = new LinkedHashMap<>();

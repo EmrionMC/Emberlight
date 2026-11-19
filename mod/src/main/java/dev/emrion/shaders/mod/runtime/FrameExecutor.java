@@ -75,6 +75,8 @@ public final class FrameExecutor {
 	private final PackRuntime.Img mcColor = new PackRuntime.Img("minecraft main color", null);
 	private boolean oncePending = true;
 	private final boolean hasShadowPass;
+	/** A pass that runs before the shadow pass ends reads the TLAS (see {@link #readsTlasBeforeShadowEnd}). */
+	private final boolean tlasBeforeShadowEnd;
 	/** Frame-start clears of raw images moved behind their last use in the frame (see {@link DeferredClears}). */
 	private final DeferredClears deferred;
 	private boolean firstFrame = true;
@@ -97,6 +99,7 @@ public final class FrameExecutor {
 		frameLabels = dim.frame().stream().map(FrameExecutor::label).toArray(String[]::new);
 		onceLabels = dim.once().stream().map(FrameExecutor::label).toArray(String[]::new);
 		hasShadowPass = dim.frame().stream().anyMatch(c -> "shadow_opaque".equals(c.phase()));
+		tlasBeforeShadowEnd = readsTlasBeforeShadowEnd(dim);
 		deferred = new DeferredClears(dim, name -> {
 			PackRuntime.Img[] sides = rt.images.get(name);
 			if (!DEFER_CLEARS) return false;
@@ -160,6 +163,7 @@ public final class FrameExecutor {
 		rt.ring.nextFrame();
 		for (int[] p : phaseOffsets) java.util.Arrays.fill(p, -1);
 		aoDone = false;
+		dev.emrion.shaders.mod.pipeline.TerrainPrepass.newFrame();
 		var layout = rt.manifest.uniforms();
 		long frameOffset = rt.ring.alloc(layout.size());
 		uniforms.writeFrameBlock(MemoryUtil.memByteBuffer(rt.ring.address(frameOffset), layout.size()).order(java.nio.ByteOrder.nativeOrder()));
@@ -184,7 +188,7 @@ public final class FrameExecutor {
 		Profiler.mark(cb, "MC: before the level");
 		var rtScene = dev.emrion.shaders.mod.rt.RtScene.get();
 		if (rtScene != null) {
-			rtScene.buildTlas(cb);
+			rtScene.buildTlas(cb, tlasBeforeShadowEnd || oncePending);
 			Profiler.mark(cb, "RT: TLAS build");
 		}
 		if (oncePending) {
@@ -376,11 +380,27 @@ public final class FrameExecutor {
 			case "final" -> finalPass(cb, c);
 			case "mipmaps" -> mipmaps(cb, rt.image(c.target(), c.side()));
 			case "copy" -> {
-				if (!rt.swapped.contains(c.target())) copy(cb, rt.image(c.target(), c.from()), rt.image(c.target(), c.to()));
+				// end-of-frame copies (no flipState) of swapped targets are replaced by the image swap
+				if (c.flipState() != null || !rt.swapped.contains(c.target())) copy(cb, rt.image(c.target(), c.from()), rt.image(c.target(), c.to()));
 			}
 			case "copy_depth" -> copy(cb, rt.image(c.from(), "main"), rt.image(c.to(), "main"));
 			default -> throw new IllegalStateException("unknown frame command " + c.cmd());
 		}
+	}
+
+	/**
+	 * Whether a frame command before the last shadow phase, or a shadow program, binds the TLAS (or the RT AO image, whose
+	 * pass traces it). Otherwise nothing reads the levelStart TLAS before the shadow pass's entities rebuild it.
+	 */
+	static boolean readsTlasBeforeShadowEnd(Manifest.Dimension dim) {
+		java.util.Set<Integer> tlas = new java.util.HashSet<>();
+		for (var r : dim.resources()) if (r.kind().equals("acceleration_structure") || RtAoPass.BUILTIN.equals(r.builtin())) tlas.add(r.binding());
+		java.util.function.Predicate<Manifest.Program> reads = p -> p != null && p.set1().stream().anyMatch(tlas::contains);
+		int last = -1;
+		for (int i = 0; i < dim.frame().size(); i++)
+			if (dim.frame().get(i).cmd().equals("geometry") && dim.frame().get(i).phase() != null && dim.frame().get(i).phase().startsWith("shadow")) last = i;
+		for (int i = 0; i < last; i++) if (dim.frame().get(i).program() != null && reads.test(dim.programs().get(dim.frame().get(i).program()))) return true;
+		return dim.programs().values().stream().anyMatch(p -> "shadow".equals(p.kind()) && reads.test(p));
 	}
 
 	private boolean readsRtAo(Manifest.Program p, int flip) {
@@ -481,10 +501,12 @@ public final class FrameExecutor {
 
 	private void compute(VkCommandBuffer cb, Manifest.Command c) {
 		var p = dim.programs().get(c.program());
-		declareSet1(p, c.flipState(), COMPUTE);
+		var rg = pp.raygen.get(c.program()); // the pass runs as a raygen shader (RtRaygen)
+		int bind = rg != null ? org.lwjgl.vulkan.KHRRayTracingPipeline.VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR : VK_PIPELINE_BIND_POINT_COMPUTE;
+		declareSet1(p, c.flipState(), rg != null ? dev.emrion.shaders.mod.vk.Barriers.RAYGEN : COMPUTE);
 		hazards.flush(cb);
-		vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pp.pipelines.get(c.program()));
-		bindSet(cb, VK_PIPELINE_BIND_POINT_COMPUTE, c.flipState());
+		vkCmdBindPipeline(cb, bind, pp.pipelines.get(c.program()));
+		bindSet(cb, bind, c.flipState());
 		int[] local = p.localSize() != null ? p.localSize() : new int[] {1, 1, 1};
 		int x, y, z = 1;
 		if (p.workGroups() != null) {
@@ -496,7 +518,15 @@ public final class FrameExecutor {
 			x = ceilDiv((int) Math.ceil(rt.width * s[0]), local[0]);
 			y = ceilDiv((int) Math.ceil(rt.height * s[1]), local[1]);
 		}
-		vkCmdDispatch(cb, x, y, z);
+		var lim = rt.ctx.limits();
+		// GL rejects bad counts (GL_INVALID_VALUE); on Vulkan they can hang the GPU, so skip like Iris does
+		if (Integer.compareUnsigned(x, lim.maxComputeWorkGroupCount(0)) > 0 || Integer.compareUnsigned(y, lim.maxComputeWorkGroupCount(1)) > 0
+				|| Integer.compareUnsigned(z, lim.maxComputeWorkGroupCount(2)) > 0) return; // negative = huge unsigned
+		if (rg != null) {
+			if ((long) x * local[0] * y * local[1] * z * local[2] > 1 << 30) return; // (maxRayDispatchInvocationCount is at least 2^30)
+			for (int i = 0; i < 3; i++) if (local[i] > lim.maxComputeWorkGroupSize(i)) return; // (each launch dimension: count x size limits)
+			dev.emrion.shaders.mod.rt.RtRaygen.trace(cb, rg, x * local[0], y * local[1], z * local[2]);
+		} else vkCmdDispatch(cb, x, y, z);
 	}
 
 	private static int ceilDiv(int a, int b) {

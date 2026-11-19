@@ -18,12 +18,10 @@ public class VulkanFeatureSetsMixin {
 	@Inject(method = "optionalFeatureSets", at = @At("RETURN"))
 	private static void emrion$packFeatures(CallbackInfoReturnable<Set<FeatureSet>> cir) {
 		for (String f : new String[] {"fragmentStoresAndAtomics", "vertexPipelineStoresAndAtomics", "shaderStorageImageWriteWithoutFormat",
-				"shaderStorageImageReadWithoutFormat", "geometryShader", "tessellationShader", "independentBlend", "fillModeNonSolid", "sparseBinding", "sparseResidencyImage2D", "sparseResidencyAliased"}) {
+				"shaderStorageImageReadWithoutFormat", "geometryShader", "tessellationShader", "independentBlend", "fillModeNonSolid", "pipelineStatisticsQuery", "sparseBinding", "sparseResidencyImage2D", "sparseResidencyAliased"}) {
 			if (f.startsWith("sparse") && !dev.emrion.shaders.mod.vk.SparseAtlas.FEATURES.contains(f)) continue;
 			cir.getReturnValue().add(new FeatureSet("Emberlight " + f, Set.of(), Set.of(new VulkanFeature(VulkanFeatureSets.VK10_FEATURES_STRUCT, f))));
 		}
-		if (dev.emrion.shaders.mod.debug.TerrainStats.ENABLED)
-			cir.getReturnValue().add(new FeatureSet("Emberlight pipelineStatisticsQuery", Set.of(), Set.of(new VulkanFeature(VulkanFeatureSets.VK10_FEATURES_STRUCT, "pipelineStatisticsQuery"))));
 		if (dev.emrion.shaders.mod.debug.PipelineStats.ENABLED) cir.getReturnValue().add(dev.emrion.shaders.mod.debug.PipelineStats.FEATURE_SET);
 		cir.getReturnValue().add(dev.emrion.shaders.mod.hdr.Hdr.FEATURE_SET); // VK_EXT_hdr_metadata for HDR output, where the driver has it
 		cir.getReturnValue().add(dev.emrion.shaders.mod.framegen.Reflex.FEATURE_SET); // NVIDIA Reflex (VK_NV_low_latency2), where the driver has it
@@ -31,6 +29,7 @@ public class VulkanFeatureSetsMixin {
 			cir.getReturnValue().add(dev.emrion.shaders.mod.rt.RtCapability.FEATURE_SET);
 			// VK_EXT_opacity_micromap, where the driver has it (-Demrion.rt.ommDevice=false: a device without it, for tests)
 			if (!"false".equals(System.getProperty("emrion.rt.ommDevice"))) cir.getReturnValue().add(dev.emrion.shaders.mod.rt.RtOmm.FEATURE_SET);
+			cir.getReturnValue().add(dev.emrion.shaders.mod.rt.RtRaygen.FEATURE_SET); // RT pipelines, for native "raygen" passes
 		}
 		// NGX's device extensions, only when the DLSS files are installed
 		var dlss = dev.emrion.shaders.mod.upscale.Dlss.deviceExtensions();

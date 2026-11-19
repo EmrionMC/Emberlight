@@ -41,6 +41,8 @@ Mat tableMaterial(int id, vec3 albedo) {
 	else if (id == 41) { m.smoothness = 0.90; m.f0 = 231.0; }
 	else if (id == 42) { m.smoothness = 0.75; m.f0 = 234.0; }
 	else if (id == 43) { m.smoothness = 0.80; m.f0 = 255.0; }
+	// exposed / weathered / oxidised copper: the copper texels stay a rougher copper, the green patina is a rough mineral
+	else if (id == 46) { if (albedo.r > albedo.g) { m.smoothness = 0.40; m.f0 = 234.0; } } // 0.40: past the reflection-ray cut-off up to High
 	else if (id == ID_ICE) { m.smoothness = 0.95; m.kind = sssKind(0.5, false); } // packed and blue ice (opaque)
 	else if (id == 11) { m.smoothness = 0.3; m.kind = sssKind(0.7, false); } // snow
 	else if (id == 44) { m.smoothness = 0.55; m.f0 = 230.0; } // chainmail

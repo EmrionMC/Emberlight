@@ -42,6 +42,14 @@ class PreprocessorTest {
 	}
 
 	@Test
+	void deeplyNestedMacroArgumentsDoNotOverflowTheStack() {
+		int n = 20_000;
+		var r = run("#define I(x) x\n" + "I(".repeat(n) + "a" + ")".repeat(n) + "\n", Map.of());
+		assertTrue(r.warnings().stream().anyMatch(w -> w.text().startsWith("Macro arguments nested deeper")), r.warnings().toString());
+		assertEquals("a", pp("#define I(x) x\nI(I(I(a)))\n"), "shallow nesting still expands");
+	}
+
+	@Test
 	void nestedArgumentsAndParens() {
 		assertEquals("f((a, b), c)", pp("#define F(x, y) f(x, y)\nF((a, b), c)\n"));
 	}

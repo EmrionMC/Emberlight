@@ -170,7 +170,12 @@ public final class Hdr {
 	public static void beforeGui(long mainColorImage, int w, int h) {
 		if (!active()) return;
 		VulkanContext ctx = VulkanContext.get();
-		hudless = sized(ctx, hudless, w, h, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, "hdr hud-less colour");
+		try {
+			hudless = sized(ctx, hudless, w, h, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, "hdr hud-less colour");
+		} catch (RuntimeException e) {
+			fallBack(e);
+			return;
+		}
 		var cb = RawCommands.begin(ctx);
 		try (MemoryStack stack = MemoryStack.stackPush()) {
 			var region = VkImageCopy.calloc(1, stack);
@@ -192,7 +197,12 @@ public final class Hdr {
 			return 0;
 		}
 		VulkanContext ctx = VulkanContext.get();
-		out = sized(ctx, out, w, h, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, "hdr output");
+		try {
+			out = sized(ctx, out, w, h, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, "hdr output");
+		} catch (RuntimeException e) {
+			fallBack(e);
+			return 0;
+		}
 		var cb = RawCommands.begin(ctx);
 		encode(ctx, cb, backbufferView, backbufferView, mask ? hudless.view : 0, out);
 		if (PROBE) probe(ctx, cb, out);
@@ -241,10 +251,18 @@ public final class Hdr {
 		pipeline = layout = setLayout = 0;
 	}
 
+	/** Allocation failed (resize under VRAM pressure): drop to SDR at the next swapchain rebuild instead of crashing. */
+	private static void fallBack(RuntimeException e) {
+		EmrionShadersClient.LOG.error("HDR: {}; using SDR", e.getMessage(), e);
+		failed = true;
+		reconfigure = true;
+	}
+
 	private static RawImage sized(VulkanContext ctx, @Nullable RawImage img, int w, int h, int format, int usage, String label) {
 		if (img != null && img.width == w && img.height == h) return img;
+		var n = new RawImage(ctx, format, w, h, 1, 1, usage, label); // first: on OOM the caller's field keeps a live image
 		if (img != null) img.destroyLater();
-		return new RawImage(ctx, format, w, h, 1, 1, usage, label);
+		return n;
 	}
 
 	private static void encode(VulkanContext ctx, VkCommandBuffer cb, long srcView, long guiView, long hudlessView, RawImage dst) {

@@ -1,5 +1,6 @@
 package dev.emrion.shaders.converter;
 
+import dev.emrion.shaders.converter.cache.CacheDir;
 import dev.emrion.shaders.converter.glsl.LineMap;
 import dev.emrion.shaders.converter.glsl.PreprocessedStage;
 import dev.emrion.shaders.converter.glsl.ProgramGroup;
@@ -86,17 +87,18 @@ class DefaultConverterTest {
 	}
 
 	ResolvedPack.ProgramSource broken() {
-		return new ResolvedPack.ProgramSource("composite1", true, List.of(
-				stage("composite1", ProgramGroup.COMPOSITE, StageType.VERTEX, COMPOSITE_VSH),
-				new PreprocessedStage("composite1", ProgramGroup.COMPOSITE, StageType.FRAGMENT, "shaders/world0/composite1.fsh",
+		return new ResolvedPack.ProgramSource(brokenName, true, List.of(
+				stage(brokenName, ProgramGroup.COMPOSITE, StageType.VERTEX, COMPOSITE_VSH),
+				new PreprocessedStage(brokenName, ProgramGroup.COMPOSITE, StageType.FRAGMENT, "shaders/world0/" + brokenName + ".fsh",
 						"#version 450\nvoid main() { nope(); }\n", brokenLines, null)));
 	}
 
 	LineMap brokenLines = LineMap.IDENTITY_UNKNOWN;
+	String brokenName = "composite1";
 
 	final PackLoader loader = (source, settingsFile, macros, diagnostics) -> {
-		var programs = new ArrayList<>(List.of(composite(), gbuffers(),
-				new ResolvedPack.ProgramSource("final", false, List.of())));
+		var programs = new ArrayList<>(List.of(composite(), gbuffers()));
+		if (!includeBroken || !brokenName.equals("final")) programs.add(new ResolvedPack.ProgramSource("final", false, List.of()));
 		if (includeBroken) programs.add(broken());
 		return new ResolvedPack(source, new Manifest.Options(null, Map.of(), List.of(), List.of(), Map.of(), Map.of(), List.of(), Map.of()),
 				new LinkedHashMap<>(), new Manifest.IdMaps(List.of(), List.of(), List.of(), Map.of()),
@@ -128,8 +130,8 @@ class DefaultConverterTest {
 					null, List.of(new Manifest.Output(0, "colortex0")), null, null, List.of(), List.of(2), List.of(), geometry,
 					null, null, null, List.of(), 1.0f, null));
 			emits.put(name, new DimensionPlanner.ProgramEmit(null, geometry ? List.of("position_color", "position") : List.of("fullscreen")));
-			frame.add(new Manifest.Command(geometry ? "geometry" : "fullscreen", geometry ? null : name, 0, geometry ? "opaque" : null,
-					null, null, null, null, null, null));
+			frame.add(new Manifest.Command(geometry ? "geometry" : name.equals("final") ? "final" : "fullscreen", geometry ? null : name, 0,
+					geometry ? "opaque" : null, null, null, null, null, geometry ? null : List.of(new Manifest.Attachment(0, "colortex0", "alt")), null));
 		}
 		var dim = new Manifest.Dimension(table, List.of(), List.of(), List.of(new Manifest.FlipState(0, List.of())), frame, List.of(), null);
 		var textures = List.of(new Manifest.TextureDef("noisetex", "shaders/lib/textures/noise.png", null, "RGBA8", 2, new int[]{1, 1}, "linear", "repeat", false, null));
@@ -237,6 +239,17 @@ class DefaultConverterTest {
 	}
 
 	@Test
+	void cacheWithACorruptReportIsConvertedAgain() throws Exception {
+		var first = run(true, null);
+		Files.writeString(first.outputDir().resolve(CacheDir.REPORT), "{ not json");
+		var again = run(true, null);
+		assertFalse(again.cacheHit());
+		assertNotNull(again.manifest());
+		Files.writeString(again.outputDir().resolve(CacheDir.REPORT), "");
+		assertFalse(run(true, null).cacheHit());
+	}
+
+	@Test
 	void failedStageRemovesOnlyItsProgram() throws Exception {
 		includeBroken = true;
 		var r = run(true, null);
@@ -247,6 +260,9 @@ class DefaultConverterTest {
 		assertTrue(dim.programs().containsKey("composite"));
 		assertTrue(dim.frame().stream().noneMatch(c -> "composite1".equals(c.program())));
 		assertTrue(dim.frame().stream().anyMatch(c -> "composite".equals(c.program())));
+		// the failed pass becomes a pass-through: later passes read the side it would have written
+		assertTrue(dim.frame().stream().anyMatch(c -> c.cmd().equals("copy") && "colortex0".equals(c.target()) && "main".equals(c.from())
+				&& "alt".equals(c.to()) && c.flipState() != null));
 
 		Diagnostic error = r.diagnostics().stream().filter(d -> d.severity() == Diagnostic.Severity.ERROR).findFirst().orElseThrow();
 		assertEquals("composite1", error.program());
@@ -254,6 +270,15 @@ class DefaultConverterTest {
 		assertEquals("src/world0/composite1.fsh.glsl", error.file());
 		assertEquals(2, error.line());
 		assertTrue(Files.readString(r.outputDir().resolve("report.json")).contains("\"ok\": false"));
+	}
+
+	@Test
+	void failedFinalFallsBackToThePlainBlit() throws Exception {
+		includeBroken = true;
+		brokenName = "final";
+		var dim = run(true, null).manifest().dimensions().get("world0");
+		assertFalse(dim.programs().containsKey("final"));
+		assertTrue(dim.frame().stream().anyMatch(c -> c.cmd().equals("final") && c.program() == null));
 	}
 
 	@Test
