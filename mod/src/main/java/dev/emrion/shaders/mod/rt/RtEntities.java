@@ -377,19 +377,19 @@ public final class RtEntities {
 				}
 				GpuTexture tex = c.texture().texture();
 				int[] rect = tex == blocks ? null : rects.get(tex);
-				long dst = base + c.offset(); // the capture layout is kept: offsets match
-				MemoryUtil.memCopy(MemoryUtil.memAddress0(cap) + c.offset(), dst, (long) c.vertices() * STRIDE);
+				long src = MemoryUtil.memAddress0(cap) + c.offset(), dst = base + c.offset(); // the capture layout is kept: offsets match
 				int kind = KIND_BLOCKS;
 				if (rect != null && rect != NO_FIT) {
 					kind = KIND_ATLAS;
 					float sx = rect[2] / (float) ATLAS, sy = rect[3] / (float) ATLAS, ox = rect[0] / (float) ATLAS, oy = rect[1] / (float) ATLAS;
-					long src = MemoryUtil.memAddress0(cap) + c.offset(); // read the CPU copy: the ring is write-combined, reads are uncached
+					// remapped in the CPU copy (consumed by this build), so the write-combined ring gets one sequential copy
 					for (int v = 0; v < c.vertices(); v++) {
-						long o = (long) v * STRIDE + 16;
-						MemoryUtil.memPutFloat(dst + o, ox + Math.clamp(MemoryUtil.memGetFloat(src + o), 0f, 1f) * sx);
-						MemoryUtil.memPutFloat(dst + o + 4, oy + Math.clamp(MemoryUtil.memGetFloat(src + o + 4), 0f, 1f) * sy);
+						long o = src + (long) v * STRIDE + 16;
+						MemoryUtil.memPutFloat(o, ox + Math.clamp(MemoryUtil.memGetFloat(o), 0f, 1f) * sx);
+						MemoryUtil.memPutFloat(o + 4, oy + Math.clamp(MemoryUtil.memGetFloat(o + 4), 0f, 1f) * sy);
 					}
 				}
+				MemoryUtil.memCopy(src, dst, (long) c.vertices() * STRIDE);
 				boolean opaque = rect == NO_FIT || c.type().startsWith("entity_solid");
 				String key = c.type() + '@' + System.identityHashCode(tex) + (c.player() ? "@p" : "");
 				int nth = seen.merge(key, 1, Integer::sum);

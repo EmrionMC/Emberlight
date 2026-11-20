@@ -58,7 +58,11 @@ public final class ObjectMotion {
 	private static int[] slotCount = new int[1024];
 
 	// previous frame, slot-major
-	private static final java.util.HashMap<Long, int[]> prevIndex = new java.util.HashMap<>();
+	/** key → offset << 32 | count; -1 = absent (no boxing: thousands of block entity slots per frame in storage rooms) */
+	private static final it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap prevIndex = new it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap();
+	static {
+		prevIndex.defaultReturnValue(-1);
+	}
 	private static float[] prevPos = new float[0];
 	private static boolean havePrev;
 	private static final Matrix4f prevViewProj = new Matrix4f(), prevHandProj = new Matrix4f();
@@ -177,12 +181,17 @@ public final class ObjectMotion {
 		int nw = 0, nh = 0;
 		float[] world = out, handOut = new float[0];
 		if (havePrev && !reset) {
+			int lastSlot = -1;
+			long prev = -1;
 			for (int i = 0; i + 3 < vertices; i += 4) {
 				int s = vslot[i];
 				if (vslot[i + 3] != s || vord[i + 3] != vord[i] + 3) continue;
-				int[] prev = prevIndex.get(slotKeys[s]);
-				if (prev == null || prev[1] != slotCount[s]) continue;
-				int po = prev[0] + vord[i];
+				if (s != lastSlot) { // a slot's quads come in a row: one lookup per slot
+					prev = prevIndex.get(slotKeys[s]);
+					lastSlot = s;
+				}
+				if (prev == -1 || (int) prev != slotCount[s]) continue;
+				int po = (int) (prev >>> 32) + vord[i];
 				boolean h = slotHand[s];
 				boolean moved = false;
 				for (int k = 0; k < 4 && !moved; k++) {
@@ -217,7 +226,7 @@ public final class ObjectMotion {
 		// this frame becomes the previous one, slot-major
 		if (prevPos.length < vertices * 3) prevPos = new float[vertices * 3 + 1024];
 		prevIndex.clear();
-		for (int s = 0; s < slots; s++) prevIndex.putIfAbsent(slotKeys[s], new int[] {offsets[s], slotCount[s]});
+		for (int s = 0; s < slots; s++) prevIndex.putIfAbsent(slotKeys[s], (long) offsets[s] << 32 | slotCount[s]);
 		for (int i = 0; i < vertices; i++) System.arraycopy(pos, i * 3, prevPos, (offsets[vslot[i]] + vord[i]) * 3, 3);
 		havePrev = true;
 		prevCam = cam;

@@ -1337,3 +1337,25 @@ Tried, not kept: 8 px tiles (half the gain of 16 px at rate 2), rate 2 (forest �
 blend its RT-less result in where the history is poor: that is mostly sky and brightened foliage reflections by ~0.7 levels.
 Also fixed on the way: an optional `main()` patch matched the Nether composite (no world-space reflections), which made the
 whole reflections effect unavailable; a stage that matches only optional patches is now left out with an INFO note.
+
+## Storage room: many chests (2026-11-20, `perf/storage-room`)
+
+User snapshot 2026-11-20_17-44-00 (test server 1390 66 1785: a corridor of ~1000+ chests, barrels, item frames), Complementary
+Unbound + Euphoria with the user's RT settings, DLSS Quality, Continuity, no PBR pack, frame generation off for the benches.
+Scripts, logs, JFR profiles and shots: a local test folder (not in the repo).
+
+Before: RT on 48-52 FPS (GPU-bound, ~19-21 ms GPU, render thread 17 ms busy), RT off 81 FPS (CPU-bound, 12.4 ms),
+shaders off 294 FPS (3.4 ms). JFR on the render thread (RT on): the world feature frame's chest models 38 % (Sodium's
+cuboid fast path was off for our extended builder, so every vertex went through vanilla `Cube.compile` + our `addVertex`),
+shadow-pass entities/block entities 10 %, RT entity capture + BLAS prepare 13 %, object motion 8 %. The chests in the TLAS cost
+no GPU time worth measuring: four interleaved rounds with block entities left out of the RT scene, or traced as opaque, were
+within noise (GI 2.7-4.4 ms either way; leaving them out made `gbuffers opaque` +0.7 ms).
+
+| Change | Render thread | FPS (interleaved A/B) | Image |
+|---|---|---|---|
+| Entity quads take Sodium's `VertexBufferWriter.push`, written in bulk (same ids, normals, tangents, mid UV) | RT off 11.6 → 10.0 ms | RT off 85.4 → 99.2 (+16 %, 3 pairs); RT on 37.5 → 36.5 (GPU-bound, ±noise; 2.6 ms less CPU) | RT off identical apart from the FPS counter |
+| + RT entity UVs remapped in the CPU copy, one copy into the write-combined ring | (in the row above) | | identical |
+| Object motion: `Long2LongOpenHashMap` and one lookup per slot instead of a boxed map lookup per quad | small | not separated | n/a (motion vectors only) |
+
+With RT the room stays GPU-bound: GI (`prepare_a`) is the swing factor and moved between 3 and 12 ms from session to session
+with identical settings and camera (stable within a session), independent of the chests. Not investigated here.

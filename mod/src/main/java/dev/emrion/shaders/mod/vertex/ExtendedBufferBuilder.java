@@ -15,6 +15,7 @@ import org.lwjgl.system.MemoryUtil;
 public final class ExtendedBufferBuilder extends BufferBuilder {
 	private final int stride, uv, normal, mid, tangent, extra, midBlock;
 	private final @Nullable BlockContext block;
+	private final VertexFormat format;
 	/** GLYPH: MC's text code sets neither Normal nor UV1; we set them so the vertex is complete (Normal is replaced per quad). */
 	private final boolean glyph;
 	/** Vertices per polygon (4 quads, 3 triangles), 0 = other topologies (no per-polygon data). */
@@ -26,6 +27,7 @@ public final class ExtendedBufferBuilder extends BufferBuilder {
 	public ExtendedBufferBuilder(ByteBufferBuilder buffer, PrimitiveTopology topology, VertexFormat format, @Nullable BlockContext block) {
 		super(buffer, topology, format);
 		this.block = block;
+		this.format = format;
 		glyph = format == EmrionVertexFormats.GLYPH;
 		stride = format.getVertexSize();
 		uv = format.getElement("UV0").offset();
@@ -65,6 +67,76 @@ public final class ExtendedBufferBuilder extends BufferBuilder {
 		return this;
 	}
 
+	/** Sodium's VertexBufferWriter fast path (ExtendedBufferBuilderMixin): entity quads only; text keeps the VertexConsumer calls. */
+	public boolean acceptsPush() {
+		return block == null && !glyph && polygon == 4;
+	}
+
+	/** Normal too: finishPolygon recomputes it per quad, but a vertex left outside a complete quad keeps the source's. */
+	private static final String[] PUSHED = {"Color", "UV0", "UV1", "UV2", "Normal"};
+	private @Nullable VertexFormat planFormat;
+	private int[] plan = new int[0];
+
+	/**
+	 * VertexBufferWriter.push (Sodium's cuboid, item and shadow writers), written in bulk like Sodium's own push: the same ids,
+	 * normal, tangent and mid UV as through {@link #addVertex}; the other elements are copied as they are.
+	 */
+	public void push(long src, int count, VertexFormat from) {
+		if (from != planFormat) { // one format in practice (Sodium's EntityVertex): no map lookup per cuboid
+			plan = plan(from, format);
+			planFormat = from;
+		}
+		int[] plan = this.plan;
+		int pos = plan[0], srcStride = from.getVertexSize();
+		var self = (BufferBuilderAccessor) (Object) this;
+		if (pending == polygon) finishPolygon();
+		if (pending != 0 || count % polygon != 0) { // a polygon split across calls: vertex by vertex
+			for (int i = 0; i < count; i++, src += srcStride) {
+				addVertex(MemoryUtil.memGetFloat(src + pos), MemoryUtil.memGetFloat(src + pos + 4), MemoryUtil.memGetFloat(src + pos + 8));
+				copy(plan, src, self.emrion$vertexPointer());
+				self.emrion$setElementsToFill(0);
+			}
+			return;
+		}
+		if (count == 0) return;
+		long dst = self.emrion$buffer().reserve(count * stride);
+		long ids = EntityIds.packed() | (long) (dev.emrion.shaders.mod.upscale.ObjectMotion.w | (EntityIds.localPlayer ? EntityIds.LOCAL_PLAYER_W : 0)) << 48;
+		for (int i = 0; i < count; i++, src += srcStride) {
+			long v = dst + (long) i * stride;
+			MemoryUtil.memPutFloat(v, MemoryUtil.memGetFloat(src + pos)); // Position is at 0 in our formats
+			MemoryUtil.memPutFloat(v + 4, MemoryUtil.memGetFloat(src + pos + 4));
+			MemoryUtil.memPutFloat(v + 8, MemoryUtil.memGetFloat(src + pos + 8));
+			copy(plan, src, v);
+			MemoryUtil.memPutLong(v + extra, ids);
+		}
+		self.emrion$setVertices(self.emrion$vertices() + count);
+		self.emrion$setVertexPointer(dst + (long) (count - 1) * stride);
+		self.emrion$setElementsToFill(0);
+		for (int q = 0; q < count; q += polygon) finishPolygon(dst + (long) q * stride, polygon);
+	}
+
+	private static void copy(int[] plan, long src, long dst) {
+		for (int k = 1; k < plan.length; k += 3)
+			for (int b = 0; b < plan[k + 2]; b += 4) MemoryUtil.memPutInt(dst + plan[k + 1] + b, MemoryUtil.memGetInt(src + plan[k] + b));
+	}
+
+	/** {position offset, then (src offset, dst offset, bytes) per copied element}; Sodium itself fails on formats it cannot convert. */
+	private static int[] plan(VertexFormat from, VertexFormat to) {
+		var p = from.getElement("Position");
+		if (p == null || p.format() != com.mojang.renderpearl.api.GpuFormat.RGB32_FLOAT) throw new IllegalArgumentException("push from " + from);
+		int[] plan = new int[1 + PUSHED.length * 3];
+		plan[0] = p.offset();
+		for (int i = 0; i < PUSHED.length; i++) {
+			var s = from.getElement(PUSHED[i]);
+			var d = to.getElement(PUSHED[i]);
+			if (s == null || s.format() != d.format() || s.format().blockSize() % 4 != 0) throw new IllegalArgumentException("push from " + from + ": " + PUSHED[i]);
+			plan[1 + i * 3] = s.offset();
+			plan[2 + i * 3] = d.offset();
+			plan[3 + i * 3] = s.format().blockSize();
+		}
+		return plan;
+	}
+
 	@Override
 	public @Nullable MeshData build() {
 		if (pending == polygon && polygon != 0) finishPolygon();
@@ -75,7 +147,10 @@ public final class ExtendedBufferBuilder extends BufferBuilder {
 		int count = pending;
 		pending = 0;
 		long last = ((BufferBuilderAccessor) (Object) this).emrion$vertexPointer();
-		long first = last - (long) (count - 1) * stride; // a polygon's vertices are contiguous in the builder
+		finishPolygon(last - (long) (count - 1) * stride, count); // a polygon's vertices are contiguous in the builder
+	}
+
+	private void finishPolygon(long first, int count) {
 		float midU = 0, midV = 0;
 		for (int i = 0; i < count; i++) {
 			long v = first + (long) i * stride;
