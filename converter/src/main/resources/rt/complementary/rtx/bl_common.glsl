@@ -12,6 +12,13 @@ const float EMR_BL_SIZE = 1.6;    // a source is sampled over a disk of this tim
 const float EMR_BL_GLASS = 1.6;   // how strongly stained glass colours the light passing it
 const float EMR_BL_FLUSH_NDL = 0.6; // N.L floor for floors and ceilings lit by a flush emitter (single lava / sea lantern / glowstone cell within 5 % of RT off)
 
+// The surface is a cutout plant (crops, grass, flowers, leaves): lit from both sides, as the pack and vanilla light plants
+// (shade_direction_override up). One-sided, every crop quad facing away from the lamps lost all block light and a lit farm
+// went dark olive at night. Set per pixel by the ReSTIR passes (bl_restir.glsl emrBlPrimary, emrBlU.a) and for the pack's
+// foliage in the gbuffers' fallback (rtx/blocklight_apply_terrain.glsl); false elsewhere.
+bool emrBlTwoSided = false;
+const float EMR_BL_PLANT_NDL = 0.6; // N.L floor there: vanilla shades plants as facing up, the pack ignores their direction
+
 float emrBlLum(vec3 c) {
 	return dot(c, vec3(0.2125, 0.7154, 0.0721));
 }
@@ -77,7 +84,8 @@ float emrBlWeight(vec4 l, vec3 p, vec3 n) {
 	float d = length(dv);
 	float r = d / max(level, 1.0);
 	float win = max(1.0 - r * r, 0.0);
-	float ndl = clamp((dot(n, dv / max(d, 1e-3)) + EMR_BL_WRAP) / (1.0 + EMR_BL_WRAP), 0.0, 1.0);
+	float nd = dot(n, dv / max(d, 1e-3));
+	float ndl = emrBlTwoSided ? max((abs(nd) + EMR_BL_WRAP) / (1.0 + EMR_BL_WRAP), EMR_BL_PLANT_NDL) : clamp((nd + EMR_BL_WRAP) / (1.0 + EMR_BL_WRAP), 0.0, 1.0);
 	// A floor or ceiling around a flush emitter (lava pool, sea lantern or glowstone set into it, emrBlSourceAt) sees it at a
 	// grazing angle, but the pack's light there has no direction: N.L at least EMR_BL_FLUSH_NDL. Not on walls: a glowstone wall's
 	// own surface is already brighter than RT off. RAYTRACING.md §37.
@@ -112,7 +120,10 @@ uint emrBlMask();
 vec3 emrBlTransmit(vec3 origin, vec3 dir, float tMax) {
 	vec3 tint = vec3(1.0);
 	rayQueryEXT rq;
-	rayQueryInitializeEXT(rq, emrRtTlas, gl_RayFlagsTerminateOnFirstHitEXT, emrBlMask(), origin, 0.0, dir, tMax);
+	// a plant's light passes other plants (instance mask 0x20: solid terrain only): a lit crop field or meadow is one scattering
+	// volume, which the pack's flood light shows; one-bounce shadows of every blade left all but the nearest plants dark
+	uint mask = emrBlTwoSided ? (emrBlMask() & ~0x01u) | 0x20u : emrBlMask();
+	rayQueryInitializeEXT(rq, emrRtTlas, gl_RayFlagsTerminateOnFirstHitEXT, mask, origin, 0.0, dir, tMax);
 	bool more;
 	for (int guard = 0; (more = rayQueryProceedEXT(rq)) && guard < 48; guard++) {
 		if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;
@@ -134,6 +145,10 @@ vec3 emrBlTransmit(vec3 origin, vec3 dir, float tMax) {
 // own model never shadows it; a point beside the block (the disk is wider than a full block) ends at the point itself, else
 // the ray crossed the room and creased the light where p crossed the block's face planes (§26).
 vec3 emrBlRay(vec3 p, vec3 n, vec4 l, vec3 target) {
+	if (emrBlTwoSided && dot(target - p, n) < -0.02) { // light from behind a plant (p is 0.02 in front of it): start on its far side
+		p -= n * 0.04;
+		n = -n;
+	}
 	vec3 d = normalize(target - p);
 	vec3 inv = 1.0 / d, t0 = (l.xyz - 0.5 - p) * inv, t1 = (l.xyz + 0.5 - p) * inv, tn = min(t0, t1), tf = max(t0, t1);
 	float enter = max(max(tn.x, tn.y), tn.z);
@@ -256,7 +271,7 @@ vec3 emrBlOpen(vec3 p, vec3 n, float lm, uint first, uint end) {
 		if (l.w != emrBlPos[i].w) { // flush: emrBlSourceAt shrank its disk
 			flush += u;
 			bestFlush = max(bestFlush, floor(l.w) - (d.x + d.y + d.z));
-		} else if (dot(n, l.xyz - p) >= -0.05) { // -0.05: a pack-only source's face flush with the surface is in front
+		} else if (emrBlTwoSided || dot(n, l.xyz - p) >= -0.05) { // -0.05: a pack-only source's face flush with the surface is in front
 			front += u;
 			if (!emrBlPackOnly(i)) best = max(best, floor(l.w) - (d.x + d.y + d.z));
 		} else back += u;

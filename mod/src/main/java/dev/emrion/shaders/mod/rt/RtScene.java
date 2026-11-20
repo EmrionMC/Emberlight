@@ -688,7 +688,8 @@ public final class RtScene {
 		MemoryUtil.memPutFloat(a + 28, (float) (e.y - cam.y));
 		MemoryUtil.memPutFloat(a + 32, 0f); MemoryUtil.memPutFloat(a + 36, 0f); MemoryUtil.memPutFloat(a + 40, 1f);
 		MemoryUtil.memPutFloat(a + 44, (float) (e.z - cam.z));
-		int mask = e.layer == ChunkSectionLayer.TRANSLUCENT ? 0x02 : 0x01;
+		// 0x01 solid and cutout terrain, 0x20 solid only (RTX block light on plants: other plants do not shadow them), 0x02 translucent
+		int mask = e.layer == ChunkSectionLayer.TRANSLUCENT ? 0x02 : e.layer == ChunkSectionLayer.CUTOUT ? 0x01 : 0x21;
 		MemoryUtil.memPutInt(a + 48, (frame * CAPACITY + i) | mask << 24); // instanceCustomIndex = section table entry
 		MemoryUtil.memPutInt(a + 52, VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR << 24);
 		MemoryUtil.memPutLong(a + 56, e.blasAddr);

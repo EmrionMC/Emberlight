@@ -30,11 +30,13 @@ void emrBlCandidate(uint i, vec4 bp, vec4 bc, vec3 q, vec3 qa, vec3 n, inout vec
 	if (l.w != bp.w) { // a vanilla emitter flush with the surface, as emrBlOpen
 		flush += c * base;
 		bestFlush = max(bestFlush, level - (a.x + a.y + a.z));
-	} else if (dot(n, l.xyz - q) >= -0.05) {
+	} else if (emrBlTwoSided || dot(n, l.xyz - q) >= -0.05) {
 		front += c * base;
 		if (bc.a > 0.0) best = max(best, level - (a.x + a.y + a.z));
 	} else back += c * base;
-	float tgt = emrBlLum(c) * base * clamp((dot(n, dv) / max(dd, 1e-3) + EMR_BL_WRAP) / (1.0 + EMR_BL_WRAP), 0.0, 1.0);
+	float nd = dot(n, dv) / max(dd, 1e-3);
+	float tgt = emrBlLum(c) * base * (emrBlTwoSided ? max((abs(nd) + EMR_BL_WRAP) / (1.0 + EMR_BL_WRAP), EMR_BL_PLANT_NDL)
+		: clamp((nd + EMR_BL_WRAP) / (1.0 + EMR_BL_WRAP), 0.0, 1.0));
 	if (tgt <= 0.0) return;
 	sum += tgt;
 	h = h * 747796405u + 2891336453u;
@@ -125,7 +127,7 @@ void main() {
 		imageStore(emrBlRes, p, EMR_BL_EMPTY);
 		return;
 	}
-	imageStore(emrBlU, p, vec4(u, 1.0));
+	imageStore(emrBlU, p, vec4(u, emrBlTwoSided ? 2.0 : 1.0));
 	uint seed = h;
 	vec2 dk = emrBlDisk(vec2(emrBlRand(seed), emrBlRand(seed)));
 	float wsum = 0.0, m = 0.0, target = 0.0;

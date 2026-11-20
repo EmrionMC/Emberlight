@@ -4,7 +4,8 @@
 //
 // Reservoir (rgba32ui): x = source (full-list index, ~0u = none), y = the sample's point on the source's disk (2 x unorm16),
 // z = W (float bits, the unbiased contribution weight: the estimate is f(y) W), w = M (float bits, confidence).
-// Images: emrBlG (normal, distance to the camera; 0 = no surface), emrBlU (U rgb, a = 1 where block light applies),
+// Images: emrBlG (normal, distance to the camera; 0 = no surface), emrBlU (U rgb, a = 1 where block light applies, 2 on a
+// two-sided cutout surface),
 // emrBlRes (this frame's reservoir after temporal reuse), emrBlResH (last frame's final reservoirs), emrBlR (raw ratio S / U,
 // a = valid), emrBlT / emrBlRH (temporal accumulation, a = history length), emrBlOut (filtered ratio, read by the gbuffers),
 // emrBlGH (last frame's geometry).
@@ -71,6 +72,10 @@ bool emrBlPrimary(vec3 o, vec3 d, out float t, out vec3 n, out float lm) {
 	vec2 b = rayQueryGetIntersectionBarycentricsEXT(rq, true);
 	vec3 w = vec3(1.0 - b.x - b.y, b.x, b.y);
 	bool entity = emrRtIsEntity(ci); // EMRION_ENTITY: UV1 (overlay) is word 6, UV2 word 7
+	// cutout plants and leaves (rtx/bl_common.glsl): the pack's foliage ids 10003 to 10031 as a bit set (refraction_water_out.glsl);
+	// not trapdoors, bars or grates, whose back face would let the light through them
+	int id = entity ? 0 : emrRtId(v, tri.x);
+	emrBlTwoSided = !entity && emrRtSection[ci].z == 1u && uint(id - 10003) < 29u && (0x141553F5u >> uint(id - 10003) & 1u) != 0u;
 	for (int k = 0; k < 3; k++) {
 		uint i = tri[k];
 		uint l = entity ? v.p.d[i * 14u + 7u] : emrRtWord(v, i, 6u, 4u);

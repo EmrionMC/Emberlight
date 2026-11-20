@@ -377,13 +377,15 @@
       "requires": ["composite6"],
       "options": {},
       "helpers": "rt/complementary/upscale_off.glsl",
-      "uniforms": {"colortex12": "sampler2D"},
+      "uniforms": {"colortex12": "sampler2D", "frameCounter": "int"},
       "needs": [],
       "library": false,
       "patches": [
         {"function": "vec2 TAAJitter(vec2,float)", "body": "rt/complementary/upscale_jitter.glsl", "bare": true},
         {"function": "void DoTAA(inout vec3,inout vec3,float)", "body": "rt/complementary/upscale_masks.glsl", "needs": ["texelCoord", "colortex6", "depthtex0"]},
-        {"function": "void FXAA311(inout vec3)", "body": "rt/complementary/upscale_off.glsl", "bare": true}
+        {"function": "void FXAA311(inout vec3)", "body": "rt/complementary/upscale_off.glsl", "bare": true},
+        {"function": "float InterleavedGradientNoiseForShadows()", "body": "rt/complementary/upscale_shadow_noise.glsl", "bare": true, "optional": true,
+         "programs": ["gbuffers_entities", "gbuffers_entities_glowing", "gbuffers_entities_translucent", "gbuffers_hand", "gbuffers_hand_water"]}
       ]
     },
     "prepass": {

@@ -15,6 +15,7 @@
     "FrontendRenderPassMixin",
     "GameRendererAccessor",
     "GameRendererMixin",
+    "AudioLibraryMixin",
     "LevelLoadingScreenMixin",
     "GameRendererProjectionMixin",
     "GuiFpsMixin",

@@ -39,6 +39,7 @@ void main() {
 		return;
 	}
 	vec3 n = g.xyz, pos = emrBlPixelPos(p, size, g.w), q = pos + n * 0.02;
+	emrBlTwoSided = u.a > 1.5;
 	uint seed = emrBlHash(uvec3(p, uint(frameCounter) + 0x9E3779B9u));
 	if (emrRt_blocklight_ref != 0) {
 		imageStore(emrBlR, p, vec4(emrBlReference(q, n, seed) / max(u.rgb, vec3(1e-5)), 1.0));
@@ -61,6 +62,7 @@ void main() {
 		if (any(lessThan(qp, ivec2(0))) || any(greaterThanEqual(qp, size)) || qp == p) continue;
 		vec4 gq = imageLoad(emrBlG, qp);
 		if (!emrBlSimilar(g, pos, gq, emrBlPixelPos(qp, size, gq.w))) continue;
+		if ((imageLoad(emrBlU, qp).a > 1.5) != emrBlTwoSided) continue; // a plant beside a wall in its plane: other light support
 		uvec4 rq = imageLoad(emrBlRes, qp);
 		if (rq.x == ~0u) continue;
 		float mq = uintBitsToFloat(rq.w), tq = emrBlTarget(rq.x, q, n), wq = tq * uintBitsToFloat(rq.z) * mq;
