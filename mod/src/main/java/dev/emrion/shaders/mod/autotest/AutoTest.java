@@ -849,6 +849,14 @@ public final class AutoTest {
 				}
 				return true;
 			}
+			case "becache" -> { // "becache on|off": block-entity geometry cache (A/B in one run); logs the hits since the last step
+				EmrionShadersClient.LOG.info("Autotest: becache hits {} misses {}", dev.emrion.shaders.mod.vertex.BlockEntityGeometryCache.hits,
+						dev.emrion.shaders.mod.vertex.BlockEntityGeometryCache.misses);
+				dev.emrion.shaders.mod.vertex.BlockEntityGeometryCache.hits = dev.emrion.shaders.mod.vertex.BlockEntityGeometryCache.misses = 0;
+				dev.emrion.shaders.mod.vertex.BlockEntityGeometryCache.on = arg.equals("on");
+				dev.emrion.shaders.mod.vertex.BlockEntityGeometryCache.clear();
+				return true;
+			}
 			case "mvshot" -> { // "mvshot NAME": the next frame's motion vectors (and upscaler masks) -> screenshots/NAME-{motion,masks}.png
 				if (first) dev.emrion.shaders.mod.upscale.MotionCapture.request(mc.gameDirectory.toPath().resolve("screenshots"), arg);
 				return dev.emrion.shaders.mod.upscale.MotionCapture.done();

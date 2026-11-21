@@ -1387,7 +1387,7 @@ cuboid fix.
 | Object motion: previous frame's slot found by index before the hash map | `Long2LongOpenHashMap.get` 5.4 % → 0; 0 mismatches against the old lookup over 1.9M lookups with moving mobs | motion vectors unchanged |
 | Sodium shadow pass: regions outside the shadow volume skipped before their 256 section tests | `ShadowCuller.visible` 2.9 % → below 0.5 % | identical shadows (Codex) |
 
-Still open (proposals, not done): static block-entity geometry is rebuilt every frame (cuboid compile + tangents + push are
+Still open (proposals, not done; the first one is done in the next section): static block-entity geometry is rebuilt every frame (cuboid compile + tangents + push are
 still ~35 % of the storage room's render thread; tangents alone 14 %); the shadow receiver grid costs ~0.6 ms per frame in the
 forest; world text opts out of Sodium's glyph writer. Without Sodium, DLSS frame generation crashed the game in NGX at the
 snapshot load twice (`DlssFrameGen` on the "Emberlight NGX" thread, SIGSEGV), so these runs force frame generation off.
@@ -1398,3 +1398,33 @@ The mod now requests `reflections:halfRate=1` when no resource pack has `texture
 same speed either way (72.3 vs 71.8 FPS, three interleaved pairs). Tried, not kept: tracing skipped pixels whose history fails
 the pack's depth/normal test (turn residual 0.81, but with the PBR pack forest 84.0 → 77.2 FPS and copper 85.1 → 81.7, as slow
 as full rate 79.0 / 81.8).
+
+## Block-entity geometry cache (2026-11-21, `perf/be-geometry-cache`)
+
+Same setup as above (storage room snapshot 2026-11-20_17-44-00, Complementary Unbound + Euphoria, user RT settings, DLSS
+Quality with object motion, Continuity, no PBR pack, frame generation off). Each block-entity model submit (chests, shulker
+boxes, bells, lectern books, banner bases, copper golem statues) keeps its finished vertices in our entity format while every
+input of `ModelFeatureRenderer.prepareModel` is unchanged: render type, model, model state (value types only), light, overlay,
+tint, UV mapping, and the pose relative to the block (rotation exact, translation within 2e-4 blocks). Positions are stored
+relative to the block's camera-relative origin and moved back on reuse, so camera motion does not invalidate anything. Main
+and shadow pass share entries. Animated models (banner flag, enchanting table book, ringing bell) fall back to the normal path
+after 3 misses in a row for 64 frames. Hits farther than 24 blocks write object motion slot 0 (static); nearer hits keep their
+slot so the first frame of a lid opening still has a previous position. Off switch: `-Demberlight.beCache=false`, autotest step
+`becache on|off`. Scripts, logs, JFR and shots: a local test folder (not in the repo).
+
+Interleaved in one session (off/on alternated, 12 s each, render thread = frame minus blocked on GPU):
+
+| Storage room | Cache off | Cache on |
+|---|---|---|
+| RT off (CPU-bound), 3 pairs | 109.5 FPS, 9.06 ms | **138.9 FPS (+27 %), 6.93 ms** |
+| RT on (GPU-bound), 3 pairs | 52.9 FPS, 12.66 ms | 54.8 FPS (+3.6 %), 11.03 ms |
+
+1521 misses then only hits in the storage room (≈1500 submits, every chest). Without the near-tracking (all hits static) it
+was 145 FPS; keeping motion within 24 blocks costs ~4 %. Images: cache on vs off at the noise floor of two cache-off shots
+(storage MAE 0.30 vs 0.32 noise; test scene with all block-entity types over water, RT off and on, within noise; moving camera
+with translation 0.52 vs 0.49 noise), motion vectors under a camera turn show no block-entity outlines either way, the chest
+lid animation keeps its object motion. Codex image check: no block-entity difference in any pair.
+
+Not cached: signs' text, skulls (mutable state), item frames (entities), decorated pots and conduits (model-part submits),
+anything with a crumbling overlay or outline. Remaining render thread in the room: item frames' item and frame models, the
+shadow receiver grid, object motion readback.

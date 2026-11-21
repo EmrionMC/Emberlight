@@ -39,6 +39,9 @@ public final class EntityIds {
 
 		/** Object motion key of the submit (ObjectMotion), 0 = untracked. */
 		long emrion$motion();
+
+		/** Camera-relative origin of the block entity that made the submit (axis 0-2), NaN outside one (BlockEntityGeometryCache). */
+		float emrion$origin(int axis);
 	}
 
 	/** Implemented (via mixin) by ItemStackRenderState: the item id resolved when the stack's layers were built. */

@@ -64,6 +64,7 @@
     "EquipmentLayerRendererMixin",
     "FeatureBuildGroupMixin",
     "FeatureSubmitIdsMixin",
+    "ModelFeatureRendererCacheMixin",
     "TextGlyphRendererMixin",
     "FluidRendererMixin",
     "GameRendererVertexMixin",

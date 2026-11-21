@@ -1,6 +1,7 @@
 package dev.emrion.shaders.mod.mixin;
 
 import dev.emrion.shaders.mod.runtime.GeometryHooks;
+import dev.emrion.shaders.mod.vertex.BlockEntityGeometryCache;
 import dev.emrion.shaders.mod.vertex.BlockIdTable;
 import dev.emrion.shaders.mod.vertex.EmrionVertexFormats;
 import dev.emrion.shaders.mod.vertex.EntityIds;
@@ -28,12 +29,16 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 		LeashFeatureRenderer.Submit.class, ShadowFeatureRenderer.Submit.class, TextFeatureRenderer.Submit.class})
 public class FeatureSubmitIdsMixin implements EntityIds.Holder {
 	@Unique private long emrion$ids, emrion$motion;
+	@Unique private float emrion$ox, emrion$oy, emrion$oz;
 
 	@Inject(method = "<init>*", at = @At("RETURN"))
 	private void emrion$capture(CallbackInfo ci) {
 		emrion$ids = EntityIds.packed() | (GeometryHooks.submittingBlockEntity ? EntityIds.BLOCK_ENTITY_SUBMIT : 0)
 				| (EntityIds.localPlayer ? EntityIds.LOCAL_PLAYER_SUBMIT : 0);
 		emrion$motion = dev.emrion.shaders.mod.upscale.ObjectMotion.submitKey();
+		emrion$ox = BlockEntityGeometryCache.originX;
+		emrion$oy = BlockEntityGeometryCache.originY;
+		emrion$oz = BlockEntityGeometryCache.originZ;
 		// Iris MixinFlameFeatureRenderer: entity fire draws as minecraft:entity_flame (−1 when the pack does not map it)
 		if ((Object) this instanceof FlameFeatureRenderer.Submit && EmrionVertexFormats.active())
 			emrion$ids = emrion$ids & ~0xFFFFL | EmrionVertexFormats.ids().entityName(BlockIdTable.ENTITY_FLAME) & 0xFFFFL;
@@ -47,5 +52,10 @@ public class FeatureSubmitIdsMixin implements EntityIds.Holder {
 	@Override
 	public long emrion$motion() {
 		return emrion$motion;
+	}
+
+	@Override
+	public float emrion$origin(int axis) {
+		return axis == 0 ? emrion$ox : axis == 1 ? emrion$oy : emrion$oz;
 	}
 }

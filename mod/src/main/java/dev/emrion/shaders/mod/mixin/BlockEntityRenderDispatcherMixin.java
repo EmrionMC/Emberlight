@@ -3,6 +3,7 @@ package dev.emrion.shaders.mod.mixin;
 import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.mojang.blaze3d.vertex.PoseStack;
+import dev.emrion.shaders.mod.vertex.BlockEntityGeometryCache;
 import dev.emrion.shaders.mod.vertex.EmrionVertexFormats;
 import dev.emrion.shaders.mod.vertex.EntityIds;
 import net.minecraft.client.renderer.SubmitNodeCollector;
@@ -29,13 +30,29 @@ public class BlockEntityRenderDispatcherMixin {
 		boolean wasSubmitting = GeometryHooks.submittingBlockEntity;
 		EntityIds.blockEntity = EmrionVertexFormats.ids().block(((BlockEntityRenderStateAccessor) state).emrion$blockState());
 		GeometryHooks.submittingBlockEntity = true;
+		float ox = BlockEntityGeometryCache.originX, oy = BlockEntityGeometryCache.originY, oz = BlockEntityGeometryCache.originZ;
+		var m = poseStack.last().pose(); // the translation to the block, nothing else (else: no origin, not cached)
+		boolean translation = m.m00() == 1 && m.m11() == 1 && m.m22() == 1 && m.m01() == 0 && m.m02() == 0 && m.m10() == 0 && m.m12() == 0
+				&& m.m20() == 0 && m.m21() == 0;
+		BlockEntityGeometryCache.originX = translation ? m.m30() : Float.NaN;
+		BlockEntityGeometryCache.originY = m.m31();
+		BlockEntityGeometryCache.originZ = m.m32();
 		long owner = dev.emrion.shaders.mod.upscale.ObjectMotion.setOwner(dev.emrion.shaders.mod.upscale.ObjectMotion.BLOCK_ENTITY, state.blockPos.asLong());
 		try {
 			original.call(state, poseStack, collector, camera);
 		} finally {
 			dev.emrion.shaders.mod.upscale.ObjectMotion.restoreOwner(owner);
+			BlockEntityGeometryCache.originX = ox;
+			BlockEntityGeometryCache.originY = oy;
+			BlockEntityGeometryCache.originZ = oz;
 			EntityIds.blockEntity = previous;
 			GeometryHooks.submittingBlockEntity = wasSubmitting;
 		}
+	}
+
+	@org.spongepowered.asm.mixin.injection.Inject(method = "onResourceManagerReload", at = @org.spongepowered.asm.mixin.injection.At("HEAD"))
+	private void emrion$clearGeometryCache(net.minecraft.server.packs.resources.ResourceManager manager,
+			org.spongepowered.asm.mixin.injection.callback.CallbackInfo ci) {
+		BlockEntityGeometryCache.clear(); // new atlas UVs and models
 	}
 }

@@ -154,6 +154,49 @@ public final class ExtendedBufferBuilder extends BufferBuilder {
 		for (int q = 0; q < count; q += polygon) finishPolygon(dst + (long) q * stride, polygon);
 	}
 
+	/** Finishes a complete pending polygon; the vertex count, or -1 while a polygon is incomplete. */
+	public int completeVertices() {
+		if (pending == polygon && polygon != 0) finishPolygon();
+		return pending == 0 ? ((BufferBuilderAccessor) (Object) this).emrion$vertices() : -1;
+	}
+
+	public VertexFormat format() {
+		return format;
+	}
+
+	public int stride() {
+		return stride;
+	}
+
+	/** Address of vertex i (< the vertex count): the builder's vertices are contiguous. */
+	public long vertexAddress(int i) {
+		var self = (BufferBuilderAccessor) (Object) this;
+		return self.emrion$vertexPointer() - (long) (self.emrion$vertices() - 1 - i) * stride;
+	}
+
+	/**
+	 * Finished vertices from BlockEntityGeometryCache (positions relative to the origin x, y, z): copied, moved to the origin and
+	 * given the current ids and object motion slot w (0 = untracked).
+	 */
+	public boolean appendCached(long src, int count, float x, float y, float z, int w) {
+		if (completeVertices() < 0) return false;
+		var self = (BufferBuilderAccessor) (Object) this;
+		long dst = self.emrion$buffer().reserve(count * stride);
+		MemoryUtil.memCopy(src, dst, (long) count * stride);
+		long ids = EntityIds.packed() | (long) (w | (EntityIds.localPlayer ? EntityIds.LOCAL_PLAYER_W : 0)) << 48;
+		for (int i = 0; i < count; i++) {
+			long v = dst + (long) i * stride;
+			MemoryUtil.memPutFloat(v, MemoryUtil.memGetFloat(v) + x);
+			MemoryUtil.memPutFloat(v + 4, MemoryUtil.memGetFloat(v + 4) + y);
+			MemoryUtil.memPutFloat(v + 8, MemoryUtil.memGetFloat(v + 8) + z);
+			MemoryUtil.memPutLong(v + extra, ids);
+		}
+		self.emrion$setVertices(self.emrion$vertices() + count);
+		self.emrion$setVertexPointer(dst + (long) (count - 1) * stride);
+		self.emrion$setElementsToFill(0);
+		return true;
+	}
+
 	/** The plan's elements as one block: each at the same offset in both formats, together filling [0, end) without gaps. */
 	static int prefix(int[] plan) {
 		if (plan[0] != 0) return 0;
