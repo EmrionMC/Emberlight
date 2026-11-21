@@ -45,6 +45,7 @@ float emrRtxShVisibility(vec3 origin, vec3 dir, float tMin, float tMax, uint mas
 // Coloured sun visibility; the map adds the water colour and caustics only where no glass coloured the light already.
 vec3 emrRtxShadowTerm(vec3 shadowPos, float n, int rays, float tMin, bool useMap, float colorMult, float colorPow) {
 	if (gl_HelperInvocation) return vec3(1.0); // helper lanes only feed derivatives, nobody differentiates this
+	if (emrRtHand) return emrRtHandShadow(shadowPos, n, colorMult, colorPow);
 	if (emrRtHitRays > 0) rays = emrRtHitRays;
 	vec3 origin = emrRtRayOrigin(shadowPos);
 	vec3 l = normalize(shadowModelViewInverse[2].xyz);

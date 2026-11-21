@@ -85,6 +85,17 @@ vec2 emrRtDiskSample(int i, int rays, float n, float m) {
 	return vec2(cos(a), sin(a)) * sqrt((float(i) + m) / float(rays));
 }
 
+// The first-person hand (shadow_receiver_hand.glsl) keeps the pack's map. The pack shades it at a point it moves next to the
+// eye (gbuffers_hand reads its depth + 0.38), inside the player's own model, which the TLAS has for its shadow (mask 0x08):
+// rays from there hit or missed the head and body per pixel and cut lit bands through items held in the body's shadow.
+bool emrRtHand = false;
+
+vec3 emrRtHandShadow(vec3 shadowPos, float n, float colorMult, float colorPow) {
+	vec3 m = vec3(0.0);
+	for (int i = 0; i < 4; i++) m += SampleShadow(vec3(shadowPos.xy + emrRtDiskSample(i, 4, n, 0.5) * 0.0007, shadowPos.z), colorMult, colorPow);
+	return m * 0.25;
+}
+
 // The radius jitter: interleaved gradient noise over the transposed pixel grid (independent of n), moving per frame only
 // where the pack's own noise does. The pack keeps it still on entities, the hand and without TAA, where its TAA does not
 // accumulate (it skips entity pixels): a moving jitter there would flicker.
@@ -132,6 +143,7 @@ vec3 emrRtMapTint(vec3 p, float s1, float colorMult, float colorPow) {
 
 vec3 emrRtShadowTerm(vec3 shadowPos, float offset, float n, int rays, float tMin, float colorMult, float colorPow) {
 	if (gl_HelperInvocation) return vec3(1.0);
+	if (emrRtHand) return emrRtHandShadow(shadowPos, n, colorMult, colorPow);
 	vec3 mapPos = vec3(shadowPos.xy + emrRtDisk(n) * offset, shadowPos.z);
 	if (emrRt_shadows_full == 0) {
 		vec3 map = SampleShadow(mapPos, colorMult, colorPow);

@@ -28,6 +28,9 @@
         {"function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float) | void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
          "find": "vec3 shadowPos = GetShadowPos(playerPosM);", "body": "rt/complementary/shadow_receiver.glsl",
          "programs": ["gbuffers_block", "gbuffers_entities", "gbuffers_entities_glowing", "gbuffers_water", "gbuffers_block_translucent", "gbuffers_entities_translucent"], "optional": true},
+        {"function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float) | void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
+         "find": "vec3 shadowPos = GetShadowPos(playerPosM);", "body": "rt/complementary/shadow_receiver_hand.glsl",
+         "programs": ["gbuffers_hand", "gbuffers_hand_water"], "optional": true},
         {"function": "vec3 SampleTAAFilteredShadow(vec3,float,int,bool,float,float)", "body": "rt/complementary/shadow_taa.glsl"},
         {"function": "vec3 SampleFilteredShadow(vec3,float,float,float)", "body": "rt/complementary/shadow_filtered.glsl"},
         {"function": "vec3 SampleBasicFilteredShadow(vec3,float)", "body": "rt/complementary/shadow_basic.glsl"}
@@ -46,6 +49,9 @@
         {"function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float) | void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
          "find": "vec3 shadowPos = GetShadowPos(playerPosM);", "body": "rt/complementary/rtx/shadow_receiver_water.glsl",
          "programs": ["gbuffers_water"], "optional": true},
+        {"function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float) | void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
+         "find": "vec3 shadowPos = GetShadowPos(playerPosM);", "body": "rt/complementary/shadow_receiver_hand.glsl",
+         "programs": ["gbuffers_hand", "gbuffers_hand_water"], "optional": true},
             {"function": "vec3 SampleTAAFilteredShadow(vec3,float,int,bool,float,float)", "body": "rt/complementary/rtx/shadow_taa.glsl"},
             {"function": "vec3 SampleFilteredShadow(vec3,float,float,float)", "body": "rt/complementary/rtx/shadow_filtered.glsl"},
             {"function": "vec3 SampleBasicFilteredShadow(vec3,float)", "body": "rt/complementary/rtx/shadow_basic.glsl"}

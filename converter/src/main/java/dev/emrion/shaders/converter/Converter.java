@@ -10,7 +10,7 @@ import java.util.List;
  * Facade used by the CLI and the mod.
  */
 public interface Converter {
-	String VERSION = "0.1.0-alpha.1.50"; // bump on every change to converter output: it is part of the cache key
+	String VERSION = "0.1.0-alpha.1.52"; // bump on every change to converter output: it is part of the cache key
 
 	/**
 	 * @param settings Iris settings .txt, may be null (= all defaults)

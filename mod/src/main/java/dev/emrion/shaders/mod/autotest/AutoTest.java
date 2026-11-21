@@ -705,6 +705,10 @@ public final class AutoTest {
 				// "on" is done once the pack renders, or when it failed (selection cleared); the old pack stops at the next frame
 				return arg.equals("off") ? !PackManager.running() || ticks > 2 : ticks > 2 && (PackManager.running() || PackManager.selected() == null);
 			}
+			case "toggle" -> { // "toggle off|on": the shader toggle key (pack parked with its pipelines kept, then re-installed)
+				if (first) PackManager.setEnabled(arg.equals("on"));
+				return ticks > 2 && (PackManager.running() == arg.equals("on") || PackManager.selected() == null); // failed: selection cleared
+			}
 			case "rt" -> { // "rt off|on|hybrid|full|refl|light|hybrid+refl+light|..." (+ent: entities cast RT shadows): the RT page's Apply; waits for the swapped runtime
 				if (first) {
 					swapsBefore = PackManager.swaps;
