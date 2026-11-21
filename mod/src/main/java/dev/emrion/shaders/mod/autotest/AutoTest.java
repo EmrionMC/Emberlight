@@ -292,6 +292,13 @@ public final class AutoTest {
 
 	/** An autotest runs: first-start defaults (RT preset pick) stay off so runs keep the plain defaults. */
 	public static boolean ACTIVE;
+	private static final boolean ALLOW_INPUT = Boolean.getBoolean(P + "allowInput");
+
+	/** Real mouse/keyboard from the visible test display is dropped while an autotest runs (stray input turned the camera);
+	 *  scripted steps call the handlers directly and are unaffected. -Demrion.autotest.allowInput=true for manual debugging. */
+	public static boolean blockRealInput() {
+		return ACTIVE && !ALLOW_INPUT;
+	}
 
 	public static void registerIfEnabled() {
 		if (System.getProperty(P + "world") == null && System.getProperty(P + "server") == null && !Boolean.getBoolean(P + "quit")
