@@ -17,6 +17,7 @@
   "mixins": [
     "emrionshaders.mixins.json",
     "emrionshaders.iris.mixins.json",
+    "emrionshaders.bbe.mixins.json",
     "emrionshaders.sodium.mixins.json"
   ],
   "depends": {

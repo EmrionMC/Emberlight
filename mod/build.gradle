@@ -38,6 +38,9 @@ def sceneWorld = file(findProperty('sceneWorld') ?: 'run-iris/saves/scenes')
 configurations { irisReference { canBeConsumed = false } }
 dependencies { irisReference fileTree(irisModsDir) { include 'iris-fabric-*.jar', 'sodium-fabric-*.jar' } }
 def sodiumJars = fileTree(irisModsDir) { include 'sodium-fabric-*.jar' }
+// -Pbbe: runClient also loads Better Block Entities (compat tests); -Pbbe=<jar>, else the bbe-fabric-*.jar in -PirisModsDir
+def bbeProp = findProperty('bbe')
+def bbeJars = bbeProp == null ? files() : bbeProp in ['', 'true'] ? fileTree(irisModsDir) { include 'bbe-fabric-*.jar' } : files(bbeProp)
 
 // Same options for both runs: fixed video settings, sound off and FOV effects off (deterministic camera).
 // Merged into options.txt, other keys are kept.
@@ -114,6 +117,7 @@ tasks.named('runClient') {
 	doFirst {
 		// before anything below touches the run dir
 		if (sodiumJars.files.size() != 1) throw new GradleException("Expected one Sodium jar in ${irisModsDir} (-PirisModsDir), found ${sodiumJars.files*.name}")
+		if (bbeProp != null && (bbeJars.files.size() != 1 || !bbeJars.singleFile.isFile())) throw new GradleException("Expected one BBE jar for -Pbbe, found ${bbeJars.files*.name}")
 		if (compare) {
 			def world = emrionProps.get()['emrion.autotest.world']
 			if (world != null) {
@@ -149,7 +153,7 @@ tasks.named('runClient') {
 			optionsFile.text = 'preferredGraphicsBackend:"vulkan"\nonboardAccessibility:false\n'
 		}
 		linkResourcePacks(optionsFile.parentFile)
-		jvmArgs "-Dfabric.addMods=${sodiumJars.singleFile}"
+		jvmArgs "-Dfabric.addMods=${(sodiumJars.files + bbeJars.files).join(File.pathSeparator)}"
 		def sodium = new File(irisModsDir.parentFile, 'config/sodium-options.json')
 		new File(optionsFile.parentFile, 'config').mkdirs()
 		if (sodium.isFile()) java.nio.file.Files.copy(sodium.toPath(), new File(optionsFile.parentFile, 'config/sodium-options.json').toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)

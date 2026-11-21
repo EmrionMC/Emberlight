@@ -34,6 +34,7 @@ public class SectionRenderDataStorageMixin implements MeshVersions {
 	private void emrion$upload(int section, BufferSegment allocation, int[] vertexCounts, CallbackInfo ci) {
 		emrion$uploads[section]++;
 		emrion$version++;
+		dev.emrion.shaders.mod.compat.sodium.SodiumRt.meshUploads++;
 	}
 
 	@Inject(method = {"removeData(IZZ)V", "onVertexSegmentChanged", "onBufferResized"}, at = @At("HEAD"))

@@ -657,9 +657,9 @@ public final class RtScene {
 		lastLog = now;
 		long ring = RING * (long) CAPACITY * (VkAccelerationStructureInstanceKHR.SIZEOF + 16);
 		EmrionShadersClient.LOG.info("RT: {} BLAS ({} pending, longest wait {} frames), {} triangles, BLAS {} MiB (avg {} B/tri), TLAS {} instances {} KiB ({} refits), {} BLAS compacted (-{} MiB), scratch {} MiB, "
-						+ "instance+table rings {} MiB; {} builds so far",
+						+ "instance+table rings {} MiB; {} builds so far, {} Sodium layer uploads, Sodium RT CPU {} ms",
 				sodium.built(), sodium.pendingCount(), sodium.takeMaxWait(), triangles, blasBytes >> 20, triangles == 0 ? 0 : blasBytes / triangles, instanceCount, tlasBytes >> 10, tlasRefitCount, compactCount, compactSaved >> 20,
-				SCRATCH_SIZE >> 20, ring >> 20, built);
+				SCRATCH_SIZE >> 20, ring >> 20, built, dev.emrion.shaders.mod.compat.sodium.SodiumRt.meshUploads, dev.emrion.shaders.mod.compat.sodium.SodiumRt.updateNs / 1_000_000);
 		if (entities != null) EmrionShadersClient.LOG.info("RT: {}", entities.summary());
 		if (omm != null && ommOn) EmrionShadersClient.LOG.info("RT: {}", omm.summary());
 	}

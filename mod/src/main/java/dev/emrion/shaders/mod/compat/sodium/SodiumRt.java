@@ -65,6 +65,8 @@ public final class SodiumRt {
 	private final RawBuffer positions;
 	private final long layout, pipeline;
 	private int frame, maxWait;
+	/** For the RT log: section layer vertex uploads (SectionRenderDataStorageMixin) and the render-thread time in update, both since start. */
+	public static long meshUploads, updateNs;
 	private boolean wrongFormatWarned;
 
 	public SodiumRt(RtScene scene) {
@@ -116,6 +118,7 @@ public final class SodiumRt {
 
 	/** levelStart, before the TLAS build in the same command buffer: syncs the BLAS set, builds within budget, fills scene.external. */
 	public void update(VkCommandBuffer cb, Vec3 cam) {
+		long start = System.nanoTime();
 		frame++;
 		scene.external.clear();
 		double maxDist = RtConfig.distanceBlocks();
@@ -137,6 +140,7 @@ public final class SodiumRt {
 		});
 		build(cb, cam, maxDist);
 		scene.external.removeIf(e -> !e.built()); // built just now count: the section is in this frame's TLAS, no gap after a rebuild
+		updateNs += System.nanoTime() - start;
 		scene.log();
 	}
 

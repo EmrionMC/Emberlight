@@ -1,0 +1,7 @@
+{
+  "required": false,
+  "package": "dev.emrion.shaders.mod.mixin.bbe",
+  "compatibilityLevel": "JAVA_25",
+  "client": ["QuadLighterMixin"],
+  "injectors": { "defaultRequire": 0 }
+}
