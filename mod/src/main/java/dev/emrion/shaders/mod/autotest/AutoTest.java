@@ -67,7 +67,7 @@ import org.jspecify.annotations.Nullable;
  * emrion.autotest.hotreload=N      then reload the pack N times (key R), each waiting for the swap; logs GPU memory (VMA)
  * emrion.autotest.script=step;step  then run these steps (robustness tests), one after the other:
  *     wait S | size WxH | fullscreen on|off | gui N | cmd COMMAND | shot NAME (&lt;tag&gt;-NAME.png) | mem (log FPS and VMA budget)
- *     pack off|on|NAME (on/NAME wait until the pack renders) | settle [MAX_S] (chunks built + image converged, default max 30) | reload (waits for the swap) | resources (F3+T) | leave | join | hud | f3 on|off
+ *     pack off|on|NAME (on/NAME wait until the pack renders) | settle [MAX_S] (chunks built + image converged, default max 30; gives up after 5 s without progress, e.g. animated water: use "wait N" there) | reload (waits for the swap) | resources (F3+T) | leave | join | hud | f3 on|off
  *     rt off|on|hybrid|full[+refl+ent+light+ao+caust+gi|gilow|gihigh] (Emberlight RT page Apply, waits for the swap) | rtset KEY=V[,KEY=V] (preset=low|medium|high|ultra first, then rt.KEY of
  *     emberlight.properties, e.g. gi=medium,ao=false; -Demrion.rt.KEY still wins; Apply, waits for the swap) | upscale off|fsr|dlss[:preset] (Upscaling page) |
  *     framegen off|fsr|dlss | hdr on|off | reflex off|on|boost|fgoff | move YAW/s DX/s DZ/s SECONDS (per-frame camera motion, continues during later steps) | vsync on|off |
@@ -629,9 +629,10 @@ public final class AutoTest {
 			}
 			case "settle" -> { // "settle [MAX_SECONDS]": chunks around the camera loaded and built, image converged (default at most 30 s)
 				if (first) convergence.reset();
-				boolean done = ticks >= MIN_TICKS && settled(mc);
-				if (done || ticks >= (arg.isEmpty() ? 30 : Double.parseDouble(arg)) * TPS) {
-					EmrionShadersClient.LOG.info("Autotest: settle {} after {} ms (diff {})", done ? "converged" : "timed out", ticks * 50,
+				boolean done = ticks >= MIN_TICKS && settled(mc), stuck = convergence.plateaued();
+				if (done || stuck || ticks >= (arg.isEmpty() ? 30 : Double.parseDouble(arg)) * TPS) {
+					EmrionShadersClient.LOG.info("Autotest: settle {} after {} ms (diff {})", done ? "converged"
+							: stuck ? "not converged (moving water?), continuing" : "timed out", ticks * 50,
 							String.format(java.util.Locale.ROOT, "%.3f", convergence.lastDiff));
 					return true;
 				}

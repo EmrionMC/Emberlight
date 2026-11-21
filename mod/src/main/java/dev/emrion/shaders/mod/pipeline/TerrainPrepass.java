@@ -109,6 +109,16 @@ public final class TerrainPrepass {
 		return on;
 	}
 
+	/** Client stopping: the raw query pool must go before MC destroys the device. */
+	public static void shutdown() {
+		if (pool == 0) return;
+		var ctx = VulkanContext.get();
+		long q = pool;
+		ctx.destroyLater(() -> vkDestroyQueryPool(ctx.vk, q, null));
+		pool = 0;
+		unsupported = true; // no re-create during the exit frames
+	}
+
 	private static boolean create() {
 		var ctx = VulkanContext.get();
 		if (!ctx.pipelineStatisticsQuery) {

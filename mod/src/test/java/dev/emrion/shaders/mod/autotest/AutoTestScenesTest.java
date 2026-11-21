@@ -51,4 +51,26 @@ class AutoTestScenesTest {
 		c.add(10_000, 10_000 * ms, a);
 		org.junit.jupiter.api.Assertions.assertFalse(c.converged());
 	}
+
+	@Test
+	void plateausWhenTheImageKeepsMovingButNotWhileItImproves() {
+		var c = new Convergence();
+		long ms = 1_000_000L;
+		int[] a = new int[30], b = new int[30];
+		java.util.Arrays.fill(b, 2);
+		// alternating frames: diff stays at 2 (animated water)
+		for (int i = 0; i <= 25; i++) c.add(100L * i, 300L * i * ms, i % 2 == 0 ? a : b);
+		org.junit.jupiter.api.Assertions.assertTrue(c.plateaued()); // 7.5 s without a new best
+		c.reset();
+		org.junit.jupiter.api.Assertions.assertFalse(c.plateaued());
+		// diff falling 5% per sample (temporal accumulation): never plateaus
+		int[] cur = new int[30];
+		for (int i = 0; i <= 40; i++) {
+			int[] next = new int[30];
+			java.util.Arrays.fill(next, cur[0] + (int) Math.round(100 * Math.pow(0.95, i)));
+			c.add(100L * i, 300L * i * ms, next);
+			cur = next;
+			org.junit.jupiter.api.Assertions.assertFalse(c.plateaued());
+		}
+	}
 }

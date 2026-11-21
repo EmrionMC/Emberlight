@@ -81,7 +81,9 @@ wait and the 5 s / 200-frame settle, a scene is shot as soon as every chunk with
 sections are built, and the image has converged: a 1/8-size readback per tick, compared with one at least 250 ms and 24 frames
 older, has a mean absolute RGB difference below `-Demrion.autotest.converge.threshold` (0.4) five ticks in a row. The old
 waits stay as the upper bound. A script step `settle [MAX_S]` does the same between script steps (`-Demrion.autotest.fastwait=true`
-also ends `wait N` early). `-Demrion.autotest.configs=off:rtset enabled=false|gi:rtset enabled=true,gi=medium` renders every
+also ends `wait N` early). A scene that never stops moving (animated water in view) never converges: `settle` gives up once
+the difference has not dropped by 10% for 5 s and logs `settle not converged (moving water?), continuing`; use `wait N` for
+such scenes. `-Demrion.autotest.configs=off:rtset enabled=false|gi:rtset enabled=true,gi=medium` renders every
 scene once per configuration in one game start (`<tag>-<scene>-<config>.png`); `-Demrion.autotest.bench.seconds=S` shortens
 every bench. Each bench also logs the spread of 0.5 s windows (`Benchmark spread: ... avg +- X at 95%`), and the run ends with
 `Autotest timing:`, the harness time per phase. `runClient` shares one VkPipelineCache across all checkouts

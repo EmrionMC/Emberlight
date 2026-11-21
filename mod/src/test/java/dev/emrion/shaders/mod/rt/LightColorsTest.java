@@ -44,8 +44,8 @@ class LightColorsTest {
 		assertEquals(LightColors.Kind.VANILLA, LightColors.kind(LightColors.vanilla("torch")));
 		assertEquals(1f, LightColors.power(LightColors.vanilla("torch"), 2f));
 		// r5.10: redstone torches (wall ones too) at redstone * 0.4 instead of 0.25; lit lamps unchanged
-		assertEquals(1.6f, LightColors.power(LightColors.vanilla("redstone_torch"), 1f), 1e-6);
-		assertEquals(1.6f, LightColors.power(LightColors.vanilla("redstone_wall_torch"), 1f), 1e-6);
+		assertEquals(1.8f, LightColors.power(LightColors.vanilla("redstone_torch"), 1f), 1e-6);
+		assertEquals(1.8f, LightColors.power(LightColors.vanilla("redstone_wall_torch"), 1f), 1e-6);
 		assertEquals(1f, LightColors.power(LightColors.vanilla("redstone_lamp"), 1f));
 		assertEquals(1f, LightColors.power(LightColors.vanilla("copper_torch"), 1f));
 		// stronger in the pack (alpha): longer range, more power; ore brightness scales ores only

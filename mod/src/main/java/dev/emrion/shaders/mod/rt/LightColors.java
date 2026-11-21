@@ -180,8 +180,8 @@ public final class LightColors {
 
 	static final int LAVA = vanilla("lava"), MAGMA = vanilla("magma");
 	private static final int REDSTONE_TORCH = vanilla("redstone_torch"), REDSTONE_WALL_TORCH = vanilla("redstone_wall_torch");
-	/** r5.10 raised the redstone torch's light colour from redstoneSpecialLightColor * 0.25 to * 0.4 (light id 35, wall torch too). */
-	static final float REDSTONE_TORCH_POWER = 1.6f;
+	/** r5.10 raised the redstone torch's light colour from redstoneSpecialLightColor * 0.25 to * 0.4 (light id 35, wall torch too). 1.8 not 1.6: at 1.6 the RT torch measured 7% dimmer than the pack. */
+	static final float REDSTONE_TORCH_POWER = 1.8f;
 
 	/** Brightness of a source relative to a vanilla source of the same level: 1 for vanilla (but redstone torches), from the pack's alpha otherwise. */
 	public static float power(int type, float oreMult) {

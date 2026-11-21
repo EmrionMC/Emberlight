@@ -12,6 +12,8 @@ import net.minecraft.client.Screenshot;
 final class Convergence {
 	static final double THRESHOLD = Double.parseDouble(System.getProperty("emrion.autotest.converge.threshold", "0.4"));
 	static final int LAG_MS = 250, LAG_FRAMES = 24, STABLE = 5;
+	/** No new lowest diff (by 10%) for this long while above the threshold: the scene keeps moving (animated water). */
+	static final long PLATEAU_NS = 5_000_000_000L;
 
 	private record Sample(long frame, long nanos, int[] rgb) {}
 
@@ -19,16 +21,24 @@ final class Convergence {
 	private int generation, stable;
 	private boolean pending;
 	double lastDiff = Double.NaN;
+	private double best = Double.POSITIVE_INFINITY;
+	private long bestNanos, lastNanos;
 
 	void reset() {
 		samples.clear();
 		stable = 0;
 		lastDiff = Double.NaN;
+		best = Double.POSITIVE_INFINITY;
 		generation++; // drops a readback still in flight
 	}
 
 	boolean converged() {
 		return stable >= STABLE;
+	}
+
+	/** The diff stopped falling but stays above the threshold: it will not converge, waiting longer is pointless. */
+	boolean plateaued() {
+		return stable == 0 && best != Double.POSITIVE_INFINITY && lastNanos - bestNanos >= PLATEAU_NS; // stable > 0: about to converge
 	}
 
 	/** Call once per tick on the render thread. */
@@ -66,6 +76,11 @@ final class Convergence {
 		if (!old(samples.getFirst(), s)) return;
 		lastDiff = diff(samples.getFirst().rgb(), rgb);
 		stable = lastDiff < THRESHOLD ? stable + 1 : 0;
+		lastNanos = nanos;
+		if (lastDiff < best * 0.9) {
+			best = lastDiff;
+			bestNanos = nanos;
+		}
 	}
 
 	private static boolean old(Sample ref, Sample s) {

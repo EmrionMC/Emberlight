@@ -29,6 +29,7 @@ public final class TerrainStats {
 	public static String phase = "";
 
 	private static long pool;
+	private static boolean stopped;
 	private static int slot, queries;
 	private static final String[][] labels = new String[LAG][PER_FRAME];
 	private static final int[] counts = new int[LAG];
@@ -61,11 +62,22 @@ public final class TerrainStats {
 		if (open != null && pool != 0 && queries < PER_FRAME) vkCmdEndQuery(cb, pool, slot * PER_FRAME + queries++);
 	}
 
+	/** Client stopping: the raw query pool must go before MC destroys the device. */
+	public static void shutdown() {
+		if (pool == 0) return;
+		var ctx = VulkanContext.get();
+		long q = pool;
+		ctx.destroyLater(() -> vkDestroyQueryPool(ctx.vk, q, null));
+		pool = 0;
+		stopped = true; // no re-create during the exit frames
+	}
+
 	/** Frame start: read the queries of LAG frames ago, reset them. */
 	public static void frame() {
 		if (!ENABLED) return;
 		var ctx = VulkanContext.get();
 		if (pool == 0) {
+			if (stopped) return;
 			try (MemoryStack stack = MemoryStack.stackPush()) {
 				var info = VkQueryPoolCreateInfo.calloc(stack).sType$Default().queryType(VK_QUERY_TYPE_PIPELINE_STATISTICS).queryCount(LAG * PER_FRAME)
 						.pipelineStatistics(VK_QUERY_PIPELINE_STATISTIC_INPUT_ASSEMBLY_PRIMITIVES_BIT | VK_QUERY_PIPELINE_STATISTIC_VERTEX_SHADER_INVOCATIONS_BIT

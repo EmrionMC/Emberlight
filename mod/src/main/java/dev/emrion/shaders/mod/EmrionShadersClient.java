@@ -166,6 +166,8 @@ public final class EmrionShadersClient implements ClientModInitializer {
 				dev.emrion.shaders.mod.upscale.Dlss.shutdown(VulkanContext.get()); // before MC destroys the device
 				dev.emrion.shaders.mod.runtime.HorizonBox.close();
 				dev.emrion.shaders.mod.debug.HitchLog.shutdown();
+				dev.emrion.shaders.mod.debug.TerrainStats.shutdown();
+				dev.emrion.shaders.mod.pipeline.TerrainPrepass.shutdown();
 				dev.emrion.shaders.mod.rt.RtDebugView.shutdown();
 				dev.emrion.shaders.mod.rt.RtScene.shutdown();
 				dev.emrion.shaders.mod.compat.sodium.SodiumShadow.shutdown();
