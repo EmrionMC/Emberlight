@@ -84,15 +84,38 @@ public final class RtEntities {
 	 * entry generations (new on every rewrite of an entry), with the render type and texture. Seen two frames in a row it gets a BLAS over its own vertex copy that later frames reuse (no copy, UV remap, refit
 	 * or rebuild), moved by its instance transform. Off: -Demrion.rt.noStaticBlockEntities=true.
 	 */
-	private static final IdentityHashMap<Object, long[]> cachedHits = new IdentityHashMap<>();
+	private static final IdentityHashMap<Object, Hits> cachedHits = new IdentityHashMap<>();
+	/** Static signatures with a BLAS kept by the scene: draws (regions) with one of these are not copied. */
 	private static volatile java.util.Set<Long> staticSigs = java.util.Set.of();
+	/**
+	 * Static draws are split per chunk section (Sodium culls block entities per section, the shadow pass too): walking or
+	 * turning only adds or drops whole sections, which add or drop instances instead of rebuilding one BLAS over the whole
+	 * storage. Off (one static BLAS per draw, as before): -Demrion.rt.noStaticRegions=true.
+	 */
+	private static boolean regions = true;
 
-	/** BlockEntityGeometryCache: a hit of {@code vertices} vertices of entry generation {@code key} went into {@code draw}. */
-	public static void noteCached(Object draw, long key, int vertices) {
+	/** A draw's cache hits in vertex order, 3 longs each: first vertex << 32 | vertex count, entry generation, section key. */
+	private static final class Hits {
+		long[] a = new long[48];
+		int n;
+	}
+
+	/** BlockEntityGeometryCache: a hit of {@code vertices} vertices of entry generation {@code key}, block origin x y z (camera-relative), was just appended to {@code b}. */
+	public static void noteCached(dev.emrion.shaders.mod.vertex.ExtendedBufferBuilder b, long key, int vertices, float x, float y, float z) {
+		Object draw = b.rtDraw;
 		if (!capturing || draw == null) return;
-		long[] a = cachedHits.computeIfAbsent(draw, d -> new long[2]);
-		a[0] += mix(key * 31 + vertices);
-		a[1] += vertices;
+		// the draw's finished builders plus this one's vertices before the hit
+		long at = ((StagedDrawAccessor) draw).emrion$vertexCount() + b.completeVertices() - vertices;
+		long section = 0;
+		if (regions) {
+			long sx = (long) Math.floor(capX + x + 0.5) >> 4, sy = (long) Math.floor(capY + y + 0.5) >> 4, sz = (long) Math.floor(capZ + z + 0.5) >> 4;
+			section = (sx & 0x3FFFFF) << 42 | (sy & 0xFFFFF) << 22 | sz & 0x3FFFFF; // world border: 22 bits per horizontal axis
+		}
+		Hits h = cachedHits.computeIfAbsent(draw, d -> new Hits());
+		if (h.n + 3 > h.a.length) h.a = java.util.Arrays.copyOf(h.a, h.a.length * 2);
+		h.a[h.n++] = at << 32 | vertices;
+		h.a[h.n++] = key;
+		h.a[h.n++] = section;
 	}
 
 	private static long mix(long z) { // SplitMix64 finaliser
@@ -127,6 +150,7 @@ public final class RtEntities {
 		extraOnly = !shadow && shadowCaptured;
 		if (extraOnly && shadowHasEntities && shadowHasBlockEntities) return;
 		capturing = true;
+		regions = !Boolean.getBoolean("emrion.rt.noStaticRegions");
 		if (shadow) {
 			shadowCaptured = true;
 			shadowHasEntities = entities;
@@ -186,12 +210,8 @@ public final class RtEntities {
 			GpuTextureView tex = null;
 			for (var t : type.textures()) if (t.name().equals("Sampler0")) tex = t.textureView();
 			if (tex == null) continue;
-			long[] hits = cachedHits.get(d);
-			long sig = blockEntity && hits != null && hits[1] == n && !Boolean.getBoolean("emrion.rt.noStaticBlockEntities") ? mix(hits[0] ^ n ^ mix(name.hashCode() * 31L + System.identityHashCode(tex.texture()))) | 1 : 0;
-			if (sig != 0 && staticSigs.contains(sig)) {
-				captured.add(new Captured(-1, n, name, tex, false, solidSheet(tex.texture()), sig));
-				continue;
-			}
+			Hits hits = blockEntity && !Boolean.getBoolean("emrion.rt.noStaticBlockEntities") ? cachedHits.get(d) : null;
+			if (hits != null && captureStatic(a, n & ~3, hits, name, tex)) continue;
 			int bytes = (n & ~3) * STRIDE;
 			if (cap.remaining() < bytes) {
 				int need = cap.position() + bytes;
@@ -210,17 +230,98 @@ public final class RtEntities {
 				cap.position(offset);
 				continue;
 			}
-			split(offset, n & ~3, name, tex, blockEntity && solidSheet(tex.texture()), sig);
+			split(offset, n & ~3, name, tex, blockEntity && solidSheet(tex.texture()));
 		}
 	}
 
+	/**
+	 * A block-entity draw split by the sections of its cache hits. A section whose signature (its hits' entry generations, the
+	 * section, render type and texture) has a kept BLAS is reused without a copy; every other section is copied as a static
+	 * candidate of its own, the vertices between hits (not cached) as an ordinary draw. False if the hits do not fit the draw.
+	 */
+	private static boolean captureStatic(StagedDrawAccessor a, int n, Hits h, String name, GpuTextureView tex) {
+		long[] hv = h.a;
+		long prev = 0, covered = 0;
+		for (int i = 0; i < h.n; i += 3) {
+			long at = hv[i] >>> 32, end = at + (int) hv[i];
+			if (at < prev || end > n) return false;
+			prev = end;
+			covered += (int) hv[i];
+		}
+		long typeSig = mix(name.hashCode() * 31L + System.identityHashCode(tex.texture()));
+		// section -> {signature, vertices, cap offset (-1: reused), write cursor}
+		java.util.LinkedHashMap<Long, long[]> groups = new java.util.LinkedHashMap<>();
+		long[] g = null;
+		for (int i = 0; i < h.n; i += 3) {
+			if (i == 0 || hv[i + 2] != hv[i - 1]) g = groups.computeIfAbsent(hv[i + 2], k -> new long[4]);
+			g[0] += mix(hv[i + 1]); // generations are unique per entry write (and fix its vertices)
+			g[1] += (int) hv[i];
+		}
+		long rest = n - covered, bytes = rest * STRIDE;
+		for (var e : groups.entrySet()) {
+			long[] v = e.getValue();
+			v[0] = mix(v[0] ^ v[1] ^ typeSig ^ mix(e.getKey())) | 1;
+			if (staticSigs.contains(v[0])) v[2] = -1;
+			else {
+				v[2] = v[3] = bytes;
+				bytes += v[1] * STRIDE;
+			}
+		}
+		if (cap.remaining() < bytes) cap = MemoryUtil.memRealloc(cap, (int) Math.max(cap.position() + bytes, cap.capacity() * 2L));
+		int base = cap.position();
+		long addr = MemoryUtil.memAddress0(cap) + base, restAt = 0;
+		long[] cur = {0, 0}; // slice index, its first byte in the draw
+		var slices = a.emrion$slices();
+		prev = 0;
+		for (int i = 0; ; i += 3) {
+			long at = i < h.n ? hv[i] >>> 32 : n;
+			if (at > prev) { // not cached: the ordinary draw
+				if (!copy(slices, prev * STRIDE, (at - prev) * STRIDE, addr + restAt, cur)) return true; // slices too short: drop the draw
+				restAt += (at - prev) * STRIDE;
+			}
+			if (i >= h.n) break;
+			if (i == 0 || hv[i + 2] != hv[i - 1]) g = groups.get(hv[i + 2]);
+			long len = (long) (int) hv[i] * STRIDE;
+			if (g[2] >= 0) {
+				if (!copy(slices, at * STRIDE, len, addr + g[3], cur)) return true;
+				g[3] += len;
+			}
+			prev = at + (int) hv[i];
+		}
+		cap.position((int) (base + bytes));
+		boolean solid = solidSheet(tex.texture());
+		for (long[] v : groups.values()) captured.add(new Captured(v[2] < 0 ? -1 : base + (int) v[2], (int) v[1], name, tex, false, solid, v[0]));
+		if (rest > 0) split(base, (int) rest, name, tex, solid);
+		return true;
+	}
+
+	/** Copies {@code len} bytes from byte {@code from} of a draw's slices; {@code cur} only moves forward. False past the end. */
+	private static boolean copy(List<ByteBufferBuilder.Result> slices, long from, long len, long dst, long[] cur) {
+		while (len > 0) {
+			if (cur[0] >= slices.size()) return false;
+			ByteBuffer b = slices.get((int) cur[0]).byteBuffer();
+			long off = from - cur[1];
+			if (off >= b.remaining()) {
+				cur[1] += b.remaining();
+				cur[0]++;
+				continue;
+			}
+			long l = Math.min(len, b.remaining() - off);
+			MemoryUtil.memCopy(MemoryUtil.memAddress(b) + off, dst, l);
+			from += l;
+			dst += l;
+			len -= l;
+		}
+		return true;
+	}
+
 	/** Adds the draw at {@code offset}, its local-player quads (EntityIds.LOCAL_PLAYER_W) moved behind the others as a draw of their own. */
-	private static void split(int offset, int vertices, String type, GpuTextureView tex, boolean solid, long sig) {
+	private static void split(int offset, int vertices, String type, GpuTextureView tex, boolean solid) {
 		long base = MemoryUtil.memAddress0(cap) + offset, quad = 4L * STRIDE;
 		int quads = vertices / 4, player = 0;
 		for (int q = 0; q < quads; q++) if (isPlayer(base + q * quad)) player++;
 		if (player == 0 || player == quads) {
-			captured.add(new Captured(offset, vertices, type, tex, player != 0, solid, player == 0 ? sig : 0));
+			captured.add(new Captured(offset, vertices, type, tex, player != 0, solid, 0));
 			return;
 		}
 		ByteBuffer tmp = MemoryUtil.memAlloc((int) (player * quad));
@@ -442,7 +543,11 @@ public final class RtEntities {
 				}
 				if (c.offset() < 0) { // static: last frame's BLAS, unless an atlas reset moved its texture (then captured again next frame)
 					Blas b = blas.get("static@" + c.sig());
-					if (b == null || b.as == 0 || !java.util.Arrays.equals(b.rect, rect) || b.lastFrame == frameNo) continue;
+					if (b == null || b.as == 0 || b.lastFrame == frameNo) continue;
+					if (!java.util.Arrays.equals(b.rect, rect)) { // retired below, so the next capture copies it again
+						b.lastFrame = Integer.MIN_VALUE / 2;
+						continue;
+					}
 					b.lastFrame = frameNo;
 					reused.add(b);
 					tris += quads * 2L;
@@ -519,20 +624,25 @@ public final class RtEntities {
 		live.addAll(work);
 		live.addAll(reused);
 		candidates = sigs;
-		java.util.Set<Long> st = new java.util.HashSet<>();
-		for (Blas b : reused) st.add(b.sig);
-		for (Blas b : work) if (b.sig != 0) st.add(b.sig);
-		staticSigs = st;
 		draws = work.size() + reused.size();
 		triangles = tris;
 		captured.clear();
 		retire();
+		java.util.Set<Long> st = new java.util.HashSet<>();
+		for (Blas b : blas.values()) if (b.sig != 0 && b.as != 0) st.add(b.sig); // kept ones too: a section coming back is not rebuilt
+		staticSigs = st;
 	}
 
-	/** BLAS of draws that disappeared: kept for a few frames (an entity leaving and coming back), then freed. */
+	/**
+	 * BLAS of draws that disappeared: kept for a few frames (an entity leaving and coming back), then freed. Static sections
+	 * longer: turning away and back must not rebuild them (their signature still says whether they changed).
+	 */
+	private static final int STATIC_KEEP = Integer.getInteger("emrion.rt.staticKeepFrames", 300);
+
 	private void retire() {
+		int keep = regions ? STATIC_KEEP : 3;
 		blas.values().removeIf(b -> {
-			if (frameNo - b.lastFrame <= 3) return false;
+			if (frameNo - b.lastFrame <= (b.sig != 0 ? keep : 3)) return false;
 			if (b.sig != 0 && b.data != null && b.data.size >= SPARE_MIN_BYTES) {
 				b.retiredFrame = frameNo;
 				spare.addLast(b);

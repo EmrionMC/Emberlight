@@ -84,7 +84,7 @@ public final class BlockEntityGeometryCache {
 				e.lastFrame = frame;
 				e.misses = 0;
 				hits++;
-				dev.emrion.shaders.mod.rt.RtEntities.noteCached(b.rtDraw, e.generation, e.count);
+				dev.emrion.shaders.mod.rt.RtEntities.noteCached(b, e.generation, e.count, x, y, z);
 				return true;
 			}
 			return false;

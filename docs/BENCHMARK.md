@@ -1497,3 +1497,21 @@ stalled 50-60 ms). p99 / max frame ms:
 
 Chest open/close, pack reload, RT off/on and nether round trip: no extra spikes with the static BLAS. Scripts and logs:
 a local test folder (not in the repo).
+
+**Static BLAS per chunk section** (`perf/static-blas-regions`, same storage and segments, interleaved in one session, 2 runs
+each; old = one static BLAS per draw, `-Demrion.rt.noStaticRegions=true`). The cache hits of a static draw carry their
+section; each section has its own signature and BLAS. Sodium (and the shadow pass) cull block entities per section, so moving
+the camera adds or drops whole sections, which only adds or drops TLAS instances. Sections out of view keep their BLAS for
+300 frames (`-Demrion.rt.staticKeepFrames`). p99 / max frame ms, frames over 2x the median:
+
+| Segment | old | new |
+|---|---|---|
+| along an aisle, 5 blocks/s | 34-41 / 49-53, 15-40 | 17-18 / 31-38, 3-5 |
+| across the rows from above | 22-37 / 28-46, 0-8 | 22 / 33-43, 0-1 |
+| turning 72°/s | 30-38 / 43-53, 6-10 | 16-35 / 39-98, 3-6 (the 98 ms frame: no entity BLAS work in it) |
+| walk + turn | 36-40 / 47-50, 11-14 | 20 / 21-31, 0 |
+| view A standing (FPS) | 68.4-70.5 | 69.9-70.0 |
+| room copy standing / walking (FPS, 3 pairs) | 57.8-58.3 / 57.3-58.0 | 59.0-59.7 / 58.8-59.5 |
+
+Images at the noise floor (view A MAE 0.24-0.28 vs 0.27 between two old shots, room copy 0.49-0.76 vs 0.67, chest closing
+0.15); Codex image check: no difference. Scripts and logs: a local test folder (not in the repo).

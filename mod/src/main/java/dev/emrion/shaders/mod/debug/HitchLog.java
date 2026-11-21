@@ -53,6 +53,7 @@ public final class HitchLog {
 	private static LongBuffer results;
 	private static int slot;
 	private static final boolean[] written = new boolean[LAG];
+	private static boolean skipTimestamps; // the slot's previous queries are still in flight: writing would reset them
 	private static final String[] pending = new String[LAG];
 
 	// rate limit and summary
@@ -94,7 +95,7 @@ public final class HitchLog {
 		if (pool == null) open();
 		int hitchSlot = slot;
 		slot = (slot + 1) % LAG;
-		readBack(slot);
+		skipTimestamps = !readBack(slot);
 		if (lastStart != 0) {
 			long frame = now - lastStart;
 			if (frame > 25 * MS && window.full()) {
@@ -106,12 +107,12 @@ public final class HitchLog {
 		lastStart = now;
 		if (minute == 0) minute = now;
 		else if (now - minute >= 60_000 * MS) summary(now);
-		RenderSystem.getDevice().createCommandEncoder().writeTimestamp(pool, slot * 2);
+		if (!skipTimestamps) RenderSystem.getDevice().createCommandEncoder().writeTimestamp(pool, slot * 2);
 	}
 
 	/** GameRenderer.render TAIL. */
 	public static void frameEnd() {
-		if (pool == null) return;
+		if (pool == null || skipTimestamps) return;
 		RenderSystem.getDevice().createCommandEncoder().writeTimestamp(pool, slot * 2 + 1);
 		written[slot] = true;
 	}
@@ -236,18 +237,19 @@ public final class HitchLog {
 		MemoryUtil.memFree(results);
 	}
 
-	/** The slot written {@link #LAG} frames ago: its GPU time completes a waiting hitch line. */
-	private static void readBack(int s) {
+	/** The slot written {@link #LAG} frames ago: its GPU time completes a waiting hitch line. False while its queries are still in flight. */
+	private static boolean readBack(int s) {
 		if (!written[s]) {
 			flush(s, "?");
-			return;
+			return true;
 		}
-		written[s] = false;
-		if (pending[s] == null) return;
 		int r = VK10.vkGetQueryPoolResults(dev.emrion.shaders.mod.vk.VulkanContext.get().vk, vkPool, s * 2, 2, results, 16,
 				VK10.VK_QUERY_RESULT_64_BIT | VK10.VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
 		boolean ok = (r == VK10.VK_SUCCESS || r == VK10.VK_NOT_READY) && results.get(1) != 0 && results.get(3) != 0;
+		if (!ok && r == VK10.VK_NOT_READY) return false; // keep the slot and its line for the next round
+		written[s] = false;
 		flush(s, ok ? String.format(Locale.ROOT, "%.1f ms", (results.get(2) - results.get(0)) * nsPerTick / 1e6) : "?");
+		return true;
 	}
 
 	private static void flush(int s, String gpu) {
