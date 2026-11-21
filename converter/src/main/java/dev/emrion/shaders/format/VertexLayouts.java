@@ -44,8 +44,6 @@ public final class VertexLayouts {
 
 	/** Variant key → attributes present. Missing attributes get Iris defaults in the transpiler. */
 	public static final Map<String, List<String>> VARIANTS = Map.ofEntries(
-			Map.entry("terrain_mdi", concat(TERRAIN, List.of("ChunkPosition", "ChunkVisibility"))),
-			Map.entry("terrain_ubo", TERRAIN),
 			// Sodium's chunk meshes in the mod's extended format (compact 20 B + canonical extras): Position/UV0/UV2 are decoded
 			// from SODIUM_INPUTS, at_midBlock is RGBA8_SINT; inputs the vertex format lacks get the mod's constant defaults
 			Map.entry("terrain_sodium", TERRAIN),
@@ -75,11 +73,5 @@ public final class VertexLayouts {
 	public static int inputLocation(String element) {
 		int i = INPUT_LOCATIONS.indexOf(element);
 		return i >= 0 ? i : SODIUM_INPUTS.indexOf(element);
-	}
-
-	private static List<String> concat(List<String> a, List<String> b) {
-		var l = new java.util.ArrayList<>(a);
-		l.addAll(b);
-		return List.copyOf(l);
 	}
 }

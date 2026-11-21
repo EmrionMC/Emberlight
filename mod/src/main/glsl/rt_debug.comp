@@ -12,8 +12,8 @@ layout(set = 0, binding = 3) uniform sampler2D atlas;
 layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Verts { uint d[]; };
 layout(push_constant) uniform Push { mat4 invViewProj; vec4 size; } pc;
 
-// EMRION_BLOCK (56 B, float position, UV0 at words 4-5) or, format 1, EmrionChunkVertex on the Sodium path (40 B, Sodium's
-// 3x20-bit position at words 0-1 as in rt_sodium_positions.comp, 2x15-bit UV0 at word 3)
+// format 0: EMRION_ENTITY (RT entities; 56 B, float position, UV0 at words 4-5) or, format 1, EmrionChunkVertex, Sodium's
+// terrain (40 B, Sodium's 3x20-bit position at words 0-1 as in rt_sodium_positions.comp, 2x15-bit UV0 at word 3)
 vec3 pos(Verts v, bool sod, uint i) {
     if (sod) {
         uvec3 hi = (uvec3(v.d[i * 10u]) >> uvec3(0u, 10u, 20u)) & 0x3FFu, lo = (uvec3(v.d[i * 10u + 1u]) >> uvec3(0u, 10u, 20u)) & 0x3FFu;

@@ -21,7 +21,6 @@ import dev.emrion.shaders.converter.spirv.SpirvCompiler;
 import dev.emrion.shaders.converter.spirv.SpirvReflection;
 import dev.emrion.shaders.format.Manifest;
 import dev.emrion.shaders.format.ManifestJson;
-import dev.emrion.shaders.format.VertexLayouts;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -63,7 +62,7 @@ public final class NativeCompiler {
 	public static String cacheKey(PackSource src, Converter.Request req, Manifest.Environment env) throws IOException {
 		Map<String, String> macros = new TreeMap<>(env.macros());
 		macros.put("emberlight.native", VERSION);
-		return CacheKey.compute(src.contentHash(), req.settings(), env.mcVersion(), macros, req.dimensions(), req.rt(), req.sodium());
+		return CacheKey.compute(src.contentHash(), req.settings(), env.mcVersion(), macros, req.dimensions(), req.rt());
 	}
 
 	/**
@@ -256,7 +255,6 @@ public final class NativeCompiler {
 				List<String> variants = new ArrayList<>(IrisPrograms.variants(slot));
 				// a class drawn by no pass is not drawn (the runtime finds no program for its slot); empty: no MC geometry uses the slot
 				if (owner == null || variants.isEmpty()) continue;
-				if (req.sodium() && variants.contains("terrain_mdi")) variants.add("terrain_sodium");
 				out.add(new Prog(owner.name() + "." + cls, owner, cls, slot, variants));
 				shadow |= cls.startsWith("shadow");
 			}

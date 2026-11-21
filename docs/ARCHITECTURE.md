@@ -132,7 +132,7 @@ that implements `CompiledRenderPipeline`. So:
 |---|---|---|---|
 | `EmrionUniforms` | set 1, binding 0, `UNIFORM_BUFFER_DYNAMIC` | Every built-in and custom uniform the pack uses, at the converter's fixed std140 layout (in the manifest). Matrices are GL-convention (`gbufferProjection` = `C·P_mc`, where `C` maps reverse-Z [0,1] to GL [-1,1]: `z' = w − 2z`). | once per frame, ring buffer (3 slots × frames in flight) |
 | `EmrionPhase` | set 1, binding 1, `UNIFORM_BUFFER_DYNAMIC` | The "current" `gl_ProjectionMatrix` and its inverse per render phase (world, hand, shadow) plus `renderStage`. | a few times per frame, same ring |
-| set 0 (MC) | MC push descriptors | Per-draw MC data: `DynamicTransforms` (ModelViewMat, ModelOffset, ColorModulator, TextureMat), chunk section data for terrain, `Sampler0` (albedo or atlas), `Sampler1` (overlay), `Sampler2` (lightmap), cloud buffers. | per draw, by MC |
+| set 0 (MC) | MC push descriptors | Per-draw MC data: `DynamicTransforms` (ModelViewMat, ModelOffset, ColorModulator, TextureMat), Sodium's `u_Globals`/`u_SectionTimeInfo` for terrain, `Sampler0` (albedo or atlas), `Sampler1` (overlay), `Sampler2` (lightmap), cloud buffers. | per draw, by MC |
 | set 0 (ours) | push descriptors after MC's bindings | Samplers the pack reads but the vanilla pipeline does not push: white/overlay/lightmap stand-ins, and `EmrionNormals`/`EmrionSpecular`, the labPBR maps of the current `Sampler0` (`PbrTextures`: atlas → per-atlas PBR atlases, SimpleTexture → `_n`/`_s` loaded at the next frame start, as Iris's PBRTextureManager). | at our pipeline bind and whenever `Sampler0` changes |
 | `EmrionDraw` | push constants (≤128 B) | `entityId`, `blockEntityId`, `currentRenderedItemId`, `entityColor`, `alphaTestRef`, `iris_NormalMat` (when not derivable) | per draw from hooks |
 
@@ -140,8 +140,8 @@ Set-0 bindings in our SPIR-V are **patched at load time** to the binding order o
 **backend** `VulkanRenderPipeline.uniforms()` list, which equals the frontend's `uniformIndices()`: only the uniforms the
 vanilla shaders really use, in first-use order. The frontend `uniforms()` list includes unused declarations and gives the wrong
 order (found through a crash). That is exactly the set MC pushes for that draw, so **a pack stage may only use set-0
-resources the vanilla pipeline also uses**. Example: terrain on the multidraw-indirect path pushes `Globals, Projection,
-TerrainUniform, Fog, Sampler2, Sampler0` and has no `DynamicTransforms` and no `ChunkSection`.
+resources the vanilla pipeline also uses**. Example: Sodium's terrain pipelines push `u_Globals`, `u_SectionTimeInfo`, the
+block atlas and the lightmap, and no `DynamicTransforms`.
 Our pipeline layout uses a push-constant range with stage `VK_SHADER_STAGE_ALL`, because MC pushes with all stage bits.
 A wrapped `VulkanRenderPipeline` destroys its set-0 layout, pipeline layout and modules itself, so the mod owns set-1 layouts separately. Global MC state (fog, camera, projection) is never read
 from set 0. It always comes from `EmrionUniforms` or `EmrionPhase`, so a vanilla pipeline missing e.g. `Projection` cannot break us.
@@ -187,9 +187,9 @@ The exact order of clouds, weather and particles is fixed in M3 against MC 26.3'
 ### 5.6 Vertex data
 
 Vanilla terrain format `BLOCK` (Position, Color, UV0, UV2; 28 B) lacks everything Complementary needs (normal, `mc_Entity`,
-`mc_midTexCoord`, `at_tangent`, `at_midBlock`). While a pack is active, the terrain pipelines use an **extended
-format** `EMRION_BLOCK` (FORMAT.md §5). Section meshing emits it through a mixin at the `BufferBuilder` creation in
-`SectionCompiler` plus a quad-completion hook that computes normal, tangent and midTexCoord per quad (Iris does the same).
+`mc_midTexCoord`, `at_tangent`, `at_midBlock`). Sodium (required) meshes the terrain; while a pack is active its chunk
+vertex is extended (`SODIUM_TERRAIN`, `EmrionChunkVertex`, SODIUM.md §6), with normal, tangent and midTexCoord per quad
+(Iris does the same).
 Block IDs come from `block.properties`, resolved to a `BlockState → id` table at pack load. Activating or deactivating a pack
 triggers a chunk rebuild.
 
@@ -234,7 +234,6 @@ Planned set; each mixin class carries a comment explaining why it is needed.
 | `LevelRenderer.executeSolid/executeClassicTransparency` | wrap draw groups | Iris renderStage per group (terrain 8/17, entities 11, particles 19, weather 21, border 22); vanilla clouds skipped when `clouds=off`. |
 | `SkyRenderer` | wrap `createRenderPass`, HEAD of each sky part | Sky phase into our pass; renderStage SKY/SUNSET/SUN/MOON/STARS/VOID; `sun`/`moon`/`stars=false`; sunPathRotation tilt. |
 | `GameRenderer.renderItemInHand` (invoked from the level) | invoker + wraps | The hand is drawn inside the level (Iris order) with the HAND projection and its own FeatureRenderDispatcher; MC's own hand call in `render3dHud` is skipped while a pack renders. |
-| `LevelExtractor.applyFrustum` TAIL | inject | While a pack renders, drop visible sections outside Sodium's cylindrical render distance (`HorizonCull`), so the pack's border fog meets the same terrain edge as under Iris. |
 | `GameRenderer.useImprovedTransparency` | HEAD | Force the classic transparency path while a pack is active (OIT changes the pass structure). |
 | `VulkanRenderPass.setPipeline` TAIL | inject | Bind descriptor set 1 and push the extra set-0 samplers for our pipelines. |
 | `FrontendRenderPass.setUniform` HEAD | inject | `Sampler0` changed: atlasSize and the per-draw PBR maps follow it. |
@@ -245,7 +244,7 @@ Planned set; each mixin class carries a comment explaining why it is needed.
 | `LevelLoadingScreen.tick` (`isLevelReady`), `extractRenderState` TAIL | wrap, inject | The screen stays open while the pack builds the new dimension's pipelines (no vanilla frames), with the loading panel on it (§5.7). |
 | `VulkanConst.textureUsageToVk` | return | Add the STORAGE usage bit for our custom usage flag. |
 | `VulkanFeatureSets.optionalFeatureSets` | return | Enable `fragmentStoresAndAtomics`, `vertexPipelineStoresAndAtomics`, `geometryShader`, `shaderStorageImageWriteWithoutFormat` (only those the pack needs). |
-| `SectionCompiler` / `BufferBuilder` | wrap | Extended terrain vertex format plus per-quad attributes. |
+| Sodium `ChunkMeshFormats` / `ChunkBuilderMeshingTask` | wrap | Extended terrain vertex format plus per-quad attributes (`mixin/sodium`). |
 | `FrontendGpuDevice.backend` | accessor | Get the `VulkanDevice` for raw calls. |
 | `VulkanCommandEncoder.submit` (`awaitSubmitCompletion`), `VulkanGpuSurface` acquire/present | wrap | Profiler only: render-thread time blocked on the GPU (GPU- vs CPU-bound), shown by the F7 overlay (BENCHMARK.md). |
 | `LevelRenderer.render` before `addMainPass` | inject | Iris's renderShadows point: `ShadowPass` swaps `visibleSections` for the shadow-culled sections (Iris SAFE_ZONE/advanced culling, `ShadowCuller`), lets MC prepare the chunk draws with the shadow model-view (MDI or not, `LevelRendererAccessor`), re-extracts and submits entities into its own SubmitNodeStorage/FeatureRenderDispatcher, then draws shadow_opaque/entities/translucent with the SHADOW pipelines (no backface culling) into shadowcolor0/1 + shadowtex0. |

@@ -484,28 +484,26 @@ final class NativeGlsl {
 	 */
 	static String vertexPrimitives(String variant, boolean shadow) {
 		List<String> has = VertexLayouts.VARIANTS.get(variant);
-		boolean terrain = variant.startsWith("terrain"), sodium = variant.equals("terrain_sodium"), clouds = variant.equals("clouds");
+		boolean terrain = variant.equals("terrain_sodium"), clouds = variant.equals("clouds");
 		java.util.function.Function<String, String> in = c -> {
 			if (clouds && c.equals("Position")) return "emr_cloudPos()";
 			if (clouds && c.equals("Color")) return "emr_cloudCol()";
 			if (clouds && c.equals("Normal")) return "emr_cloudNormal()";
-			if (sodium && c.equals("Position")) return "emr_sodPosition()";
-			if (sodium && c.equals("UV0")) return "emr_sodUV0()";
-			if (sodium && c.equals("UV2")) return "ivec2(emr_sod_LightAndData.xy)";
-			if (sodium && c.equals("at_midBlock")) return "vec4(emr_sod_MidBlock)";
+			if (terrain && c.equals("Position")) return "emr_sodPosition()";
+			if (terrain && c.equals("UV0")) return "emr_sodUV0()";
+			if (terrain && c.equals("UV2")) return "ivec2(emr_sod_LightAndData.xy)";
+			if (terrain && c.equals("at_midBlock")) return "vec4(emr_sod_MidBlock)";
 			return "emr_in_" + c;
 		};
 		StringBuilder b = new StringBuilder();
 		if (!terrain) b.append("layout(std140, set = 0, binding = 0) uniform DynamicTransforms { mat4 ModelViewMat; mat4 TextureMat; vec4 ColorModulator; vec3 ModelOffset; } emr_dt;\n");
-		if (terrain && !sodium) b.append("layout(std140, set = 0, binding = 1) uniform TerrainUniform { mat4 ModelViewMat; ivec2 TextureSize; } emr_terrain;\n");
-		if (variant.equals("terrain_ubo")) b.append("layout(std140, set = 0, binding = 2) uniform ChunkSection { ivec3 ChunkPosition; float ChunkVisibility; } emr_chunk;\n");
 		if (has.contains("UV1")) b.append("layout(set = 0, binding = 4) uniform sampler2D emr_Sampler1;\n");
 		if (clouds) b.append("layout(std140, set = 0, binding = ").append(VertexLayouts.SET0_CANONICAL.indexOf("CloudInfo"))
 				.append(") uniform CloudInfo { vec4 CloudColor; vec3 CloudOffset; vec3 CellSize; } emr_CloudInfo;\n")
 				.append("layout(set = 0, binding = ").append(VertexLayouts.SET0_CANONICAL.indexOf("CloudFaces")).append(") uniform isamplerBuffer emr_CloudFaces;\n")
 				.append(GlslTranspiler.HELPER_CLOUD_POS).append('\n').append(GlslTranspiler.HELPER_CLOUD_NORMAL).append('\n')
 				.append(GlslTranspiler.HELPER_CLOUD_COL).append('\n');
-		if (sodium) {
+		if (terrain) {
 			b.append("layout(std140, set = 0, binding = ").append(VertexLayouts.SET0_CANONICAL.indexOf("u_Globals"))
 					.append(") uniform SodiumGlobals { mat4 u_ProjectionMatrix; mat4 u_ModelViewMatrix; vec4 u_FogColor; vec3 u_CameraOffset; vec2 u_EnvironmentFog;"
 							+ " vec2 u_RenderFog; vec2 u_TexelSize; vec2 u_TexCoordShrink; float u_FadePeriodInv; uint u_UseRGSS; } emr_sodGlobals;\n");
@@ -520,11 +518,9 @@ final class NativeGlsl {
 				b.append("layout(location = ").append(VertexLayouts.location(c)).append(") in ").append(GlslTranspiler.CANON_TYPE.get(c))
 						.append(" emr_in_").append(c).append(";\n");
 
-		String chunkOffset = "(vec3(" + (has.contains("ChunkPosition") ? "emr_in_ChunkPosition" : "emr_chunk.ChunkPosition") + " - emr_CameraBlockPos) + emr_CameraOffset)";
 		String pos = has.contains("Position") ? in.apply("Position") : "vec3(0.0)";
-		if (terrain && !sodium) pos = "(" + pos + " + " + chunkOffset + ")";
 		// Sodium writes its globals once per frame: the frame block's matrices serve the shadow pass and the main pass
-		String mvRaw = sodium ? (shadow ? "shadowModelView" : "gbufferModelView") : terrain ? "emr_terrain.ModelViewMat" : "emr_dt.ModelViewMat";
+		String mvRaw = terrain ? (shadow ? "shadowModelView" : "gbufferModelView") : "emr_dt.ModelViewMat";
 		String mv = terrain ? mvRaw : "(emr_dt.ModelViewMat * mat4(1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, emr_dt.ModelOffset, 1.0))";
 		String color = has.contains("Color") ? (terrain || clouds ? in.apply("Color") : "(" + in.apply("Color") + " * emr_dt.ColorModulator)")
 				: terrain ? "vec4(1.0)" : "emr_dt.ColorModulator";

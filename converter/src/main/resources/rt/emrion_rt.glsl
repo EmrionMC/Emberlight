@@ -10,17 +10,16 @@ uniform sampler2D emrRtEntityAtlas;
 // > 0: the sun rays RTX shadows take while refraction lights a traced hit (refraction_water_out.glsl), 0 = their own count.
 int emrRtHitRays = 0;
 
-// Section table entry: xy vertex address, z layer/kind (below), w vertex format: 0 = EMRION_BLOCK / EMRION_ENTITY (56 B =
-// 14 words: position (section-relative) 0-2, Color 3, UV0 4-5, UV2 6, Normal 7, mc_Entity 8, mc_midTexCoord 9-10; the
-// entity format has UV0 at 4-5 too and its Normal at 8), 1 = EmrionChunkVertex on the Sodium path (40 B = 10 words: 3x20-bit
-// position 0-1, Color 2, UV0 3 (2x15 bit), light 4 (block, sky bytes), mc_Entity 5, Normal 6, mc_midTexCoord 8 (2x16 unorm)).
+// Section table entry: xy vertex address, z layer/kind (below), w vertex format: 0 = EMRION_ENTITY (RtEntities; 56 B =
+// 14 words: position 0-2, Color 3, UV0 4-5, UV1 6, UV2 7, Normal 8, mc_midTexCoord 9-10), 1 = EmrionChunkVertex, Sodium's
+// terrain (40 B = 10 words: 3x20-bit position 0-1, Color 2, UV0 3 (2x15 bit), light 4 (block, sky bytes), mc_Entity 5,
+// Normal 6, mc_midTexCoord 8 (2x16 unorm)).
 // Read vertices only through the accessors below. Instances are pure translations, so object-space directions are world directions.
-// ent: an EMRION_ENTITY draw (section kind 8/9), whose UV2 and Normal sit one word later than the terrain format's.
-struct EmrRtVerts { EmrRtVertData p; bool sod; bool ent; };
+struct EmrRtVerts { EmrRtVertData p; bool sod; };
 
 EmrRtVerts emrRtVerts(int customIndex) {
 	uvec4 s = emrRtSection[customIndex];
-	return EmrRtVerts(EmrRtVertData(s.xy), s.w == 1u, s.z >= 8u);
+	return EmrRtVerts(EmrRtVertData(s.xy), s.w == 1u);
 }
 
 // Vertices of triangle prim: quad prim/2, triangles (0,1,2) and (2,3,0) like RtQuadIndices.
@@ -28,8 +27,8 @@ uvec3 emrRtTri(uint prim) {
 	return (prim >> 1u) * 4u + ((prim & 1u) == 0u ? uvec3(0u, 1u, 2u) : uvec3(2u, 3u, 0u));
 }
 
-uint emrRtWord(EmrRtVerts v, uint i, uint vanilla, uint sodium) {
-	return v.sod ? v.p.d[i * 10u + sodium] : v.p.d[i * 14u + vanilla];
+uint emrRtWord(EmrRtVerts v, uint i, uint entity, uint sodium) {
+	return v.sod ? v.p.d[i * 10u + sodium] : v.p.d[i * 14u + entity];
 }
 
 vec3 emrRtPos(EmrRtVerts v, uint i) {
@@ -56,12 +55,12 @@ vec4 emrRtColor(EmrRtVerts v, uint i) {
 
 // UV2 (block, sky) in 0-240, as MC's lightmap coordinates.
 uvec2 emrRtLight(EmrRtVerts v, uint i) {
-	uint l = emrRtWord(v, i, v.ent ? 7u : 6u, 4u);
+	uint l = emrRtWord(v, i, 7u, 4u);
 	return v.sod ? uvec2(l & 0xFFu, (l >> 8u) & 0xFFu) : uvec2(l & 0xFFFFu, l >> 16u);
 }
 
 vec3 emrRtNormal(EmrRtVerts v, uint i) {
-	return unpackSnorm4x8(emrRtWord(v, i, v.ent ? 8u : 7u, 6u)).xyz;
+	return unpackSnorm4x8(emrRtWord(v, i, 8u, 6u)).xyz;
 }
 
 vec2 emrRtMidUv(EmrRtVerts v, uint i) {

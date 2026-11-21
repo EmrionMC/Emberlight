@@ -27,7 +27,7 @@ public final class IrisPrograms {
 	}
 
 	static {
-		String tm = "terrain_mdi", tu = "terrain_ubo", e = "entity", pa = "particle", pc = "position_color", pt = "position_tex",
+		String ts = "terrain_sodium", e = "entity", pa = "particle", pc = "position_color", pt = "position_tex",
 				ptc = "position_tex_color", po = "position", pctl = "position_color_tex_lightmap", pcl = "position_color_lightmap", li = "lines", bl = "block";
 		id("gbuffers_basic", null, po, pc, pcl, pctl, "clouds");
 		id("gbuffers_line", "gbuffers_basic", li);
@@ -37,11 +37,11 @@ public final class IrisPrograms {
 		id("gbuffers_skytextured", "gbuffers_textured", pt, ptc);
 		id("gbuffers_clouds", "gbuffers_textured", "clouds", pc);
 		id("gbuffers_terrain", "gbuffers_textured_lit");
-		id("gbuffers_terrain_solid", "gbuffers_terrain", tm, tu, bl);
-		id("gbuffers_terrain_cutout", "gbuffers_terrain", tm, tu, bl);
-		id("gbuffers_damagedblock", "gbuffers_terrain", tu, bl);
-		id("gbuffers_block", "gbuffers_terrain", e, tu, po, bl);
-		id("gbuffers_block_translucent", "gbuffers_block", e, tu, pctl);
+		id("gbuffers_terrain_solid", "gbuffers_terrain", ts, bl);
+		id("gbuffers_terrain_cutout", "gbuffers_terrain", ts, bl);
+		id("gbuffers_damagedblock", "gbuffers_terrain", bl);
+		id("gbuffers_block", "gbuffers_terrain", e, po, bl);
+		id("gbuffers_block_translucent", "gbuffers_block", e, pctl);
 		id("gbuffers_beaconbeam", "gbuffers_textured", e, bl);
 		id("gbuffers_item", "gbuffers_textured_lit");
 		id("gbuffers_entities", "gbuffers_textured_lit", e);
@@ -54,12 +54,12 @@ public final class IrisPrograms {
 		id("gbuffers_spidereyes", "gbuffers_textured", e);
 		id("gbuffers_hand", "gbuffers_textured_lit", e, pctl);
 		id("gbuffers_weather", "gbuffers_textured_lit", pa);
-		id("gbuffers_water", "gbuffers_terrain", tm, tu);
+		id("gbuffers_water", "gbuffers_terrain", ts);
 		id("gbuffers_hand_water", "gbuffers_hand", e, pctl);
-		id("shadow", null, li, pa, po, pcl, pctl, tu);
-		id("shadow_solid", "shadow", tm, tu);
-		id("shadow_cutout", "shadow", tm, tu);
-		id("shadow_water", "shadow", tm, tu, e);
+		id("shadow", null, li, pa, po, pcl, pctl);
+		id("shadow_solid", "shadow", ts);
+		id("shadow_cutout", "shadow", ts);
+		id("shadow_water", "shadow", ts, e);
 		id("shadow_entities", "shadow", e, pt);
 		id("shadow_block", "shadow", e, po);
 		id("shadow_lightning", "shadow_entities", pc);

@@ -666,14 +666,6 @@ final class Builtins {
 		f("iris_FogDensity", () -> Math.max(0.0f, fogDensity));
 
 		// Members the transpiler injects (Std140LayoutBuilder.INJECTED)
-		put("emr_CameraBlockPos", "ivec3", (o, i) -> { // GlobalSettingsUniform.CameraBlockPos
-			Vec3 p = cs.pos;
-			o[i] = Mth.floor(p.x); o[i + 1] = Mth.floor(p.y); o[i + 2] = Mth.floor(p.z);
-		});
-		vec3("emr_CameraOffset", (o, i) -> { // GlobalSettingsUniform.CameraOffset = floor(pos) − pos
-			Vec3 p = cs.pos;
-			put3(o, i, (float) (Mth.floor(p.x) - p.x), (float) (Mth.floor(p.y) - p.y), (float) (Mth.floor(p.z) - p.z));
-		});
 		put("emr_FogColor", "vec4", (o, i) -> put4(o, i, fogColor.x, fogColor.y, fogColor.z, fogColor.w));
 		f("emr_FogStart", () -> fogStart);
 		f("emr_FogEnd", () -> fogEnd);

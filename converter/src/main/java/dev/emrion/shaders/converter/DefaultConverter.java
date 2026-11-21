@@ -98,7 +98,7 @@ public final class DefaultConverter implements Converter {
 				return NativeCompiler.compile(opened, key, request, environment, compiler, pool, progress, diagnostics);
 			}
 			String packHash = source.contentHash();
-			String key = CacheKey.compute(packHash, request.settings(), environment.mcVersion(), environment.macros(), request.dimensions(), request.rt(), request.sodium());
+			String key = CacheKey.compute(packHash, request.settings(), environment.mcVersion(), environment.macros(), request.dimensions(), request.rt());
 			if (request.useCache()) {
 				Result hit = cached(request.cacheRoot().resolve(key), key);
 				if (hit != null) return hit;
@@ -309,9 +309,6 @@ public final class DefaultConverter implements Converter {
 			for (var plan : plans.entrySet())
 				for (var program : new TreeMap<>(plan.getValue().emits()).entrySet()) {
 					List<String> variants = program.getValue().vertexVariants();
-					// Sodium draws every chunk mesh that vanilla would draw with terrain_mdi
-					if (request.sodium() && variants != null && variants.contains("terrain_mdi"))
-						variants = java.util.stream.Stream.concat(variants.stream(), java.util.stream.Stream.of("terrain_sodium")).toList();
 					if (variants == null || variants.isEmpty()) emits.add(new Emit(plan.getKey(), program.getKey(), null, true));
 					else for (int i = 0; i < variants.size(); i++) emits.add(new Emit(plan.getKey(), program.getKey(), variants.get(i), i == 0));
 				}

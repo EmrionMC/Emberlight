@@ -73,7 +73,7 @@ import org.jspecify.annotations.Nullable;
  *     framegen off|fsr|dlss | hdr on|off | reflex off|on|boost|fgoff | move YAW/s DX/s DZ/s SECONDS (per-frame camera motion, continues during later steps) | vsync on|off |
  *     turnshot DEG_PER_FRAME FRAMES NAME [DX DZ [T]] (frame-exact turn and move, shot of its last frame) | fgturn (the same, captures the
  *     interpolated frame in front of the last one) | bob WALK AMOUNT|off (view bobbing on, at a fixed walk distance and bob amount) | hurt TIME DIR|off | nausea INTENSITY ANGLE|off (frozen damage tilt / nausea skew) | mats NAME (logs gbufferModelView/Projection, Iris's when it renders) |
- *     bench|benchv SECONDS NAME (rendered + presented frame times; benchv keeps VSync/cap) | trace start | trace stop NAME (every frame time in between -> emrion-trace-NAME.csv) | fgshots N NAME (the next N presented frame pairs as PNGs) | frames SECONDS NAME (every frame for SECONDS, quarter size, -> &lt;tag&gt;-NAME-NNN-MSms.png; runs on during later steps) | screen pause|inventory|chat|packs|rt|upscale|framegen|perf|dlss|options[:ID]|none | key KEY [ctrl] (into the open screen) | drop PATH[;PATH] (onto the open screen) | use down|up (hold the use key) | press KEY (key.keyboard.KEY) | mdi on|off (terrain multi-draw indirect, F3+M) | irisapi (logs what the Iris API reports) | repeat N { steps } (no nesting) |
+ *     bench|benchv SECONDS NAME (rendered + presented frame times; benchv keeps VSync/cap) | trace start | trace stop NAME (every frame time in between -> emrion-trace-NAME.csv) | fgshots N NAME (the next N presented frame pairs as PNGs) | frames SECONDS NAME (every frame for SECONDS, quarter size, -> &lt;tag&gt;-NAME-NNN-MSms.png; runs on during later steps) | screen pause|inventory|chat|packs|rt|upscale|framegen|perf|dlss|options[:ID]|none | key KEY [ctrl] (into the open screen) | drop PATH[;PATH] (onto the open screen) | use down|up (hold the use key) | press KEY (key.keyboard.KEY) | irisapi (logs what the Iris API reports) | repeat N { steps } (no nesting) |
  *     photo SCALE SAMPLES NAME [rt+up|rt|up|none] (photo mode, &lt;tag&gt;-NAME.png; which histories reset per frame, sticky) |
  *     snapshot FILE (replays a debug snapshot.json: pose, dimension, time, weather, effects, items, options, pack settings and
  *     Emberlight config, then shoots &lt;tag&gt;-snapshot-&lt;folder&gt;.png; without world/server it picks the snapshot's own)
@@ -909,10 +909,6 @@ public final class AutoTest {
 				System.setProperty(kv[0], kv.length > 1 ? kv[1] : "");
 				return true;
 			}
-			case "mdi" -> { // "mdi on|off": vanilla terrain multi-draw indirect (F3+M)
-				mc.multiDrawIndirect = arg.equals("on");
-				return ticks > 2;
-			}
 			case "press" -> { // a key as if typed, e.g. "press o" (key.keyboard.o)
 				net.minecraft.client.KeyMapping.click(com.mojang.blaze3d.platform.InputConstants.getKey("key.keyboard." + arg));
 				return true;
@@ -1211,7 +1207,7 @@ public final class AutoTest {
 		// a dimension switch renders vanilla until the pack's pipelines for the new dimension are built: not settled yet
 		// a resource reload (e.g. a pack from -Demrion.autotest.resourcepacks) rebuilds the renderer: Sodium's section
 		// manager is null until it finishes
-		if (mc.gui.overlay() != null || dev.emrion.shaders.mod.compat.SodiumTerrain.LOADED && !dev.emrion.shaders.mod.compat.sodium.SodiumRt.sectionsReady() || !chunksLoaded(mc) || !mc.levelRenderer.hasRenderedAllSections() || PackManager.selected() != null && !PackManager.running()) {
+		if (mc.gui.overlay() != null || !dev.emrion.shaders.mod.compat.sodium.SodiumRt.sectionsReady() || !chunksLoaded(mc) || !mc.levelRenderer.hasRenderedAllSections() || PackManager.selected() != null && !PackManager.running()) {
 			convergence.reset();
 			return false;
 		}
@@ -1274,9 +1270,8 @@ public final class AutoTest {
 		}
 	}
 
-	/** Sodium's chosen draw backend (DrawBackend.BACKEND), or "" without Sodium. */
+	/** Sodium's chosen draw backend (DrawBackend.BACKEND). */
 	private static String sodiumBackend() {
-		if (!net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("sodium")) return "";
 		try {
 			return ", Sodium draw backend " + Class.forName("net.caffeinemc.mods.sodium.client.gpu.device.backend.DrawBackend").getField("BACKEND").get(null);
 		} catch (ReflectiveOperationException e) {

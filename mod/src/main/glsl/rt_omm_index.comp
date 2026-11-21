@@ -1,7 +1,7 @@
 #version 460
 // Opacity micromaps (RtOmm): the micromap index of every triangle of one cutout section layer, before its BLAS build. Reads
-// the vertices like emrion_rt.glsl (EMRION_BLOCK: 14 words, UV0 floats at 4-5, mc_Entity 8; Sodium's EmrionChunkVertex:
-// 10 words, UV0 2x15 bit at 3, mc_Entity 5), quads as RtQuadIndices (triangles 0,1,2 and 2,3,0).
+// the vertices like emrion_rt.glsl (Sodium's EmrionChunkVertex: 10 words, UV0 2x15 bit at 3, mc_Entity 5), quads as
+// RtQuadIndices (triangles 0,1,2 and 2,3,0).
 // A quad that maps its whole sprite gets the sprite's micromap triangle for its corner order (rt_omm_data.comp); any other
 // quad inside one sprite gets a uniform one when every texel of its UV box is opaque or every one transparent; the rest,
 // animated sprites and block ids a shader decides per id (anyHit) get the all-unknown one (alpha-tested as without micromaps).
@@ -14,19 +14,18 @@ layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Sp
 layout(set = 0, binding = 0) uniform sampler2D atlas;
 layout(push_constant) uniform Push {
     uvec2 verts; uvec2 dst; uvec2 sprites; uvec2 grid; uvec2 anyHit;
-    uint tris; uint sodium; uint gridW; uint gridH; uint cellShift; uint anyHitCount; float eps;
+    uint tris; uint pad; uint gridW; uint gridH; uint cellShift; uint anyHitCount; float eps;
 };
 
 const uint UNKNOWN = 0u, OPAQUE = 1u, TRANSPARENT = 2u, ANIMATED = 0xFFFFFFFFu, NO_SLOTS = 0xFFFFFFFEu;
 
 vec2 uv(uint i) {
-    Words v = Words(verts);
-    if (sodium != 0u) { uint t = v.d[i * 10u + 3u]; return vec2(uvec2(t, t >> 16u) & 0x7FFFu) / 32768.0; }
-    return uintBitsToFloat(uvec2(v.d[i * 14u + 4u], v.d[i * 14u + 5u]));
+    uint t = Words(verts).d[i * 10u + 3u];
+    return vec2(uvec2(t, t >> 16u) & 0x7FFFu) / 32768.0;
 }
 
 int blockId(uint i) {
-    uint w = sodium != 0u ? Words(verts).d[i * 10u + 5u] : Words(verts).d[i * 14u + 8u];
+    uint w = Words(verts).d[i * 10u + 5u];
     return int(w << 16u) >> 16;
 }
 

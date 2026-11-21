@@ -4,20 +4,14 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.FluidState;
 
 /**
- * The block currently being meshed on this worker thread (Iris's BlockContextHolder). Set by the SectionCompiler hooks before
- * each block/fluid is tesselated, read by {@link ExtendedBufferBuilder} per vertex. One instance per thread, no locks.
+ * The block currently being meshed on this worker thread (Iris's BlockContextHolder). Set by the Sodium meshing hooks before
+ * each block/fluid is tesselated, copied into each Sodium vertex. One instance per thread, no locks.
  */
 public final class BlockContext {
 	private static final ThreadLocal<BlockContext> CURRENT = ThreadLocal.withInitial(BlockContext::new);
 
 	/** mc_Entity.x, mc_Entity.y (0 = block, 1 = fluid), at_midBlock.w, block position inside the section. */
 	int id = -1, renderType, emission, x, y, z;
-	/** True while a section compile tesselates a block model on this thread (separateAo applies to chunk meshes only). */
-	public boolean inSection;
-	/** The fluid block a section compile is tesselating on this thread (Sodium-style fluid lighting), or null. */
-	public net.minecraft.client.renderer.block.@org.jspecify.annotations.Nullable BlockAndTintGetter fluidLevel;
-	public net.minecraft.core.@org.jspecify.annotations.Nullable BlockPos fluidPos;
-	public @org.jspecify.annotations.Nullable FluidState fluidState;
 
 	public static BlockContext get() { return CURRENT.get(); }
 
@@ -30,7 +24,7 @@ public final class BlockContext {
 		set(EmrionVertexFormats.ids().block(fluid.createLegacyBlock()), 1, state.getLightEmission(), localX, localY, localZ);
 	}
 
-	/** Sodium path: hands this block to a Sodium vertex (compat.sodium; typed loosely so this class needs no Sodium types). */
+	/** Hands this block to a Sodium vertex (compat.sodium; typed loosely so this class needs no Sodium types). */
 	public void copyTo(dev.emrion.shaders.mod.compat.sodium.VertexBlockData v) {
 		v.emrion$setBlock(id, renderType, emission, x, y, z);
 	}

@@ -18,10 +18,8 @@ import java.util.function.Function;
 /** std140 {@code EmrionUniforms} layout from the union of all referenced uniforms. */
 public final class Std140LayoutBuilder implements UniformLayoutBuilder {
 
-	/** Members the transpiler injects for compat built-ins (gl_Fog, chunk offset, gl_TextureMatrix[1]). Always present. */
+	/** Members the transpiler injects for compat built-ins (gl_Fog, gl_TextureMatrix[1]). Always present. */
 	public static final Map<String, String> INJECTED = Map.of(
-			"emr_CameraBlockPos", "ivec3",
-			"emr_CameraOffset", "vec3",
 			"emr_FogColor", "vec4",
 			"emr_FogStart", "float",
 			"emr_FogEnd", "float",

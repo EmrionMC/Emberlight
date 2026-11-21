@@ -26,24 +26,17 @@ public final class CacheKey {
 		return compute(packHash, settingsFile, mcVersion, macros, dimensions, java.util.Set.of());
 	}
 
-	public static String compute(String packHash, Path settingsFile, String mcVersion, Map<String, String> macros,
-	                             List<String> dimensions, java.util.Set<String> rt) throws IOException {
-		return compute(packHash, settingsFile, mcVersion, macros, dimensions, rt, false);
-	}
-
 	/**
 	 * @param rt     RT effects of the request; only a non-empty set adds to the key, so RT off keeps the plain key
-	 * @param sodium only true adds to the key (same reason)
 	 */
 	public static String compute(String packHash, Path settingsFile, String mcVersion, Map<String, String> macros,
-	                             List<String> dimensions, java.util.Set<String> rt, boolean sodium) throws IOException {
+	                             List<String> dimensions, java.util.Set<String> rt) throws IOException {
 		StringBuilder env = new StringBuilder("mc=").append(mcVersion).append('\n');
 		new TreeMap<>(macros).forEach((k, v) -> env.append(k).append('=').append(v).append('\n'));
 		if (dimensions != null && !dimensions.isEmpty())
 			env.append("dimensions=").append(String.join(",", dimensions.stream().sorted().toList())).append('\n');
 		if (!rt.isEmpty()) env.append("rt=").append(String.join(",", rt.stream().sorted().toList())).append('\n')
 				.append("rtTables=").append(dev.emrion.shaders.converter.rt.RtPatchTable.fingerprint()).append('\n'); // RT bodies change without a VERSION bump
-		if (sodium) env.append("sodium=").append(Converter.SODIUM_VARIANT).append('\n');
 		return sha256(String.join("\0", Converter.VERSION, Integer.toString(Manifest.FORMAT_VERSION), packHash,
 				normaliseSettings(settingsFile), env)).substring(0, 24);
 	}

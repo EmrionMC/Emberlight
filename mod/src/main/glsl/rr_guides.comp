@@ -33,15 +33,15 @@ layout(push_constant) uniform Push {
 } pc;
 layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Verts { uint d[]; };
 
-// vertex accessors as in rt_ao.comp: EMRION_BLOCK (14 words) or, format 1, EmrionChunkVertex on the Sodium path (10 words)
-vec2 uv(Verts v, bool sod, uint i) {
-    if (sod) { uint t = v.d[i * 10u + 3u]; return vec2(uvec2(t, t >> 16u) & 0x7FFFu) / 32768.0; }
-    return uintBitsToFloat(uvec2(v.d[i * 14u + 4u], v.d[i * 14u + 5u]));
+// vertex accessors as in rt_ao.comp: EmrionChunkVertex (10 words)
+vec2 uv(Verts v, uint i) {
+    uint t = v.d[i * 10u + 3u];
+    return vec2(uvec2(t, t >> 16u) & 0x7FFFu) / 32768.0;
 }
-vec3 tint(Verts v, bool sod, uint i) { return unpackUnorm4x8(v.d[sod ? i * 10u + 2u : i * 14u + 3u]).rgb; }
-vec3 midBlock(Verts v, bool sod, uint i) {
-    if (sod) { int w = int(v.d[i * 10u + 9u]); return vec3(bitfieldExtract(w, 0, 8), bitfieldExtract(w, 8, 8), bitfieldExtract(w, 16, 8)); }
-    return vec3(unpackHalf2x16(v.d[i * 14u + 12u]), unpackHalf2x16(v.d[i * 14u + 13u]).x);
+vec3 tint(Verts v, uint i) { return unpackUnorm4x8(v.d[i * 10u + 2u]).rgb; }
+vec3 midBlock(Verts v, uint i) {
+    int w = int(v.d[i * 10u + 9u]);
+    return vec3(bitfieldExtract(w, 0, 8), bitfieldExtract(w, 8, 8), bitfieldExtract(w, 16, 8));
 }
 uvec3 tri(uint prim) { return (prim >> 1u) * 4u + ((prim & 1u) == 0u ? uvec3(0u, 1u, 2u) : uvec3(2u, 3u, 0u)); }
 
@@ -88,10 +88,9 @@ vec4 terrainAlbedo(vec3 p, vec3 n) {
     for (int guard = 0; guard < 32 && rayQueryProceedEXT(q); guard++) {
         uvec4 s = sections[rayQueryGetIntersectionInstanceCustomIndexEXT(q, false)];
         Verts v = Verts(s.xy);
-        bool sod = s.w == 1u;
         uvec3 t = tri(uint(rayQueryGetIntersectionPrimitiveIndexEXT(q, false)));
         vec2 b = rayQueryGetIntersectionBarycentricsEXT(q, false);
-        vec2 u = uv(v, sod, t.x) * (1.0 - b.x - b.y) + uv(v, sod, t.y) * b.x + uv(v, sod, t.z) * b.y;
+        vec2 u = uv(v, t.x) * (1.0 - b.x - b.y) + uv(v, t.y) * b.x + uv(v, t.z) * b.y;
         if (textureLod(atlas, u, 0.0).a >= 0.1) rayQueryConfirmIntersectionEXT(q);
     }
     if (rayQueryGetIntersectionTypeEXT(q, true) == gl_RayQueryCommittedIntersectionNoneEXT) return vec4(-1.0);
@@ -99,19 +98,18 @@ vec4 terrainAlbedo(vec3 p, vec3 n) {
     if (abs(t - dist) > 0.01 * dist + 0.03) return vec4(-1.0); // waved foliage, entities, fluids, a surface the TLAS lacks
     uvec4 s = sections[rayQueryGetIntersectionInstanceCustomIndexEXT(q, true)];
     Verts v = Verts(s.xy);
-    bool sod = s.w == 1u;
     uvec3 tr = tri(uint(rayQueryGetIntersectionPrimitiveIndexEXT(q, true)));
     vec2 b = rayQueryGetIntersectionBarycentricsEXT(q, true);
     vec3 w = vec3(1.0 - b.x - b.y, b.x, b.y);
-    vec2 u0 = uv(v, sod, tr.x), u1 = uv(v, sod, tr.y), u2 = uv(v, sod, tr.z);
+    vec2 u0 = uv(v, tr.x), u1 = uv(v, tr.y), u2 = uv(v, tr.z);
     vec2 u = u0 * w.x + u1 * w.y + u2 * w.z;
     // mip from the pixel footprint: texels per block from the quad edge (atlas texels / blocks), so HD resource packs work too
     vec2 atlasSize = vec2(textureSize(atlas, 0));
-    float edge = length(midBlock(v, sod, tr.y) - midBlock(v, sod, tr.x)) / 64.0;
+    float edge = length(midBlock(v, tr.y) - midBlock(v, tr.x)) / 64.0;
     float texelsPerBlock = edge > 1e-3 ? length((u1 - u0) * atlasSize) / edge : 16.0;
     float footprint = dist * pc.params.z * texelsPerBlock / max(abs(dot(n, dir)), 0.2);
     float lod = clamp(log2(max(footprint, 1.0)), 0.0, float(textureQueryLevels(atlas) - 1));
-    vec3 c = tint(v, sod, tr.x) * w.x + tint(v, sod, tr.y) * w.y + tint(v, sod, tr.z) * w.z;
+    vec3 c = tint(v, tr.x) * w.x + tint(v, tr.y) * w.y + tint(v, tr.z) * w.z;
     return vec4(textureLod(atlas, u, lod).rgb * c, 1.0);
 }
 

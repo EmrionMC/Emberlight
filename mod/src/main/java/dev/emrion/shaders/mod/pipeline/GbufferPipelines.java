@@ -337,9 +337,6 @@ public final class GbufferPipelines {
 		VertexFormat f = formats.isEmpty() ? null : formats.getFirst();
 		if (f == null) return List.of();
 		if (f.getElements().stream().anyMatch(e -> e.name().equals("a_LightAndData"))) return List.of("terrain_sodium");
-		if (formats.size() > 1 && formats.get(1) != null && formats.get(1).getElements().stream().anyMatch(e -> e.name().equals("ChunkPosition")))
-			return List.of("terrain_mdi");
-		if (f == EmrionVertexFormats.terrain()) return List.of("terrain_ubo");
 		var names = f.getElements().stream().map(VertexFormatElement::name).collect(java.util.stream.Collectors.toSet());
 		return VertexLayouts.VARIANTS.entrySet().stream()
 				.filter(v -> !v.getKey().startsWith("terrain") && !v.getValue().isEmpty() && names.containsAll(v.getValue()))
@@ -348,13 +345,12 @@ public final class GbufferPipelines {
 				.map(Map.Entry::getKey).toList();
 	}
 
-	/** The vanilla pipeline with the extended formats a pack draws with (EMRION_BLOCK, EMRION_ENTITY, GLYPH). */
+	/** The vanilla pipeline with the extended formats a pack draws with (Sodium terrain, EMRION_ENTITY, GLYPH). */
 	static FrontendRenderPipeline extended(FrontendRenderPipeline p) {
 		List<VertexFormat> formats = new ArrayList<>(p.vertexFormats());
 		if (formats.isEmpty() || formats.getFirst() == null) return p;
 		VertexFormat f = formats.getFirst();
-		if (f == DefaultVertexFormat.BLOCK && uniformOrder(p).contains("TerrainUniform")) formats.set(0, EmrionVertexFormats.terrain());
-		else if (f.getElements().stream().anyMatch(e -> e.name().equals("a_LightAndData"))) formats.set(0, EmrionVertexFormats.SODIUM_TERRAIN);
+		if (f.getElements().stream().anyMatch(e -> e.name().equals("a_LightAndData"))) formats.set(0, EmrionVertexFormats.SODIUM_TERRAIN);
 		else if (f == DefaultVertexFormat.ENTITY) formats.set(0, EmrionVertexFormats.entity());
 		else if (f == DefaultVertexFormat.POSITION_TEX_LIGHTMAP_COLOR) formats.set(0, EmrionVertexFormats.GLYPH);
 		else return p;

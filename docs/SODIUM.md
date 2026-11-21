@@ -1,13 +1,16 @@
 # Emberlight on Sodium
 
-**Decision (user, 2026-11-13): both chunk paths are supported.** With Sodium installed, terrain goes through Sodium's chunk
-renderer (as under Iris). Without Sodium, Minecraft's own chunk renderer is used. Both paths must be complete,
-Iris-equivalent and fast. Sodium replaces MC's chunk renderer when it loads and cannot be turned off at runtime, so the path is
-picked automatically from the installed mods (§9 covers forcing the vanilla path).
+**Decision (user, 2026-11-21): Sodium is required.** `fabric.mod.json` depends on Sodium `>=0.9.3-beta.5` (and breaks newer
+betas), terrain always goes through Sodium's chunk renderer (as under Iris), and the vanilla chunk path was deleted (branch
+`refactor/sodium-required`: the SectionCompiler/Indigo/fluid meshing hooks, EMRION_BLOCK, the vanilla RT and shadow section
+paths, ForcedSections, HorizonCull, the converter's terrain_mdi/terrain_ubo variants and its `sodium` request flag).
+`runClient` always loads the Sodium jar from `-PirisModsDir`; `-Psodium` is gone.
+The earlier decision (2026-11-13: both chunk paths supported) is history; the sections below that compare or mention the
+vanilla path describe the state before the deletion.
 Sodium is Polyform-Shield-1.0.0: we may depend on it and mixin into it, but we must not bundle or copy its code. Decompiled
 classes were read only as a spec (paths below are Sodium class names, not copies). The build compiles against Sodium from
 Modrinth's maven (`compileOnly`, `sodium_version` in gradle.properties). The jar is never bundled. Everything that needs Sodium's types lives
-in `compat/sodium` and `mixin/sodium` (`emrionshaders.sodium.mixins.json`, applied only when Sodium is loaded).
+in `compat/sodium` and `mixin/sodium` (`emrionshaders.sodium.mixins.json`, skipped only next to Iris in the dev reference run).
 
 §1–§5 are the spike (2026-11-13). §6 is step 1, §7 steps 2–4, §8 the comparison of the two paths, §9 the vanilla-path question, §10 Sodium versions.
 

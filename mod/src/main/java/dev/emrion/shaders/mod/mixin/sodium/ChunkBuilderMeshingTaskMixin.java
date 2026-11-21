@@ -26,7 +26,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
  * Why: the block being meshed is known only here, on the worker thread (as Iris's MixinChunkMeshBuildTask); it goes into
- * BlockContext for the vertex mixins, and RtLights collects emitters here as SectionCompilerMixin does on the vanilla path.
+ * BlockContext for the vertex mixins, and RtLights collects emitters here.
  */
 @Mixin(ChunkBuilderMeshingTask.class)
 public class ChunkBuilderMeshingTaskMixin {

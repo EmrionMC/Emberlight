@@ -7,25 +7,13 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.CommonLifecycleEvents;
 import net.minecraft.client.Minecraft;
 
 /**
- * Extended vertex formats used while a pack is active (56 B each); element names are the canonical inputs of VertexLayouts.
- * at_midBlock is RGBA16_FLOAT so shaders get Iris's values directly; EMRION_ENTITY is used only in world and hand passes.
+ * Extended vertex formats used while a pack is active; element names are the canonical inputs of VertexLayouts (Sodium's
+ * a_* names for SODIUM_TERRAIN). EMRION_ENTITY is used only in world and hand passes.
  */
 public final class EmrionVertexFormats {
 	private EmrionVertexFormats() {}
 
-	public static final VertexFormat TERRAIN = VertexFormat.builder(0)
-			.addAttribute("Position", GpuFormat.RGB32_FLOAT)
-			.addAttribute("Color", GpuFormat.RGBA8_UNORM)
-			.addAttribute("UV0", GpuFormat.RG32_FLOAT)
-			.addAttribute("UV2", GpuFormat.RG16_SINT)
-			.addAttribute("Normal", GpuFormat.RGBA8_SNORM)
-			.addAttribute("mc_Entity", GpuFormat.RG16_SINT)
-			.addAttribute("mc_midTexCoord", GpuFormat.RG32_FLOAT)
-			.addAttribute("at_tangent", GpuFormat.RGBA8_SNORM)
-			.addAttribute("at_midBlock", GpuFormat.RGBA16_FLOAT)
-			.build();
-
-	/** Sodium's compact 20 B terrain vertex plus the TERRAIN extras (at_midBlock as RGBA8_SINT); 40 B. */
+	/** Sodium's compact 20 B terrain vertex plus the extras packs read (at_midBlock as RGBA8_SINT); 40 B. */
 	public static final VertexFormat SODIUM_TERRAIN = VertexFormat.builder(0)
 			.addAttribute("a_Position", GpuFormat.RG32_UINT)
 			.addAttribute("a_Color", GpuFormat.RGBA8_UNORM)
@@ -69,17 +57,14 @@ public final class EmrionVertexFormats {
 	private static volatile BlockIdTable ids = BlockIdTable.EMPTY;
 	private static boolean tagListener;
 
-	/** Extended terrain format (EMRION_BLOCK); vertex binding 0 of terrain pipelines. */
-	public static VertexFormat terrain() { return TERRAIN; }
-
 	/** Extended entity format (ENTITY + derived tangent/midTexCoord + iris_Entity). */
 	public static VertexFormat entity() { return ENTITY; }
 
 	/** True while the extended formats are in use (pack active); switching triggers a chunk rebuild. */
 	public static boolean active() { return active; }
 
-	/** ENTITY draws use EMRION_ENTITY: while active, except in the terrain-only debug view (no entity pipelines swapped there). */
-	public static boolean entitiesActive() { return active && (!DebugVertex.ENABLED || DebugVertex.ENTITIES); }
+	/** ENTITY draws use EMRION_ENTITY while active. */
+	public static boolean entitiesActive() { return active; }
 
 	/** Iris separateAo: chunk vertex colour = tint, alpha = AO (Sodium's XHFPTerrainVertex), instead of AO baked into rgb. */
 	public static boolean separateAo() { return active && separateAo; }

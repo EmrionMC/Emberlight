@@ -128,7 +128,7 @@ class IrisDimensionPlannerTest {
 		assertTrue(r.dim().programs().get("gbuffers_textured").fallbackFor().contains("gbuffers_particles"));
 		var shadow = r.dim().programs().get("shadow");
 		assertTrue(shadow.fallbackFor().containsAll(List.of("shadow_cutout", "shadow_water", "shadow_entities", "shadow_lightning")));
-		assertTrue(r.plan().emits().get("shadow").vertexVariants().containsAll(List.of("terrain_mdi", "terrain_ubo", "entity")));
+		assertTrue(r.plan().emits().get("shadow").vertexVariants().containsAll(List.of("terrain_sodium", "entity")));
 		assertEquals(List.of("fullscreen"), r.plan().emits().get("composite").vertexVariants());
 		assertEquals("off", shadow.blend().defaultMode().mode());
 	}

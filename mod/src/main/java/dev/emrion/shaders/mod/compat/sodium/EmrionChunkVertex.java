@@ -11,7 +11,7 @@ import org.lwjgl.system.MemoryUtil;
 
 /**
  * Sodium chunk vertex while a pack is active: Sodium's compact encoding with Iris's XHFPTerrainVertex semantics, plus the
- * same extra attributes as our vanilla EMRION_BLOCK path.
+ * extra attributes packs read (mc_Entity, Normal, at_tangent, mc_midTexCoord, at_midBlock).
  */
 public final class EmrionChunkVertex implements ChunkVertexType {
 	public static final EmrionChunkVertex INSTANCE = new EmrionChunkVertex();

@@ -2,7 +2,8 @@ plugins { id 'net.fabricmc.fabric-loom' version "${loom_version}" }
 
 base { archivesName = 'emberlight' }
 
-// Sodium is optional at runtime: compiled against, never bundled (Polyform Shield).
+// Sodium is a required dependency (fabric.mod.json): compiled against, never bundled (Polyform Shield). runClient loads the
+// local Sodium jar from -PirisModsDir (not the runtime classpath, which runIrisReference shares with its own Sodium).
 repositories { exclusiveContent { forRepository { maven { name = 'Modrinth'; url = 'https://api.modrinth.com/maven' } }; filter { includeGroup 'maven.modrinth' } } }
 
 dependencies {
@@ -36,8 +37,6 @@ def compare = providers.gradleProperty('compare').isPresent()
 def sceneWorld = file(findProperty('sceneWorld') ?: 'run-iris/saves/scenes')
 configurations { irisReference { canBeConsumed = false } }
 dependencies { irisReference fileTree(irisModsDir) { include 'iris-fabric-*.jar', 'sodium-fabric-*.jar' } }
-// runClient -Psodium: also load the local Sodium jar from the same directory, never copied into the repo.
-def withSodium = providers.gradleProperty('sodium').isPresent()
 def sodiumJars = fileTree(irisModsDir) { include 'sodium-fabric-*.jar' }
 
 // Same options for both runs: fixed video settings, sound off and FOV effects off (deterministic camera).
@@ -113,6 +112,8 @@ loom {
 tasks.named('runClient') {
 	def optionsFile = file('run/options.txt')
 	doFirst {
+		// before anything below touches the run dir
+		if (sodiumJars.files.size() != 1) throw new GradleException("Expected one Sodium jar in ${irisModsDir} (-PirisModsDir), found ${sodiumJars.files*.name}")
 		if (compare) {
 			def world = emrionProps.get()['emrion.autotest.world']
 			if (world != null) {
@@ -148,13 +149,10 @@ tasks.named('runClient') {
 			optionsFile.text = 'preferredGraphicsBackend:"vulkan"\nonboardAccessibility:false\n'
 		}
 		linkResourcePacks(optionsFile.parentFile)
-		if (withSodium) {
-			if (sodiumJars.files.size() != 1) throw new GradleException("Expected one Sodium jar in ${irisModsDir}, found ${sodiumJars.files*.name}")
-			jvmArgs "-Dfabric.addMods=${sodiumJars.singleFile}"
-			def sodium = new File(irisModsDir.parentFile, 'config/sodium-options.json')
-			new File(optionsFile.parentFile, 'config').mkdirs()
-			if (sodium.isFile()) java.nio.file.Files.copy(sodium.toPath(), new File(optionsFile.parentFile, 'config/sodium-options.json').toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
-		}
+		jvmArgs "-Dfabric.addMods=${sodiumJars.singleFile}"
+		def sodium = new File(irisModsDir.parentFile, 'config/sodium-options.json')
+		new File(optionsFile.parentFile, 'config').mkdirs()
+		if (sodium.isFile()) java.nio.file.Files.copy(sodium.toPath(), new File(optionsFile.parentFile, 'config/sodium-options.json').toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
 	}
 }
 tasks.named('runIrisReference') {
@@ -168,8 +166,8 @@ tasks.named('runIrisReference') {
 		writeOptions(runDir, 'opengl')
 		linkResourcePacks(runDir)
 		new File(runDir, 'config').mkdirs()
-		// our "breaks" on other Sodium betas would refuse the user's Iris + Sodium pair
-		new File(runDir, 'config/fabric_loader_dependencies.json').text = '{"version": 1, "overrides": {"emberlight": {"-breaks": {"sodium": "IGNORED"}}}}\n'
+		// our Sodium version pin would refuse the user's Iris + Sodium pair
+		new File(runDir, 'config/fabric_loader_dependencies.json').text = '{"version": 1, "overrides": {"emberlight": {"-depends": {"sodium": "IGNORED"}, "-breaks": {"sodium": "IGNORED"}}}}\n'
 		new File(runDir, 'config/iris.properties').text = """shaderPack=${packName}
 enableShaders=true
 maxShadowRenderDistance=24

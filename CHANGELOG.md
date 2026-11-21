@@ -10,7 +10,7 @@ OptiFine/Iris shaderpacks on Minecraft's **Vulkan** renderer. Expect bugs and ke
 - Minecraft 26.3, Fabric Loader 0.20.1 or newer, Fabric API.
 - Graphics API set to Vulkan (*Options → Video Settings → Graphics API → Prefer Vulkan*). On OpenGL the mod stays inactive
   and says so.
-- Optional: Sodium **0.9.3-beta.5** exactly. Other Sodium versions are refused at startup on purpose, because the internals
+- Sodium **0.9.3-beta.5** exactly (required). Other Sodium versions are refused at startup on purpose, because the internals
   Emberlight hooks change between betas.
 - Ray tracing: a GPU with `VK_KHR_ray_query`. DLSS: an NVIDIA RTX GPU (frame generation: RTX 40 or newer); NVIDIA's model
   files are downloaded once on request (see below).
@@ -34,9 +34,8 @@ OptiFine/Iris shaderpacks on Minecraft's **Vulkan** renderer. Expect bugs and ke
   Iris + Sodium on OpenGL (1.76×), with an image within Iris's own run-to-run noise.
 - Shadow culling that skips casters whose shadow can't land on anything visible (*Performance…* page).
 
-**Sodium (optional)**
-- With Sodium 0.9.3-beta.5 installed, terrain is meshed and drawn by Sodium, as under Iris. Without it, Minecraft's own
-  chunk renderer is used. Both paths give the same image, and all features work on both.
+**Sodium**
+- Terrain is meshed and drawn by Sodium 0.9.3-beta.5, as under Iris.
 
 **Hardware ray tracing (off by default)**
 - For Complementary Reimagined / Unbound r5 (including Euphoria Patches), traced with Vulkan ray queries on the RT cores.
@@ -91,7 +90,6 @@ against itself scores 0.2–0.9). ✅ matches Iris, 🟡 works with visible diff
 
 - Shrimple and Insanity are broken.
 - Distant Horizons is not supported yet. Voxy is not possible (OpenGL only).
-- The Sodium path is a few percent slower than the vanilla path on GPU-bound systems (opaque pass about 0.5 ms more).
 - Reflections on water have no motion vectors, so they can smear with FSR/DLSS or frame generation while the camera moves;
   the same goes for moving mobs and the hand.
 - Ray tracing needs about 0.85 GB of extra VRAM and is tuned for Complementary r5 only.

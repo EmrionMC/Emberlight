@@ -331,7 +331,7 @@ public final class PackManager {
 				status = "Converting " + pack + ": " + stage + " " + done + "/" + total;
 				progress = total == 0 ? 0 : (float) done / total;
 				dev.emrion.shaders.mod.gui.LoadingHud.stage(pack, stage, done, total);
-			}, true, request(nativePack), net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("sodium")));
+			}, true, request(nativePack)));
 		}
 		if (gen != generation) throw new java.util.concurrent.CancellationException(); // superseded: its errors are not the new pack's
 		List<Diagnostic> errs = result.diagnostics().stream().filter(d -> d.severity() == Diagnostic.Severity.ERROR).distinct().toList(); // distinct: one per dimension otherwise
@@ -714,7 +714,7 @@ public final class PackManager {
 	/** Compiled vanilla world pipelines, or null while compiling: never block, a blocking compile can deadlock against chunk workers. */
 	private static @Nullable Map<RenderPipeline, FrontendRenderPipeline> vanillaPipelines() {
 		List<RenderPipeline> world = new java.util.ArrayList<>(GbufferMapping.worldPipelines());
-		if (dev.emrion.shaders.mod.compat.SodiumTerrain.LOADED) world.addAll(dev.emrion.shaders.mod.compat.SodiumTerrain.pipelines());
+		world.addAll(dev.emrion.shaders.mod.compat.SodiumTerrain.pipelines());
 		Map<RenderPipeline, FrontendRenderPipeline> vanilla = new IdentityHashMap<>();
 		var cache = dev.emrion.shaders.mod.mixin.RenderSystemAccessor.emrion$currentPipelineCache();
 		if (cache == null) { // no resources loaded yet: MC's fallback path, compiled on our thread (PipelineCacheMixin)
@@ -962,7 +962,6 @@ public final class PackManager {
 		PbrTextures.clear(); // entity/item maps load lazily again when a pack runs
 		PbrAtlases.releaseLazy();
 		if (!RtCapability.DEBUG) RtScene.shutdown();
-		dev.emrion.shaders.mod.runtime.ForcedSections.clear();
 	}
 
 	/** Toggled off: vanilla rendering, but the pipelines stay as {@link #prepared}, so switching back only re-installs them. */

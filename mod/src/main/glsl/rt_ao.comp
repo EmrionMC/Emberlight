@@ -16,20 +16,20 @@ const float MAX_HISTORY = 32.0;
 const float CUTOUT_NEAR = 0.3;
 const float FAR_DIST = 48.0; // blocks; beyond it half the rays, the 32-frame history absorbs the noise (0 = off)
 
-// EMRION_BLOCK (56 B, UV0 at words 4-5) or, format 1, EmrionChunkVertex on the Sodium path (40 B, 2x15-bit UV0 at word 3)
-vec2 uv(Verts v, bool sod, uint i) {
-    if (sod) { uint t = v.d[i * 10u + 3u]; return vec2(uvec2(t, t >> 16u) & 0x7FFFu) / 32768.0; }
-    return uintBitsToFloat(uvec2(v.d[i * 14u + 4u], v.d[i * 14u + 5u]));
+// EmrionChunkVertex, Sodium's chunk vertex in the mod's extended format (40 B, 2x15-bit UV0 at word 3)
+vec2 uv(Verts v, uint i) {
+    uint t = v.d[i * 10u + 3u];
+    return vec2(uvec2(t, t >> 16u) & 0x7FFFu) / 32768.0;
 }
-// mc_Entity (x, y = 1 for fluids): word 8 of EMRION_BLOCK, word 5 of EmrionChunkVertex
-bool fluid(Verts v, bool sod, uint i) { return (v.d[sod ? i * 10u + 5u : i * 14u + 8u] >> 16u) == 1u; }
-// at_midBlock.xyz = (block centre - vertex) * 64: word 9 of EmrionChunkVertex (signed bytes), words 12-13 of EMRION_BLOCK (halves)
-vec3 midBlock(Verts v, bool sod, uint i) {
-    if (sod) { int w = int(v.d[i * 10u + 9u]); return vec3(bitfieldExtract(w, 0, 8), bitfieldExtract(w, 8, 8), bitfieldExtract(w, 16, 8)); }
-    return vec3(unpackHalf2x16(v.d[i * 14u + 12u]), unpackHalf2x16(v.d[i * 14u + 13u]).x);
+// mc_Entity (x, y = 1 for fluids): word 5
+bool fluid(Verts v, uint i) { return (v.d[i * 10u + 5u] >> 16u) == 1u; }
+// at_midBlock.xyz = (block centre - vertex) * 64: word 9 (signed bytes)
+vec3 midBlock(Verts v, uint i) {
+    int w = int(v.d[i * 10u + 9u]);
+    return vec3(bitfieldExtract(w, 0, 8), bitfieldExtract(w, 8, 8), bitfieldExtract(w, 16, 8));
 }
-// Light level the block emits (at_midBlock.w): byte 3 of word 9 of EmrionChunkVertex, the high half of word 13 of EMRION_BLOCK
-float emission(Verts v, bool sod, uint i) { return sod ? float(v.d[i * 10u + 9u] >> 24u) : unpackHalf2x16(v.d[i * 14u + 13u]).y; }
+// Light level the block emits (at_midBlock.w): byte 3 of word 9
+float emission(Verts v, uint i) { return float(v.d[i * 10u + 9u] >> 24u); }
 // Vertices of triangle prim: quad prim/2, triangles (0,1,2) and (2,3,0) like RtQuadIndices.
 uvec3 tri(uint prim) { return (prim >> 1u) * 4u + ((prim & 1u) == 0u ? uvec3(0u, 1u, 2u) : uvec3(2u, 3u, 0u)); }
 
@@ -37,8 +37,8 @@ uvec3 tri(uint prim) { return (prim >> 1u) * 4u + ((prim & 1u) == 0u ? uvec3(0u,
 // redstone torch and the powered repeater and comparator wrap each torch head in an inward-facing glow shell half a pixel
 // away, and every ray from the head hit it (black heads; RT off they glow). Big faces of the same block (a stair riser, a
 // cauldron wall) and every other cell keep occluding.
-bool ownGlowShell(Verts v, bool sod, uvec3 t, vec2 b, vec3 origin, vec3 hit) {
-    vec3 m0 = midBlock(v, sod, t.x), m1 = midBlock(v, sod, t.y), m2 = midBlock(v, sod, t.z);
+bool ownGlowShell(Verts v, uvec3 t, vec2 b, vec3 origin, vec3 hit) {
+    vec3 m0 = midBlock(v, t.x), m1 = midBlock(v, t.y), m2 = midBlock(v, t.z);
     // (t.x, t.y) and (t.y, t.z) are two edges of the quad in both of its triangles; midBlock differences are vertex offsets
     if (max(dot(m1 - m0, m1 - m0), dot(m2 - m1, m2 - m1)) > 12.8 * 12.8) return false;
     vec3 m = m0 * (1.0 - b.x - b.y) + m1 * b.x + m2 * b.y;
@@ -60,10 +60,9 @@ float hitDistance(vec3 origin, vec3 dir, float tMax) {
             if (rayQueryGetIntersectionTEXT(q, false) < CUTOUT_NEAR) continue;
             uvec4 s = sections[rayQueryGetIntersectionInstanceCustomIndexEXT(q, false)];
             Verts v = Verts(s.xy);
-            bool sod = s.w == 1u;
             uvec3 t = tri(uint(rayQueryGetIntersectionPrimitiveIndexEXT(q, false)));
             vec2 b = rayQueryGetIntersectionBarycentricsEXT(q, false);
-            vec2 u = uv(v, sod, t.x) * (1.0 - b.x - b.y) + uv(v, sod, t.y) * b.x + uv(v, sod, t.z) * b.y;
+            vec2 u = uv(v, t.x) * (1.0 - b.x - b.y) + uv(v, t.y) * b.x + uv(v, t.z) * b.y;
             if (textureLod(atlas, u, 0.0).a >= 0.1) rayQueryConfirmIntersectionEXT(q);
         }
         if (rayQueryGetIntersectionTypeEXT(q, true) == gl_RayQueryCommittedIntersectionNoneEXT) return tMax;
@@ -76,9 +75,8 @@ float hitDistance(vec3 origin, vec3 dir, float tMax) {
             continue;
         }
         Verts v = Verts(s.xy);
-        bool sod = s.w == 1u;
         uvec3 tr = tri(uint(rayQueryGetIntersectionPrimitiveIndexEXT(q, true)));
-        if (!fluid(v, sod, tr.x) && !ownGlowShell(v, sod, tr, rayQueryGetIntersectionBarycentricsEXT(q, true), origin, origin + dir * t)) return t;
+        if (!fluid(v, tr.x) && !ownGlowShell(v, tr, rayQueryGetIntersectionBarycentricsEXT(q, true), origin, origin + dir * t)) return t;
         tMin = t + 0.001;
     }
     return tMax;
@@ -93,7 +91,7 @@ bool onLight(vec3 origin, vec3 n, float len) {
     while (rayQueryProceedEXT(q)) {}
     if (rayQueryGetIntersectionTypeEXT(q, true) == gl_RayQueryCommittedIntersectionNoneEXT) return false;
     uvec4 s = sections[rayQueryGetIntersectionInstanceCustomIndexEXT(q, true)];
-    return emission(Verts(s.xy), s.w == 1u, tri(uint(rayQueryGetIntersectionPrimitiveIndexEXT(q, true))).x) >= 6.0;
+    return emission(Verts(s.xy), tri(uint(rayQueryGetIntersectionPrimitiveIndexEXT(q, true))).x) >= 6.0;
 }
 
 float ign(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }

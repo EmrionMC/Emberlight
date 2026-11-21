@@ -52,7 +52,7 @@ public class LevelRendererMixin {
 		if (EmrionShadersClient.active()) PackManager.onLevelEnd();
 	}
 
-	/** Iris renders the shadow pass here, after MC prepared its own chunk draws and features, before the main pass. */
+	/** Iris renders the shadow pass here, after the chunk draws (Sodium's) and features are prepared, before the main pass. */
 	@Inject(method = "render", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/LevelRenderer;addMainPass(Lcom/mojang/blaze3d/framegraph/FrameGraphBuilder;Lnet/minecraft/client/renderer/feature/FeatureRenderDispatcher$PreparedFrame;Lcom/mojang/renderpearl/api/buffers/GpuBufferSlice;Lnet/minecraft/client/renderer/chunk/ChunkSectionsToRender;Z)V"))
 	private void emrion$shadows(CallbackInfo ci) {
 		if (EmrionShadersClient.active()) GeometryHooks.renderShadows((LevelRenderer) (Object) this);

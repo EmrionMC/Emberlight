@@ -165,10 +165,10 @@ only look at their first two arguments). The shared evaluator is `expr.CustomUni
   "group": "gbuffers" | "shadow" | "begin" | "prepare" | "deferred" | "composite" | "final" | "setup" | "shadowcomp",
   "fallbackFor": ["gbuffers_terrain_solid", "gbuffers_terrain_cutout"],   // Iris names this program serves
   "stages": {
-    "vertex":   { "variants": { "terrain_mdi": "spv/world0/gbuffers_terrain.vsh.terrain_mdi.spv", "entity": "…" } },
+    "vertex":   { "variants": { "terrain_sodium": "spv/world0/gbuffers_terrain.vsh.terrain_sodium.spv", "entity": "…" } },
     "tessControl": null,   // .tcs, same shape as vertex (one module per vertex variant)
     "tessEval": null,      // .tes, same shape as vertex
-    "geometry": null,      // .gsh, same shape as vertex: { "variants": { "terrain_mdi": "spv/world0/gbuffers_terrain.gsh.terrain_mdi.spv", … } }
+    "geometry": null,      // .gsh, same shape as vertex: { "variants": { "terrain_sodium": "spv/world0/gbuffers_terrain.gsh.terrain_sodium.spv", … } }
     "fragment": { "spv": "spv/world0/gbuffers_terrain.fsh.spv" },
     "compute":  null
   },
@@ -208,8 +208,7 @@ with their attributes in canonical location order, are:
 
 | Key | MC formats | Attributes present |
 |---|---|---|
-| `terrain_mdi` | `EMRION_BLOCK` + instanced `ChunkPosition`,`ChunkVisibility` | Position, Color, UV0, UV2, Normal, mc_Entity, mc_midTexCoord, at_tangent, at_midBlock + ChunkPosition, ChunkVisibility |
-| `terrain_ubo` | `EMRION_BLOCK` (ChunkSection UBO) | same, without the two instanced ones |
+| `terrain_sodium` | `SODIUM_TERRAIN` (Sodium's compact 20 B vertex + the extras; Position/UV0/UV2 decoded, SODIUM.md §6) | Position, Color, UV0, UV2, Normal, mc_Entity, mc_midTexCoord, at_tangent, at_midBlock |
 | `entity` | `EMRION_ENTITY` (`ENTITY` + derived mc_midTexCoord, at_tangent + iris_Entity) | Position, Color, UV0, UV1, UV2, Normal, mc_midTexCoord, at_tangent, iris_Entity |
 | `particle` | `PARTICLE` | Position, UV0, Color, UV2 |
 | `block` | `BLOCK` outside chunk meshes (block items, moving blocks, `CRUMBLING`, `BEACON_BEAM_*`; DynamicTransforms) | Position, Color, UV0, UV2 |
@@ -223,7 +222,7 @@ with their attributes in canonical location order, are:
 **Tessellation and geometry stages** (gbuffers and shadow programs only; version 2). `.gsh` is always read, `.tcs`/`.tes`
 only when the pack lists `TESSELLATION_SHADERS` in `iris.features.required/optional` (Iris ProgramSet). They are compiled
 once per vertex variant like the vertex stage, because their matrices (`gl_ModelViewMatrix`, `gl_TextureMatrix[0]`,
-`chunkOffset`) depend on the variant (terrain reads TerrainUniform, everything else DynamicTransforms). Varying locations
+`chunkOffset`) depend on the variant (terrain reads Sodium's u_Globals and region push constants, everything else DynamicTransforms). Varying locations
 are assigned per program by name across VS → TCS → TES → GS → FS (per-vertex arrays count their element type), and the
 GL→Vulkan depth fix sits in the last stage before the rasterizer (`EmitVertex` in the GS, else the end of the TES, else the
 VS). With tessellation the mod draws MC's triangle lists as 3-vertex patches (Iris: `GL_TRIANGLES` → `GL_PATCHES` with GL's
@@ -237,26 +236,28 @@ single source of truth for both sides.
 
 **Canonical vertex input locations** (all variants):
 `0 Position, 1 Color, 2 UV0, 3 UV1, 4 UV2, 5 Normal, 6 mc_Entity, 7 mc_midTexCoord, 8 at_tangent, 9 at_midBlock,
-10 ChunkPosition, 11 ChunkVisibility, 12 LineWidth, 13 iris_Entity`.
+10 ChunkPosition, 11 ChunkVisibility, 12 LineWidth, 13 iris_Entity` (10 and 11 belonged to MC's chunk renderer and are unused
+since Sodium is required; kept so the other locations keep their numbers).
 
 `iris_Entity` is a `uvec3` (entityId, blockEntityId, currentRenderedItemId; vertex format RGBA16_UINT, so −1 reads as 65535
 as on Iris's USHORT attribute). Geometry programs without a geometry stage that use `entityId`/`blockEntityId`/
 `currentRenderedItemId` read them from a flat varying `emr_entityInfo` that the vertex stage fills from `iris_Entity` (variants
 that have it) or from the EmrionDraw push constants (all other variants), so the fragment stage stays variant-independent.
 
-Vertex formats the mod draws terrain and entities with while a pack is active (`EmrionVertexFormats`, 56 B each):
+Vertex format the mod draws entities with while a pack is active (`EmrionVertexFormats`, 56 B; terrain uses
+`SODIUM_TERRAIN`, SODIUM.md §6):
 
-| EMRION_BLOCK | offset | GpuFormat | | EMRION_ENTITY | offset | GpuFormat |
-|---|---|---|---|---|---|---|
-| Position | 0 | RGB32_FLOAT | | Position | 0 | RGB32_FLOAT |
-| Color | 12 | RGBA8_UNORM | | Color | 12 | RGBA8_UNORM |
-| UV0 | 16 | RG32_FLOAT | | UV0 | 16 | RG32_FLOAT |
-| UV2 | 24 | RG16_SINT | | UV1 | 24 | RG16_SINT |
-| Normal | 28 | RGBA8_SNORM (w pad) | | UV2 | 28 | RG16_SINT |
-| mc_Entity | 32 | RG16_SINT (id, 0 block / 1 fluid) | | Normal | 32 | RGBA8_SNORM (w pad) |
-| mc_midTexCoord | 36 | RG32_FLOAT | | mc_midTexCoord | 36 | RG32_FLOAT |
-| at_tangent | 44 | RGBA8_SNORM | | at_tangent | 44 | RGBA8_SNORM |
-| at_midBlock | 48 | RGBA16_FLOAT (xyz = Iris's byte (centre − vertex)·64, w = light emission) | | iris_Entity | 48 | RGBA16_UINT |
+| EMRION_ENTITY | offset | GpuFormat |
+|---|---|---|
+| Position | 0 | RGB32_FLOAT |
+| Color | 12 | RGBA8_UNORM |
+| UV0 | 16 | RG32_FLOAT |
+| UV1 | 24 | RG16_SINT |
+| UV2 | 28 | RG16_SINT |
+| Normal | 32 | RGBA8_SNORM (w pad) |
+| mc_midTexCoord | 36 | RG32_FLOAT |
+| at_tangent | 44 | RGBA8_SNORM |
+| iris_Entity | 48 | RGBA16_UINT |
 
 **set0** lists the MC per-draw resources a stage references. In the SPIR-V they carry `DescriptorSet 0` and a placeholder
 `Binding` equal to the index in this canonical table:
@@ -266,8 +267,8 @@ In every gbuffers and shadow program the pack samplers `normals` and `specular` 
 labPBR maps of the texture the draw binds as `Sampler0` (Iris's PBRTextureManager). Vanilla pipelines never push them, so
 the mod pushes them as extra set-0 samplers after the vanilla bindings, and again whenever `Sampler0` changes.
 At pipeline creation the mod rewrites each `Binding` word to the index of that name in the replaced vanilla pipeline's
-**backend** `uniforms()` list (= frontend `uniformIndices()`; ARCHITECTURE §5.2). On this NVIDIA machine, terrain uses the
-multidraw-indirect path: `terrain_mdi`, set 0 = `[Globals, Projection, TerrainUniform, Fog, Sampler2, Sampler0]`. The mod parses `OpDecorate` itself, so no spvc is needed at runtime.
+**backend** `uniforms()` list (= frontend `uniformIndices()`; ARCHITECTURE §5.2). TerrainUniform and ChunkSection belonged to MC's chunk
+pipelines; terrain is Sodium's now (`u_Globals`, `u_SectionTimeInfo`, SODIUM.md §6). The mod parses `OpDecorate` itself, so no spvc is needed at runtime.
 
 ### 7.2 Resources (descriptor set 1)
 

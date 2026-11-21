@@ -30,8 +30,6 @@ class Std140LayoutBuilderTest {
 	@Test
 	void injectedMembersAlwaysPresent() {
 		var m = build();
-		assertEquals("ivec3", m.get("emr_CameraBlockPos").type());
-		assertEquals("vec3", m.get("emr_CameraOffset").type());
 		assertEquals("vec4", m.get("emr_FogColor").type());
 		assertEquals("mat4", m.get("emr_LightmapTextureMatrix").type());
 		for (String f : List.of("emr_FogStart", "emr_FogEnd", "emr_FogDensity")) assertEquals("float", m.get(f).type());
@@ -90,18 +88,16 @@ class Std140LayoutBuilderTest {
 		// vec3s (sorted), each followed by a scalar that fills its 4-byte tail
 		assertEquals(256, m.get("cameraPosition").offset());
 		assertEquals(268, m.get("emr_FogDensity").offset());
-		assertEquals(272, m.get("emr_CameraBlockPos").offset());
+		assertEquals(272, m.get("sunPosition").offset());
 		assertEquals(284, m.get("emr_FogEnd").offset());
-		assertEquals(288, m.get("emr_CameraOffset").offset());
-		assertEquals(300, m.get("emr_FogStart").offset());
-		assertEquals(304, m.get("sunPosition").offset());
-		assertEquals(316, m.get("frameCounter").offset());
 		// then 8-aligned, then remaining scalars (bool stored as 4-byte int)
-		assertEquals(320, m.get("eyeBrightness").offset());
-		assertEquals(328, m.get("isRightHanded").offset());
+		assertEquals(288, m.get("eyeBrightness").offset());
+		assertEquals(296, m.get("emr_FogStart").offset());
+		assertEquals(300, m.get("frameCounter").offset());
+		assertEquals(304, m.get("isRightHanded").offset());
 		assertEquals("bool", m.get("isRightHanded").type());
-		assertEquals(332, m.get("near").offset());
-		assertEquals(336, layout.size());
+		assertEquals(308, m.get("near").offset());
+		assertEquals(320, layout.size());
 	}
 
 	@Test

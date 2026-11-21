@@ -10,24 +10,16 @@ import java.util.List;
  * Facade used by the CLI and the mod.
  */
 public interface Converter {
-	String VERSION = "0.1.0-alpha.1.42"; // bump on every change to converter output: it is part of the cache key
-	/** Bump on every change to the terrain_sodium output only (cache key of Sodium requests; VERSION would change every output). */
-	String SODIUM_VARIANT = "5";
+	String VERSION = "0.1.0-alpha.1.44"; // bump on every change to converter output: it is part of the cache key
 
 	/**
 	 * @param settings Iris settings .txt, may be null (= all defaults)
 	 * @param rt       RT effects to patch in, e.g. "shadows:full"; empty = plain Iris-equivalent output
-	 * @param sodium   also emit the terrain_sodium vertex variant
 	 */
 	record Request(Path pack, Path settings, Path cacheRoot, List<String> dimensions, ProgressListener progress, boolean useCache,
-	               java.util.Set<String> rt, boolean sodium) {
+	               java.util.Set<String> rt) {
 		public Request {
 			rt = rt == null ? java.util.Set.of() : java.util.Set.copyOf(rt);
-		}
-
-		public Request(Path pack, Path settings, Path cacheRoot, List<String> dimensions, ProgressListener progress, boolean useCache,
-		               java.util.Set<String> rt) {
-			this(pack, settings, cacheRoot, dimensions, progress, useCache, rt, false);
 		}
 
 		public Request(Path pack, Path settings, Path cacheRoot, List<String> dimensions, ProgressListener progress, boolean useCache) {

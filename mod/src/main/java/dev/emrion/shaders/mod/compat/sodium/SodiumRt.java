@@ -211,7 +211,7 @@ public final class SodiumRt {
 		if (pending.isEmpty()) return;
 		long tris = 0, offset = 0, posBase = scene.address(positions.handle);
 		// this frame's uploads into the arenas (RAW), last frame's builds from the position buffer (WAR) and into the shared
-		// scratch ring (WAW: the builds below reuse it, see RtScene.update)
+		// scratch ring (WAW: the builds below reuse it from offset 0)
 		Barriers.memory(cb, Barriers.TRANSFER | AS_BUILD, Barriers.TRANSFER_WRITE | AS_READ | AS_WRITE, Barriers.COMPUTE, Barriers.STORAGE_READ | Barriers.STORAGE_WRITE);
 		vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
 		try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -233,7 +233,6 @@ public final class SodiumRt {
 				pending.poll().waiting = false;
 				maxWait = Math.max(maxWait, frame - e.queued);
 				e.posAddr = posBase + offset;
-				e.posStride = 12;
 				push.putLong(0, e.vertexAddr).putLong(8, e.posAddr).putInt(16, e.quads * 4);
 				vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_ALL, 0, push);
 				vkCmdDispatch(cb, (e.quads * 4 + 63) / 64, 1, 1);
@@ -243,7 +242,7 @@ public final class SodiumRt {
 			}
 		}
 		Barriers.memory(cb, Barriers.COMPUTE, Barriers.STORAGE_WRITE, AS_BUILD, AS_READ | AS_WRITE | VK13.VK_ACCESS_2_SHADER_READ_BIT);
-		scene.buildPending(cb, batch, Long.MAX_VALUE, Integer.MAX_VALUE);
+		scene.buildPending(cb, batch);
 	}
 
 	private void dropAll(Region r) {

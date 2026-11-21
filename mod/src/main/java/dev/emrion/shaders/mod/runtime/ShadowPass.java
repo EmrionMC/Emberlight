@@ -6,25 +6,19 @@ import com.mojang.renderpearl.api.commands.RenderPass;
 import com.mojang.renderpearl.api.textures.FilterMode;
 import dev.emrion.shaders.format.Manifest;
 import dev.emrion.shaders.mod.mixin.BlockEntityRenderStateAccessor;
-import dev.emrion.shaders.mod.mixin.LevelRendererAccessor;
 import dev.emrion.shaders.mod.pipeline.GbufferPipelines.Context;
 import dev.emrion.shaders.mod.vertex.EmrionVertexFormats;
 import dev.emrion.shaders.mod.vertex.EntityIds;
 import dev.emrion.shaders.mod.uniforms.UniformSystem;
-import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.RenderBuffers;
 import net.minecraft.client.renderer.SubmitNodeStorage;
 import net.minecraft.client.renderer.blockentity.state.BlockEntityRenderState;
-import net.minecraft.client.renderer.chunk.ChunkSectionLayerGroup;
-import net.minecraft.client.renderer.chunk.ChunkSectionsToRender;
-import net.minecraft.client.renderer.chunk.SectionRenderDispatcher;
 import net.minecraft.client.renderer.culling.Frustum;
 import net.minecraft.client.renderer.feature.FeatureRenderDispatcher;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
-import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.core.BlockPos;
 import net.minecraft.util.Util;
 import net.minecraft.world.entity.Entity;
@@ -37,7 +31,7 @@ import org.joml.Vector3f;
 
 /**
  * Iris's ShadowRenderer.renderShadows on MC's own draw code, before the main pass: opaque terrain → entities → shadowtex1
- * copy → translucent terrain. Terrain reuses MC's section buffers with the shadow-culled section list; entities and block
+ * copy → translucent terrain. Terrain reuses Sodium's region buffers with the shadow-culled section list; entities and block
  * entities are extracted and submitted again into our own dispatcher, as Iris does.
  */
 final class ShadowPass {
@@ -47,23 +41,15 @@ final class ShadowPass {
 	private static final int MAX_SHADOW_RENDER_DISTANCE = 24;
 	/** Iris AdvancedShadowCullingFrustum.SECTION_HALF_SIZE − 8: model extent + epsilon around a section. */
 	private static final float SECTION_MARGIN = 1.125f;
-	/** A/B switch: false casts from every section in the shadow frustum, enclosed (unreachable) ones included. */
 	private static final ReceiverGrid GRID = new ReceiverGrid();
 	private static final org.joml.FrustumIntersection CAMERA_FRUSTUM = new org.joml.FrustumIntersection();
-	private static final ObjectArrayList<SectionRenderDispatcher.RenderSection> CANDIDATES = new ObjectArrayList<>(10000);
-	private static final boolean REACHABLE_ONLY = !"false".equals(System.getProperty("emrion.perf.shadowReachable"));
 
 	private static final ShadowCuller TERRAIN = new ShadowCuller(), ENTITIES = new ShadowCuller();
-	private static final ObjectArrayList<SectionRenderDispatcher.RenderSection> SECTIONS = new ObjectArrayList<>(10000), SAVED = new ObjectArrayList<>(10000),
-			BLOCK_ENTITY_SECTIONS = new ObjectArrayList<>();
-	private static final BlockPos.MutableBlockPos POS = new BlockPos.MutableBlockPos();
 	private static final Matrix4f VIEW_PROJECTION = new Matrix4f();
 	private static final Vector3f LIGHT = new Vector3f();
 	private static SubmitNodeStorage submits;
 	private static FeatureRenderDispatcher dispatcher;
 	private static RenderBuffers buffers;
-	/** Sections drawn last frame (debug overlay / log). */
-	static int sectionCount, entityCount;
 
 	/** True while the shadow phases render (Iris API isRenderingShadowPass). */
 	static volatile boolean rendering;
@@ -89,34 +75,21 @@ final class ShadowPass {
 		setupCullers(e, s, u, mc.options.getEffectiveRenderDistance() * 16f);
 
 		long t0 = System.nanoTime();
-		boolean sodium = dev.emrion.shaders.mod.compat.SodiumTerrain.LOADED;
 		boolean terrain = prop(e.manifest(), "shadowTerrain") || prop(e.manifest(), "shadowTranslucent");
 		// block entity casters come from the section walk too; entities have their own culler
-		if (!terrain && !prop(e.manifest(), "shadowBlockEntities") && !prop(e.manifest(), "shadowLightBlockEntities")) {
-			SECTIONS.clear();
-			BLOCK_ENTITY_SECTIONS.clear();
-			sectionCount = 0;
-		} else if (sodium) collectSodium(cam, shadowView);
-		else collectSections(level, cam, shadowView);
+		if (terrain || prop(e.manifest(), "shadowBlockEntities") || prop(e.manifest(), "shadowLightBlockEntities")) collectSodium(cam, shadowView);
 		long t1 = System.nanoTime();
-		ChunkSectionsToRender chunks = !terrain || sodium ? null : prepareTerrain(level, shadowView);
-		long t2 = System.nanoTime();
 		FeatureRenderDispatcher.PreparedFrame entities = prepareEntities(e, level, camera, shadowView);
 		long t3 = System.nanoTime();
 
-		var atlas = mc.getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS).getTextureView();
 		var sampler = RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST, true); // Iris: nearest, mipmapped
 		try {
 			try (RenderPass pass = e.beginPhase(opaque, Context.SHADOW, UniformSystem.Phase.SHADOW, GeometryHooks.TERRAIN_SOLID)) {
 				RenderSystem.bindDefaultUniforms(pass);
-				if (chunks != null && prop(e.manifest(), "shadowTerrain")) chunks.renderGroup(ChunkSectionLayerGroup.OPAQUE, pass, sampler, atlas, false);
-				if (sodium && prop(e.manifest(), "shadowTerrain")) drawSodium(pass, false, u, shadowView, cam, sampler);
+				if (prop(e.manifest(), "shadowTerrain")) drawSodium(pass, false, u, shadowView, cam, sampler);
 			}
 			e.endPhase();
-			if (ShadowStats.ENABLED) {
-				ShadowStats.cpu(t1 - t0, t2 - t1, t3 - t2, System.nanoTime() - t3, level, cam, TERRAIN, SECTIONS);
-				if (sodium) ShadowStats.sodium(cam);
-			}
+			if (ShadowStats.ENABLED) ShadowStats.cpu(t1 - t0, t3 - t1, System.nanoTime() - t3, cam);
 			Manifest.Command g = e.advanceTo("shadow_entities");
 			if (g != null && entities != null) {
 				try (RenderPass pass = e.beginPhase(g, Context.SHADOW, UniformSystem.Phase.SHADOW, GeometryHooks.ENTITIES)) {
@@ -129,11 +102,10 @@ final class ShadowPass {
 			if (entities != null) entities.close();
 		}
 		Manifest.Command translucent = e.advanceTo("shadow_translucent"); // runs the shadowtex1 copy before it
-		if (translucent != null && (chunks != null || sodium && terrain) && prop(e.manifest(), "shadowTranslucent")) {
+		if (translucent != null && terrain && prop(e.manifest(), "shadowTranslucent")) {
 			try (RenderPass pass = e.beginPhase(translucent, Context.SHADOW, UniformSystem.Phase.SHADOW, GeometryHooks.TERRAIN_TRANSLUCENT)) {
 				RenderSystem.bindDefaultUniforms(pass);
-				if (sodium) drawSodium(pass, true, u, shadowView, cam, sampler);
-				else chunks.renderGroup(ChunkSectionLayerGroup.TRANSLUCENT, pass, sampler, atlas, false);
+				drawSodium(pass, true, u, shadowView, cam, sampler);
 			}
 			e.endPhase();
 		}
@@ -147,29 +119,12 @@ final class ShadowPass {
 		var mc = Minecraft.getInstance();
 		var dispatcher = level.blockEntityRenderDispatcher();
 		float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
-		long now = Util.getMillis(), fade = Util.toMillis(mc.options.chunkSectionFadeInTime().get());
 		Vec3 cam = camera.pos;
 		java.util.List<BlockEntityRenderState> states = new java.util.ArrayList<>();
-		if (dev.emrion.shaders.mod.compat.SodiumTerrain.LOADED) {
-			for (BlockEntity be : dev.emrion.shaders.mod.compat.sodium.SodiumShadow.BLOCK_ENTITIES) {
-				if (be.isRemoved()) continue;
-				var state = dispatcher.tryExtractRenderState(be, partial, null, false);
-				if (state != null) states.add(state);
-			}
-		} else {
-		for (var section : BLOCK_ENTITY_SECTIONS) {
-			if (section.getVisibility(now, fade) < 0.3f) continue;
-			for (BlockEntity be : section.getSectionMesh().getRenderableBlockEntities()) {
-				var state = dispatcher.tryExtractRenderState(be, partial, null, false); // shortcut: no crumbling overlay in the shadow map
-				if (state != null) states.add(state);
-			}
-		}
-		for (var it = mc.level.getGloballyRenderedBlockEntities().iterator(); it.hasNext(); ) {
-			BlockEntity be = it.next();
+		for (BlockEntity be : dev.emrion.shaders.mod.compat.sodium.SodiumShadow.BLOCK_ENTITIES) {
 			if (be.isRemoved()) continue;
-			var state = dispatcher.tryExtractRenderState(be, partial, null, true);
+			var state = dispatcher.tryExtractRenderState(be, partial, null, false);
 			if (state != null) states.add(state);
-		}
 		}
 		for (var state : states) {
 			if (lightsOnly && ((BlockEntityRenderStateAccessor) state).emrion$blockState().getLightEmission() == 0) continue;
@@ -224,51 +179,6 @@ final class ShadowPass {
 
 	// ---- terrain ---------------------------------------------------------------------------------------------------
 
-	/** The shadow-visible sections: with renderable layers (SECTIONS) and with renderable block entities (BLOCK_ENTITY_SECTIONS). */
-	private static void collectSections(LevelRenderer level, Vec3 cam, Matrix4fc shadowView) {
-		var area = level.viewArea();
-		var graph = ((LevelRendererAccessor) level).emrion$sectionOcclusionGraph();
-		String mode = ReceiverGrid.mode;
-		SECTIONS.clear();
-		BLOCK_ENTITY_SECTIONS.clear();
-		CANDIDATES.clear();
-		boolean receivers = beginReceivers(mode, shadowView);
-		if (area != null) {
-			var center = area.getCameraSectionPos();
-			int r = area.getViewDistance();
-			for (int sx = center.x() - r; sx <= center.x() + r; sx++) {
-				for (int sz = center.z() - r; sz <= center.z() + r; sz++) {
-					float minX = (float) ((sx << 4) - cam.x), minZ = (float) ((sz << 4) - cam.z);
-					for (int sy = area.minSectionY(); sy < area.maxSectionY(); sy++) {
-						float minY = (float) ((sy << 4) - cam.y);
-						if (!TERRAIN.visible(minX - SECTION_MARGIN, minY - SECTION_MARGIN, minZ - SECTION_MARGIN, minX + 16 + SECTION_MARGIN,
-								minY + 16 + SECTION_MARGIN, minZ + 16 + SECTION_MARGIN)) continue;
-						var section = area.getRenderSectionAt(POS.set(sx << 4, sy << 4, sz << 4));
-						// Iris/Sodium mesh (and so cast from) only what the occlusion flood fill from the camera reaches, frustum or not; MC's
-						// graph is that flood fill (the frustum is applied afterwards), so enclosed caves stay out, as under Iris
-						if (section == null || REACHABLE_ONLY && graph.getNode(section) == null) continue;
-						ForcedSections.want(net.minecraft.core.SectionPos.asLong(sx, sy, sz)); // Iris: the shadow frustum schedules its own rebuilds
-						// receivers: everything the camera sees, air included (volumetric light and clouds sample the shadow map in it)
-						if (receivers && CAMERA_FRUSTUM.testAab(minX - 1, minY - 1, minZ - 1, minX + 17, minY + 17, minZ + 17))
-							GRID.addReceiver(minX, minY, minZ, minX + 16, minY + 16, minZ + 16);
-						// empty sections draw nothing, but MC's draw preparation still costs time and an allocation each
-						if (section.getSectionMesh().hasRenderableLayers() || !section.getSectionMesh().getRenderableBlockEntities().isEmpty())
-							CANDIDATES.add(section);
-					}
-				}
-			}
-		}
-		for (var section : CANDIDATES) {
-			if (receivers) {
-				var o = section.getRenderOrigin();
-				if (!casts(mode, (float) (o.getX() - cam.x), (float) (o.getY() - cam.y), (float) (o.getZ() - cam.z))) continue;
-			}
-			if (section.getSectionMesh().hasRenderableLayers()) SECTIONS.add(section);
-			if (!section.getSectionMesh().getRenderableBlockEntities().isEmpty()) BLOCK_ENTITY_SECTIONS.add(section);
-		}
-		sectionCount = SECTIONS.size();
-	}
-
 	/** Receiver test of a candidate section (camera-relative minimum corner). */
 	private static boolean casts(String mode, float x, float y, float z) {
 		return TERRAIN.inSafe(x, y, z, x + 16, y + 16, z + 16)
@@ -288,13 +198,10 @@ final class ShadowPass {
 		return true;
 	}
 
-	/** collectSections under Sodium: the same tests over Sodium's built sections (compat.sodium.SodiumShadow). */
+	/** The shadow-visible sections: the culler and receiver tests over Sodium's built sections (compat.sodium.SodiumShadow). */
 	private static void collectSodium(Vec3 cam, Matrix4fc shadowView) {
-		SECTIONS.clear();
-		BLOCK_ENTITY_SECTIONS.clear();
 		String mode = ReceiverGrid.mode;
 		dev.emrion.shaders.mod.compat.sodium.SodiumShadow.collect(new SodiumCuller(mode, beginReceivers(mode, shadowView), shadowView), cam.x, cam.y, cam.z);
-		sectionCount = dev.emrion.shaders.mod.compat.sodium.SodiumShadow.sectionCount;
 	}
 
 	private record SodiumCuller(String mode, boolean receivers, Matrix4fc view) implements dev.emrion.shaders.mod.compat.sodium.SodiumShadow.Culler {
@@ -323,23 +230,6 @@ final class ShadowPass {
 	private static void drawSodium(RenderPass pass, boolean translucent, UniformSystem u, Matrix4fc shadowView, Vec3 cam,
 			com.mojang.renderpearl.api.textures.GpuSampler sampler) {
 		dev.emrion.shaders.mod.compat.sodium.SodiumShadow.draw(pass, translucent, u.shadowProjection(), shadowView, cam.x, cam.y, cam.z, sampler);
-	}
-
-	/** MC's draws for the shadow-visible sections, prepared with the shadow model-view (the main list is restored after). */
-	private static ChunkSectionsToRender prepareTerrain(LevelRenderer level, Matrix4fc shadowView) {
-		var visible = level.visibleSections();
-		SAVED.clear();
-		SAVED.addAll(visible);
-		visible.clear();
-		visible.addAll(SECTIONS);
-		try {
-			return ((LevelRendererAccessor) level).emrion$usingMultiDrawIndirect()
-					? level.prepareChunkRendersIndirect(shadowView, false) : level.prepareChunkRenders(shadowView, false);
-		} finally {
-			visible.clear();
-			visible.addAll(SAVED);
-			SAVED.clear();
-		}
 	}
 
 	// ---- entities --------------------------------------------------------------------------------------------------
@@ -394,7 +284,6 @@ final class ShadowPass {
 		var props = e.manifest();
 		boolean all = prop(props, "shadowEntities"), player = prop(props, "shadowPlayer");
 		boolean blockEntities = prop(props, "shadowBlockEntities"), lights = prop(props, "shadowLightBlockEntities");
-		entityCount = 0;
 		if (mc.level == null || mc.player == null || !all && !player && !blockEntities && !lights) return null;
 		ensureDispatcher();
 		Vec3 cam = camera.pos;
@@ -419,7 +308,6 @@ final class ShadowPass {
 			}
 			var state = entityDispatcher.extractEntity(entity, partial);
 			entityDispatcher.submit(state, camera, state.x - cam.x, state.y - cam.y, state.z - cam.z, pose, submits);
-			entityCount++;
 		}
 		if (blockEntities || lights) submitBlockEntities(level, camera, pose, !blockEntities);
 		// RenderType.prepare captures the model-view stack: the shadow camera instead of the player's; ENTITY draws are written

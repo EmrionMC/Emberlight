@@ -13,8 +13,7 @@ import org.lwjgl.system.MemoryUtil;
 
 /** BufferBuilder for the extended formats (Iris MixinBufferBuilder): adds ids per vertex, and normal, tangent and mid UV per finished polygon. */
 public final class ExtendedBufferBuilder extends BufferBuilder {
-	private final int stride, color, uv, uv1, uv2, normal, mid, tangent, extra, midBlock;
-	private final @Nullable BlockContext block;
+	private final int stride, color, uv, uv1, uv2, normal, mid, tangent, extra;
 	private final VertexFormat format;
 	/** GLYPH: MC's text code sets neither Normal nor UV1; we set them so the vertex is complete (Normal is replaced per quad). */
 	private final boolean glyph;
@@ -23,22 +22,20 @@ public final class ExtendedBufferBuilder extends BufferBuilder {
 	private int pending;
 	private final float[] p = new float[12], t = new float[8], n = new float[3];
 
-	/** {@code block} non-null = terrain format. */
-	public ExtendedBufferBuilder(ByteBufferBuilder buffer, PrimitiveTopology topology, VertexFormat format, @Nullable BlockContext block) {
+	/** EMRION_ENTITY or GLYPH. */
+	public ExtendedBufferBuilder(ByteBufferBuilder buffer, PrimitiveTopology topology, VertexFormat format) {
 		super(buffer, topology, format);
-		this.block = block;
 		this.format = format;
 		glyph = format == EmrionVertexFormats.GLYPH;
 		stride = format.getVertexSize();
 		color = format.getElement("Color").offset();
 		uv = format.getElement("UV0").offset();
-		uv1 = block == null ? format.getElement("UV1").offset() : -1; // the terrain format has no UV1
+		uv1 = format.getElement("UV1").offset();
 		uv2 = format.getElement("UV2").offset();
 		normal = format.getElement("Normal").offset();
 		mid = format.getElement("mc_midTexCoord").offset();
 		tangent = format.getElement("at_tangent").offset();
-		extra = format.getElement(block != null ? "mc_Entity" : "iris_Entity").offset();
-		midBlock = block != null ? format.getElement("at_midBlock").offset() : -1;
+		extra = format.getElement("iris_Entity").offset();
 		polygon = topology == PrimitiveTopology.QUADS ? 4 : topology == PrimitiveTopology.TRIANGLES ? 3 : 0;
 	}
 
@@ -48,20 +45,9 @@ public final class ExtendedBufferBuilder extends BufferBuilder {
 		super.addVertex(x, y, z);
 		if (glyph) setOverlay(OverlayTexture.NO_OVERLAY).setNormal(0f, 1f, 0f); // Iris injects the same up normal before the face normal
 		long v = ((BufferBuilderAccessor) (Object) this).emrion$vertexPointer();
-		BlockContext b = block;
-		if (b != null) {
-			MemoryUtil.memPutShort(v + extra, (short) b.id);
-			MemoryUtil.memPutShort(v + extra + 2, (short) b.renderType);
-			long m = v + midBlock;
-			MemoryUtil.memPutShort(m, Float.floatToFloat16(QuadMath.midBlock(b.x, x)));
-			MemoryUtil.memPutShort(m + 2, Float.floatToFloat16(QuadMath.midBlock(b.y, y)));
-			MemoryUtil.memPutShort(m + 4, Float.floatToFloat16(QuadMath.midBlock(b.z, z)));
-			MemoryUtil.memPutShort(m + 6, Float.floatToFloat16(b.emission));
-		} else {
-			// w = object motion slot (0 while untracked) | local player flag
-			MemoryUtil.memPutLong(v + extra, EntityIds.packed()
-					| (long) (dev.emrion.shaders.mod.upscale.ObjectMotion.w | (EntityIds.localPlayer ? EntityIds.LOCAL_PLAYER_W : 0)) << 48);
-		}
+		// w = object motion slot (0 while untracked) | local player flag
+		MemoryUtil.memPutLong(v + extra, EntityIds.packed()
+				| (long) (dev.emrion.shaders.mod.upscale.ObjectMotion.w | (EntityIds.localPlayer ? EntityIds.LOCAL_PLAYER_W : 0)) << 48);
 		if (polygon == 0) {
 			MemoryUtil.memPutLong(v + mid, 0L);
 			MemoryUtil.memPutInt(v + tangent, 0);
@@ -76,7 +62,7 @@ public final class ExtendedBufferBuilder extends BufferBuilder {
 	 */
 	@Override
 	public void addVertex(float x, float y, float z, int argb, float u, float v, int overlay, int light, float nx, float ny, float nz) {
-		if (block != null || glyph || !LITTLE_ENDIAN) { // big endian: vanilla's byte order handling
+		if (glyph || !LITTLE_ENDIAN) { // big endian: vanilla's byte order handling
 			super.addVertex(x, y, z, argb, u, v, overlay, light, nx, ny, nz);
 			return;
 		}
@@ -102,7 +88,7 @@ public final class ExtendedBufferBuilder extends BufferBuilder {
 
 	/** Sodium's VertexBufferWriter fast path (ExtendedBufferBuilderMixin): entity quads only; text keeps the VertexConsumer calls. */
 	public boolean acceptsPush() {
-		return block == null && !glyph && polygon == 4;
+		return !glyph && polygon == 4;
 	}
 
 	/** Normal too: finishPolygon recomputes it per quad, but a vertex left outside a complete quad keeps the source's. */

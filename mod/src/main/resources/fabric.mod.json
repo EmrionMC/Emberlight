@@ -22,16 +22,11 @@
   "depends": {
     "fabricloader": ">=0.20.1",
     "minecraft": "~26.3",
-    "fabric-api": "*"
-  },
-  "recommends": {
-    "sodium": "0.9.3-beta.5"
+    "fabric-api": "*",
+    "sodium": ">=0.9.3-beta.5"
   },
   "breaks": {
-    "sodium": [
-      "<0.9.3-beta.5",
-      ">0.9.3-beta.5"
-    ]
+    "sodium": ">0.9.3-beta.5"
   },
   "icon": "assets/emberlight/icon.png",
   "custom": {

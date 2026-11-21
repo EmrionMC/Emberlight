@@ -24,7 +24,7 @@ public final class GbufferMapping {
 	}
 
 	static {
-		put("gbuffers_terrain_solid", OFF, false, SOLID_TERRAIN, SOLID_TERRAIN_MULTIDRAW, SOLID_BLOCK, WIREFRAME, WIREFRAME_MULTIDRAW);
+		put("gbuffers_terrain_solid", OFF, false, SOLID_TERRAIN, SOLID_TERRAIN_MULTIDRAW, SOLID_BLOCK);
 		put("gbuffers_terrain_cutout", HALF, false, CUTOUT_TERRAIN, CUTOUT_TERRAIN_MULTIDRAW, CUTOUT_BLOCK);
 		put("gbuffers_water", NON_ZERO, true, TRANSLUCENT_TERRAIN, TRANSLUCENT_TERRAIN_MULTIDRAW);
 		put("gbuffers_block", ONE_TENTH, true, TRANSLUCENT_BLOCK);
@@ -62,7 +62,14 @@ public final class GbufferMapping {
 			OUTLINE_CULL, OUTLINE_NO_CULL, LIGHTMAP, ANIMATE_SPRITE_BLIT, ANIMATE_SPRITE_INTERPOLATE, BLIT_DEPTH_BOUNDS, OIT_DEPTH_BOUNDS_CULL,
 			BLIT_DEPTH_DURING_DEPTH_BOUNDS, BLIT_DEPTH, OIT_COMPOSITE, INTEGRATE_DEPTH);
 
-	/** Every vanilla pipeline that may draw in a world phase (all RenderPipelines constants minus GUI/post). */
+	/**
+	 * MC's chunk pipelines: Sodium draws the chunks with its own (named after these, see {@link #get}), so none is built for them.
+	 * WIREFRAME draws MC's chunk buffers too, which stay empty under Sodium.
+	 */
+	private static final Set<RenderPipeline> CHUNKS = Set.of(SOLID_TERRAIN, SOLID_TERRAIN_MULTIDRAW, CUTOUT_TERRAIN, CUTOUT_TERRAIN_MULTIDRAW,
+			TRANSLUCENT_TERRAIN, TRANSLUCENT_TERRAIN_MULTIDRAW, WIREFRAME, WIREFRAME_MULTIDRAW);
+
+	/** Every vanilla pipeline that may draw in a world phase (all RenderPipelines constants minus GUI/post and chunks). */
 	public static List<RenderPipeline> worldPipelines() {
 		List<RenderPipeline> out = new ArrayList<>();
 		for (var f : net.minecraft.client.renderer.RenderPipelines.class.getFields()) {
@@ -70,7 +77,7 @@ public final class GbufferMapping {
 			try {
 				RenderPipeline p = (RenderPipeline) f.get(null);
 				// points: pack vertex shaders never write gl_PointSize, which a POINT_LIST pipeline needs (VUID-...-topology-08773)
-				if (!NOT_WORLD.contains(p) && !out.contains(p) && p.getPrimitiveTopology() != com.mojang.renderpearl.api.pipeline.PrimitiveTopology.POINTS) out.add(p);
+				if (!NOT_WORLD.contains(p) && !CHUNKS.contains(p) && !out.contains(p) && p.getPrimitiveTopology() != com.mojang.renderpearl.api.pipeline.PrimitiveTopology.POINTS) out.add(p);
 			} catch (IllegalAccessException e) {
 				throw new IllegalStateException(e);
 			}

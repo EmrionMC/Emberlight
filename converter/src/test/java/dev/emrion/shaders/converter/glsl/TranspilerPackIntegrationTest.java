@@ -48,9 +48,10 @@ class TranspilerPackIntegrationTest {
 
 	static List<String> variants(String program) {
 		return switch (program) {
-			case "shadow" -> List.of("terrain_mdi", "terrain_ubo", "entity");
-			case "gbuffers_terrain", "gbuffers_water", "gbuffers_damagedblock" -> List.of("terrain_mdi", "terrain_ubo");
-			case "gbuffers_block", "gbuffers_block_translucent" -> List.of("terrain_mdi", "entity");
+			case "shadow" -> List.of("terrain_sodium", "entity");
+			case "gbuffers_terrain", "gbuffers_water" -> List.of("terrain_sodium");
+			case "gbuffers_damagedblock" -> List.of("block");
+			case "gbuffers_block", "gbuffers_block_translucent" -> List.of("entity");
 			case "gbuffers_entities", "gbuffers_entities_glowing", "gbuffers_entities_translucent", "gbuffers_hand",
 			     "gbuffers_hand_water", "gbuffers_armor_glint", "gbuffers_spidereyes", "gbuffers_beaconbeam" -> List.of("entity");
 			case "gbuffers_skytextured" -> List.of("position_tex_color", "position_tex");

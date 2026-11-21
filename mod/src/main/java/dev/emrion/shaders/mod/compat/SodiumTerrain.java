@@ -1,15 +1,11 @@
 package dev.emrion.shaders.mod.compat;
 
-import net.fabricmc.loader.api.FabricLoader;
-
 /**
- * Sodium's chunk renderer, reached by name (no compile-time dependency on Sodium). Sodium replaces
- * vanilla meshing; compat.sodium holds the code that needs Sodium's types.
+ * Sodium's chunk renderer, reached by name. Sodium (a required dependency) replaces vanilla meshing; compat.sodium holds
+ * the code that needs Sodium's types.
  */
 public final class SodiumTerrain {
 	private SodiumTerrain() {}
-
-	public static final boolean LOADED = FabricLoader.getInstance().isModLoaded("sodium");
 
 	/**
 	 * Sodium's terrain pipelines (solid, cutout, translucent), created now through a throwaway DefaultChunkRenderer so we can

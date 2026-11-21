@@ -304,22 +304,6 @@ class GlslTranspilerTest {
 	// ---- step 5: vertex inputs ----
 
 	@Test
-	void terrainMdiReconstructsChunkOffsetFromInstancedInput() throws Exception {
-		Out o = gbuffers("terrain_mdi", VS, FS);
-		assertTrue(o.vs().contains("vec4((emr_in_Position + (vec3(emr_in_ChunkPosition - emr_CameraBlockPos) + emr_CameraOffset)), 1.0)"));
-		assertTrue(o.vs().contains("layout(location = 10) in ivec3 emr_in_ChunkPosition;"));
-		assertTrue(o.vs().contains("emr_terrain.ModelViewMat"));
-		assertTrue(o.vs().contains("layout(offset = "), "camera members live in EmrionUniforms");
-	}
-
-	@Test
-	void terrainUboReadsChunkPositionFromChunkSection() throws Exception {
-		Out o = gbuffers("terrain_ubo", VS, FS);
-		assertTrue(o.vs().contains("emr_chunk.ChunkPosition - emr_CameraBlockPos"));
-		assertTrue(o.vs().contains("layout(std140, set = 0, binding = 2) uniform ChunkSection"));
-	}
-
-	@Test
 	void entityModelViewIncludesModelOffset() throws Exception {
 		Out o = run("gbuffers_entities", ProgramGroup.GBUFFERS, "entity", null, null, VS, FS);
 		assertTrue(o.vs().contains("(emr_dt.ModelViewMat * emr_translate(emr_dt.ModelOffset))"));
@@ -328,7 +312,7 @@ class GlslTranspilerTest {
 
 	@Test
 	void canonicalInputsHaveFixedLocations() throws Exception {
-		Out o = gbuffers("terrain_mdi", """
+		Out o = gbuffers("terrain_sodium", """
 				#version 130
 				attribute vec4 mc_Entity;
 				attribute vec4 at_tangent;
@@ -355,11 +339,11 @@ class GlslTranspilerTest {
 	}
 
 	@Test
-	void chunkFadeComesFromChunkVisibilityInGbuffersTerrain() throws Exception {
+	void chunkFadeComesFromSodiumInGbuffersTerrain() throws Exception {
 		String vs = "#version 130\nvarying float f;\nvoid main() { f = mc_chunkFade; gl_Position = ftransform(); }\n";
 		String fs = "#version 130\nvarying float f;\nvoid main() { gl_FragData[0] = vec4(f); }\n";
-		assertTrue(gbuffers("terrain_mdi", vs, fs).vs().contains("f = emr_in_ChunkVisibility;"));
-		assertTrue(run("shadow", ProgramGroup.SHADOW, "terrain_mdi", null, null, vs, fs).vs().contains("f = -1.0;"));
+		assertTrue(gbuffers("terrain_sodium", vs, fs).vs().contains("f = emr_sodChunkFade();"));
+		assertTrue(run("shadow", ProgramGroup.SHADOW, "terrain_sodium", null, null, vs, fs).vs().contains("f = -1.0;"));
 	}
 
 	// ---- step 6: matrices and compat built-ins ----
@@ -378,13 +362,13 @@ class GlslTranspilerTest {
 
 	@Test
 	void projectionAndNormalMatrix() throws Exception {
-		Out o = gbuffers("terrain_mdi", """
+		Out o = gbuffers("terrain_sodium", """
 				#version 130
 				varying vec3 n;
 				void main() { n = gl_NormalMatrix * gl_Normal; gl_Position = gl_ProjectionMatrix * gl_ModelViewMatrix * gl_Vertex; }
 				""", "#version 130\nvarying vec3 n;\nvoid main() { gl_FragData[0] = vec4(n, 1.0); }\n");
-		assertTrue(o.vs().contains("mat3(transpose(inverse(mat3(emr_terrain.ModelViewMat)))) * emr_in_Normal"));
-		assertTrue(o.vs().contains("gl_Position = emr_phase.emr_ProjMat * emr_terrain.ModelViewMat *"));
+		assertTrue(o.vs().contains("mat3(transpose(inverse(mat3(emr_sodGlobals.u_ModelViewMatrix)))) * emr_in_Normal"), o.vs());
+		assertTrue(o.vs().contains("gl_Position = emr_phase.emr_ProjMat * emr_sodGlobals.u_ModelViewMatrix *"));
 		assertTrue(o.vs().contains("uniform EmrionPhase { layout(offset = 0) mat4 emr_ProjMat; layout(offset = 64) mat4 emr_ProjMatInverse; layout(offset = 128) int renderStage; layout(offset = 136) vec2 emr_Jitter; } emr_phase;"));
 		// the upscaler's jitter after the pack's own projection (packs drop it from gl_ProjectionMatrix with projMAD)
 		assertTrue(o.vs().contains("emr_main();\n\tgl_Position.xy += emr_phase.emr_Jitter * gl_Position.w;\n\tgl_Position.z = (gl_Position.z + gl_Position.w) * 0.5;\n}"));
@@ -767,7 +751,7 @@ class GlslTranspilerTest {
 						void main() { gl_FragData[0] = texture2D(tex, texCoord2) * tint; }
 						"""));
 		Transpiler.ProgramAnalysis a = TR.analyze(st);
-		Map<StageType, String> g = TR.emit(a, TranspilerTestSupport.context(a, null), "terrain_mdi").glsl();
+		Map<StageType, String> g = TR.emit(a, TranspilerTestSupport.context(a, null), "terrain_sodium").glsl();
 		assertEquals(5, g.size());
 		if (validator) for (var e : g.entrySet()) {
 			String err = TranspilerTestSupport.validate(tmp, "tess_" + e.getKey(), e.getKey(), e.getValue());
@@ -784,11 +768,11 @@ class GlslTranspilerTest {
 		assertTrue(seen.keySet().containsAll(List.of("texCoord", "tcCoord", "level", "teCoord", "texCoord2", "tint")), seen.toString());
 		assertEquals(seen.size(), new java.util.HashSet<>(seen.values()).size(), "distinct locations: " + seen);
 		// terrain transforms in the intermediate stages too (the GS is compiled per vertex variant)
-		assertTrue(g.get(StageType.GEOMETRY).contains("emr_terrain.ModelViewMat"), g.get(StageType.GEOMETRY));
+		assertTrue(g.get(StageType.GEOMETRY).contains("emr_sodGlobals.u_ModelViewMatrix"), g.get(StageType.GEOMETRY));
 		assertTrue(g.get(StageType.GEOMETRY).contains("vec3 missing[32] = vec3[32]("), g.get(StageType.GEOMETRY));
 		// TES as the last stage gets the fix
 		Map<StageType, String> noGs = TR.emit(TR.analyze(List.of(st.get(0), st.get(1), st.get(2), st.get(4))),
-				TranspilerTestSupport.context(a, null), "terrain_mdi").glsl();
+				TranspilerTestSupport.context(a, null), "terrain_sodium").glsl();
 		assertTrue(noGs.get(StageType.TESS_EVAL).contains(fix));
 		assertFalse(noGs.get(StageType.VERTEX).contains(fix));
 	}
@@ -807,7 +791,7 @@ class GlslTranspilerTest {
 
 	@Test
 	void albedoAndLightmapSamplersGoToSet0InGbuffers() throws Exception {
-		Out o = gbuffers("terrain_mdi", VS, """
+		Out o = gbuffers("terrain_sodium", VS, """
 				#version 130
 				uniform sampler2D texture;
 				uniform sampler2D lightmap;
@@ -832,7 +816,7 @@ class GlslTranspilerTest {
 				varying vec2 texCoord;
 				void main() { gl_FragData[0] = texture2D(normals, texCoord) + texture2D(specular, texCoord); }
 				""";
-		for (String variant : List.of("terrain_mdi", "entity")) {
+		for (String variant : List.of("terrain_sodium", "entity")) {
 			Out o = gbuffers(variant, VS, fs);
 			assertTrue(o.fs().contains("layout(set = 0, binding = 8) uniform sampler2D normals;"), o.fs());
 			assertTrue(o.fs().contains("layout(set = 0, binding = 9) uniform sampler2D specular;"));
@@ -913,10 +897,9 @@ class GlslTranspilerTest {
 
 	@Test
 	void analysisReportsSet0AndInputsForGeometry() throws Exception {
-		Out o = gbuffers("terrain_mdi", VS, FS);
-		assertEquals(List.of("DynamicTransforms", "TerrainUniform", "ChunkSection", "Sampler0"), o.analysis().set0());
-		assertEquals(List.of("Position", "UV0", "ChunkPosition"), o.analysis().vertexInputs());
-		assertTrue(o.analysis().uniforms().stream().anyMatch(u -> u.name().equals("emr_CameraBlockPos") && u.glslType().equals("ivec3")));
+		Out o = gbuffers("terrain_sodium", VS, FS);
+		assertEquals(List.of("DynamicTransforms", "Sampler0"), o.analysis().set0());
+		assertEquals(List.of("Position", "UV0"), o.analysis().vertexInputs());
 		assertTrue(o.diagnostics().isEmpty(), o.diagnostics().toString());
 	}
 

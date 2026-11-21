@@ -25,8 +25,8 @@ import java.util.TreeMap;
  * Composite/Compatibility transformers (iris-spec §8), reimplemented on a token stream plus {@link GlslParser}.
  * Stateless: every call re-parses its input.
  *
- * <p>Injected names all start with {@code emr_}: blocks {@code emr_dt} (DynamicTransforms), {@code emr_terrain}
- * (TerrainUniform), {@code emr_chunk} (ChunkSection), {@code emr_phase} (EmrionPhase), {@code emr_draw} (push constants
+ * <p>Injected names all start with {@code emr_}: blocks {@code emr_dt} (DynamicTransforms), {@code emr_sodGlobals} (Sodium's
+ * u_Globals), {@code emr_phase} (EmrionPhase), {@code emr_draw} (push constants
  * EmrionDraw), vertex inputs {@code emr_in_<Canonical>}, outputs {@code emr_FragData<i>}, renamed keywords
  * {@code emr_kw_<name>}, the pack's {@code main} becomes {@code emr_main} inside a generated {@code main} wrapper.
  */
@@ -39,7 +39,7 @@ public final class GlslTranspiler implements Transpiler {
 			Map.entry("Position", "vec3"), Map.entry("Color", "vec4"), Map.entry("UV0", "vec2"), Map.entry("UV1", "ivec2"),
 			Map.entry("UV2", "ivec2"), Map.entry("Normal", "vec3"), Map.entry("mc_Entity", "ivec2"),
 			Map.entry("mc_midTexCoord", "vec2"), Map.entry("at_tangent", "vec4"), Map.entry("at_midBlock", "vec4"),
-			Map.entry("ChunkPosition", "ivec3"), Map.entry("ChunkVisibility", "float"), Map.entry("LineWidth", "float"),
+			Map.entry("LineWidth", "float"),
 			Map.entry("iris_Entity", "uvec3"));
 
 	/** Per-draw ids that Iris reads from the iris_Entity attribute (EntityPatcher): name → component of emr_entityInfo. */
@@ -75,8 +75,7 @@ public final class GlslTranspiler implements Transpiler {
 	}
 
 	/** EmrionUniforms members the transpiler itself references (must be in the layout when used). */
-	static final Map<String, String> INJECTED_UNIFORMS = Map.of("emr_CameraBlockPos", "ivec3", "emr_CameraOffset", "vec3",
-			"emr_FogStart", "float", "emr_FogEnd", "float", "emr_FogDensity", "float", "emr_FogColor", "vec4");
+	static final Map<String, String> INJECTED_UNIFORMS = Map.of("emr_FogStart", "float", "emr_FogEnd", "float", "emr_FogDensity", "float", "emr_FogColor", "vec4");
 
 	static final Set<String> ALBEDO = Set.of("tex", "texture", "gtexture", "gcolor", "u_MainSampler");
 
@@ -552,18 +551,12 @@ public final class GlslTranspiler implements Transpiler {
 			}
 			if (p.geometry && s.type == StageType.VERTEX) {
 				boolean position = s.used("gl_Vertex") || s.used("ftransform") || s.used("vaPosition") || s.used("chunkOffset");
-				if (position) {
-					uniforms.putIfAbsent("emr_CameraBlockPos", new UniformDecl("emr_CameraBlockPos", "ivec3", 0, null));
-					uniforms.putIfAbsent("emr_CameraOffset", new UniformDecl("emr_CameraOffset", "vec3", 0, null));
-					inputs.add("Position");
-					inputs.add("ChunkPosition");
-				}
+				if (position) inputs.add("Position");
 				if (s.used("gl_Color") || s.used("vaColor")) inputs.add("Color");
 				if (s.used("gl_MultiTexCoord0") || s.used("vaUV0")) inputs.add("UV0");
 				if (s.used("gl_MultiTexCoord1") || s.used("gl_MultiTexCoord2") || s.used("vaUV2")) inputs.add("UV2");
 				if (s.used("gl_Normal") || s.used("vaNormal")) inputs.add("Normal");
 				if (s.used("gl_MultiTexCoord3")) inputs.add("mc_midTexCoord");
-				if (s.used("mc_chunkFade")) inputs.add("ChunkVisibility");
 				if (p.entityColorVarying || s.used("vaUV1")) inputs.add("UV1");
 				if (p.entityIdVarying) inputs.add("iris_Entity");
 				for (Var a : s.attributes) {
@@ -572,14 +565,14 @@ public final class GlslTranspiler implements Transpiler {
 				}
 				boolean transforms = position || s.used("gl_ModelViewMatrix") || s.used("gl_Color") || s.used("gl_TextureMatrix")
 						|| s.used("gl_NormalMatrix") || s.used("modelViewMatrix") || s.used("vaColor") || p.entityColorVarying;
-				if (transforms) set0.addAll(List.of("DynamicTransforms", "TerrainUniform", "ChunkSection"));
+				if (transforms) set0.add("DynamicTransforms");
 				if (List.of("gbuffers_clouds", "gbuffers_textured", "gbuffers_basic").contains(p.name)) set0.addAll(List.of("CloudInfo", "CloudFaces")); // the clouds variant pulls its vertices
 				if (p.entityColorVarying) set0.add("Sampler1");
 			}
 			if (p.geometry && s.type.intermediate()) {
 				for (String n : List.of("gl_ModelViewMatrix", "gl_ModelViewMatrixInverse", "gl_ModelViewProjectionMatrix", "gl_NormalMatrix",
 						"gl_TextureMatrix", "gl_Color", "modelViewMatrix", "modelViewMatrixInverse", "normalMatrix", "textureMatrix", "chunkOffset"))
-					if (s.used(n)) set0.addAll(List.of("DynamicTransforms", "TerrainUniform", "ChunkSection"));
+					if (s.used(n)) set0.add("DynamicTransforms");
 			}
 		}
 		List<String> orderedSet0 = new ArrayList<>();
@@ -682,7 +675,7 @@ public final class GlslTranspiler implements Transpiler {
 		final EmitContext ctx;
 		final String variant;
 		final List<String> variantInputs;
-		final boolean terrain, sodium, clouds, fullscreen, lastVertexStage;
+		final boolean terrain, clouds, fullscreen, lastVertexStage;
 		final Map<String, String> repl = new HashMap<>();
 		final Map<String, String> callRepl = new HashMap<>();
 		final List<String> prologue = new ArrayList<>(), epilogue = new ArrayList<>();
@@ -701,8 +694,7 @@ public final class GlslTranspiler implements Transpiler {
 			if (variant != null && !VertexLayouts.VARIANTS.containsKey(variant)) {
 				diagnostics.add(Diagnostic.error(s.src.sourcePath(), 0, "unknown vertex variant " + variant));
 			}
-			this.terrain = variant != null && variant.startsWith("terrain");
-			this.sodium = "terrain_sodium".equals(variant);
+			this.terrain = "terrain_sodium".equals(variant); // Sodium's chunk meshes, the only terrain variant
 			this.clouds = "clouds".equals(variant);
 			this.fullscreen = !p.geometry;
 			// the depth fix (GL clip z → Vulkan) belongs in the last stage before the rasterizer
@@ -721,7 +713,7 @@ public final class GlslTranspiler implements Transpiler {
 					default -> {}
 				}
 			}
-			if (sodium) { // decoded from Sodium's compact format (VertexLayouts.SODIUM_INPUTS), as Iris's SodiumTransformer does
+			if (terrain) { // decoded from Sodium's compact format (VertexLayouts.SODIUM_INPUTS), as Iris's SodiumTransformer does
 				switch (canon) {
 					case "Position" -> { return "emr_sodPosition()"; }
 					case "UV0" -> { return "emr_sodUV0()"; }
@@ -843,7 +835,7 @@ public final class GlslTranspiler implements Transpiler {
 			if (s.used("mc_chunkFade") && !declaredAnywhere("mc_chunkFade")) {
 				String fade = "-1.0";
 				if (vs && terrain && p.group == ProgramGroup.GBUFFERS)
-					fade = sodium ? "emr_sodChunkFade()" : has("ChunkVisibility") ? in("ChunkVisibility") : "emr_chunk.ChunkVisibility";
+					fade = "emr_sodChunkFade()";
 				repl.put("mc_chunkFade", fade);
 			}
 			if (lastVertexStage && st == StageType.GEOMETRY) callRepl.put("EmitVertex", "emr_EmitVertex");
@@ -875,12 +867,8 @@ public final class GlslTranspiler implements Transpiler {
 			return n;
 		}
 
-		String chunkPosition() { return has("ChunkPosition") ? in("ChunkPosition") : "emr_chunk.ChunkPosition"; }
-
-		String chunkOffset() { return "(vec3(" + chunkPosition() + " - emr_CameraBlockPos) + emr_CameraOffset)"; }
-
 		void geometryTable(boolean vs) {
-			String mvRaw = sodium ? sodiumModelView() : terrain ? "emr_terrain.ModelViewMat" : "emr_dt.ModelViewMat";
+			String mvRaw = terrain ? sodiumModelView() : "emr_dt.ModelViewMat";
 			String mv = terrain || p.core ? mvRaw : "(emr_dt.ModelViewMat * emr_translate(emr_dt.ModelOffset))";
 			String proj = "emr_phase.emr_ProjMat";
 			repl.put("gl_ModelViewMatrix", mv);
@@ -894,12 +882,11 @@ public final class GlslTranspiler implements Transpiler {
 			// core-profile uniforms (VanillaCoreTransformer), only if the pack does not declare its own variables
 			Map<String, String> core = Map.of("modelViewMatrix", mvRaw, "modelViewMatrixInverse", "inverse(" + mvRaw + ")",
 					"projectionMatrix", proj, "projectionMatrixInverse", "emr_phase.emr_ProjMatInverse", "normalMatrix", normal,
-					"chunkOffset", sodium ? "emr_sodChunkOffset()" : terrain ? chunkOffset() : "emr_dt.ModelOffset", "alphaTestRef", "emr_draw.emr_alphaTestRef",
+					"chunkOffset", terrain ? "emr_sodChunkOffset()" : "emr_dt.ModelOffset", "alphaTestRef", "emr_draw.emr_alphaTestRef",
 					"iris_currentAlphaTest", "emr_draw.emr_alphaTestRef");
 			for (var e : core.entrySet()) if (!s.globals.contains(e.getKey()) && !declaredAnywhere(e.getKey())) repl.put(e.getKey(), e.getValue());
 			if (!vs) return;
 			String pos = has("Position") ? in("Position") : "vec3(0.0)";
-			if (terrain && !sodium) pos = "(" + pos + " + " + chunkOffset() + ")"; // Sodium's decoded position is camera-relative already
 			repl.put("gl_Vertex", "vec4(" + pos + ", 1.0)");
 			if (has("Color")) repl.put("gl_Color", terrain || clouds ? in("Color") : "(" + in("Color") + " * emr_dt.ColorModulator)");
 			else repl.put("gl_Color", terrain ? "vec4(1.0)" : "emr_dt.ColorModulator");
@@ -1349,7 +1336,7 @@ public final class GlslTranspiler implements Transpiler {
 			if (ids.contains("emr_draw")) {
 				h.append("layout(push_constant) uniform EmrionDraw {");
 				h.append(declareMembers(PUSH));
-				if (sodium) { // Sodium's push constants, moved behind EmrionDraw by the mod
+				if (terrain) { // Sodium's push constants, moved behind EmrionDraw by the mod
 					int o = VertexLayouts.SODIUM_PUSH_OFFSET;
 					h.append(" layout(offset = ").append(o).append(") vec3 emr_sodRegionOffset; layout(offset = ").append(o + 12)
 							.append(") int emr_sodCurrentTime; layout(offset = ").append(o + 16).append(") uint emr_sodRegionID;");
@@ -1357,8 +1344,6 @@ public final class GlslTranspiler implements Transpiler {
 				h.append(" } emr_draw;\n");
 			}
 			if (ids.contains("emr_dt")) h.append("layout(std140, set = 0, binding = 0) uniform DynamicTransforms { mat4 ModelViewMat; mat4 TextureMat; vec4 ColorModulator; vec3 ModelOffset; } emr_dt;\n");
-			if (ids.contains("emr_terrain")) h.append("layout(std140, set = 0, binding = 1) uniform TerrainUniform { mat4 ModelViewMat; ivec2 TextureSize; } emr_terrain;\n");
-			if (ids.contains("emr_chunk")) h.append("layout(std140, set = 0, binding = 2) uniform ChunkSection { ivec3 ChunkPosition; float ChunkVisibility; } emr_chunk;\n");
 			if (ids.contains("emr_Sampler1")) h.append("layout(set = 0, binding = 4) uniform sampler2D emr_Sampler1;\n");
 			if (ids.contains("emr_sodGlobals")) h.append("layout(std140, set = 0, binding = ").append(VertexLayouts.SET0_CANONICAL.indexOf("u_Globals"))
 					.append(") uniform SodiumGlobals { mat4 u_ProjectionMatrix; mat4 u_ModelViewMatrix; vec4 u_FogColor; vec3 u_CameraOffset; vec2 u_EnvironmentFog;"
@@ -1369,7 +1354,7 @@ public final class GlslTranspiler implements Transpiler {
 					.append(") uniform isamplerBuffer emr_CloudFaces;\n");
 			if (ids.contains("emr_sodSectionTimeInfo")) h.append("layout(set = 0, binding = ").append(VertexLayouts.SET0_CANONICAL.indexOf("u_SectionTimeInfo"))
 					.append(") uniform isamplerBuffer emr_sodSectionTimeInfo;\n");
-			if (sodium) {
+			if (terrain) {
 				String[][] raw = {{"emr_sod_Position", "uvec2", "0"}, {"emr_sod_Color", "vec4", "1"}, {"emr_sod_TexCoord", "uvec2", "2"},
 						{"emr_sod_LightAndData", "uvec4", "3"}, {"emr_sod_MidBlock", "ivec4", Integer.toString(VertexLayouts.location("at_midBlock"))}};
 				for (String[] r : raw)

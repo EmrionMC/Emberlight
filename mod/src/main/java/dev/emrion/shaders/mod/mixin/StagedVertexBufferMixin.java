@@ -35,7 +35,7 @@ public class StagedVertexBufferMixin {
 	@WrapOperation(method = "getVertexBuilder", at = @At(value = "NEW", target = "com/mojang/blaze3d/vertex/BufferBuilder"))
 	private BufferBuilder emrion$extendedBuilder(ByteBufferBuilder buffer, PrimitiveTopology topology, VertexFormat format,
 			Operation<BufferBuilder> original) {
-		return format == EmrionVertexFormats.ENTITY || format == EmrionVertexFormats.GLYPH ? new ExtendedBufferBuilder(buffer, topology, format, null) : original.call(buffer, topology, format);
+		return format == EmrionVertexFormats.ENTITY || format == EmrionVertexFormats.GLYPH ? new ExtendedBufferBuilder(buffer, topology, format) : original.call(buffer, topology, format);
 	}
 
 	/** RT entities: the draws' CPU vertex slices, just before they are copied to the GPU and freed. */

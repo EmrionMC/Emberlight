@@ -345,7 +345,7 @@ public final class RtOmm {
 				}
 				Atlas a = atlas;
 				pc.putLong(0, e.vertexAddr).putLong(8, scene.address(e.ommIndices.handle)).putLong(16, m.spritesAddr).putLong(24, m.gridAddr)
-						.putLong(32, anyHit == null ? 0 : scene.address(anyHit.handle)).putInt(40, e.quads * 2).putInt(44, e.format)
+						.putLong(32, anyHit == null ? 0 : scene.address(anyHit.handle)).putInt(40, e.quads * 2).putInt(44, 0)
 						.putInt(48, m.gridW).putInt(52, m.gridH).putInt(56, m.cellShift).putInt(60, anyHitIds.size()).putFloat(64, a == null ? 0.05f : eps(a));
 				vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_ALL, 0, pc);
 				vkCmdDispatch(cb, (e.quads * 2 + 63) / 64, 1, 1);

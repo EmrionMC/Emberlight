@@ -24,7 +24,7 @@ that it renders through Minecraft's own Vulkan backend, with every pipeline buil
 | Minecraft | Java Edition 26.3 |
 | Loader | Fabric Loader 0.20.1 or newer, Fabric API |
 | Graphics API | Vulkan: *Options → Video Settings → Graphics API → Prefer Vulkan*, then restart. On OpenGL the mod stays inactive and tells you so |
-| Sodium | optional; if installed it must be **exactly 0.9.3-beta.5** |
+| Sodium | required, **exactly 0.9.3-beta.5** |
 | Ray tracing | a GPU with `VK_KHR_ray_query` (NVIDIA RTX, AMD RX 6000 or newer); only tested on an RTX 4070 Ti |
 | FSR upscaling / frame generation | any Vulkan GPU |
 | DLSS upscaling | an NVIDIA RTX GPU; NVIDIA's model files are downloaded once on request (see below) |
@@ -36,10 +36,10 @@ that it renders through Minecraft's own Vulkan backend, with every pipeline buil
 
 1. Install Fabric Loader and Fabric API for Minecraft 26.3.
 2. Put `emberlight-0.1.0-alpha.1.jar` into `mods/`.
-3. Optional: Sodium `sodium-fabric-0.9.3-beta.5+mc26.3.jar` ([Modrinth](https://modrinth.com/mod/sodium)). With Sodium,
-   terrain is meshed and drawn by Sodium, as under Iris; without it, Minecraft's own chunk renderer is used. Both give the
-   same image. If Fabric says *"Incompatible mods found … Emberlight … Sodium"*, your Sodium is the wrong version: switch to
-   0.9.3-beta.5. Don't remove Emberlight; Fabric's suggestion is misleading here.
+3. Put Sodium `sodium-fabric-0.9.3-beta.5+mc26.3.jar` ([Modrinth](https://modrinth.com/mod/sodium)) into `mods/` too:
+   terrain is meshed and drawn by Sodium, as under Iris. Without it Fabric refuses to start and names the missing mod. If
+   Fabric says *"Incompatible mods found … Emberlight … Sodium"*, your Sodium is the wrong version: switch to 0.9.3-beta.5.
+   Don't remove Emberlight; Fabric's suggestion is misleading here.
 4. Set the graphics API to Vulkan (see above) and restart.
 5. Put shaderpacks (zip or folder) into `shaderpacks/`, as for Iris. Iris settings files (`<pack>.txt`) next to them are
    used as they are and stay compatible with Iris.
@@ -201,7 +201,6 @@ Other packs may work but hit unimplemented paths. Details: [docs/BENCHMARK.md](d
 ## Known issues
 
 - Distant Horizons is not supported yet; Voxy can't be (OpenGL only).
-- The Sodium path is a few percent slower than the vanilla path on GPU-bound systems (its opaque pass costs about 0.5 ms more).
 - Reflections on water have no motion vectors, so they can smear with FSR/DLSS or frame generation while the camera moves.
   The same goes for moving mobs and the hand.
 - 256× resource packs with PBR need a lot of VRAM together with Complementary's voxel data, as with Iris

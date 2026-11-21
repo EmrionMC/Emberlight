@@ -98,7 +98,7 @@ class ComplementarySettingsRtTest {
 		Converter.Result r;
 		try (var compiler = new ShadercSpirvCompiler()) {
 			r = ConverterCli.defaultConverter(compiler).convert(new Converter.Request(ROOT.resolve(pack), settings, dir.resolve("out"),
-					List.of("world0"), Converter.ProgressListener.NONE, false, RT, true));
+					List.of("world0"), Converter.ProgressListener.NONE, false, RT));
 		}
 		if (r.manifest() == null) return new String[]{"no manifest", "?", r.diagnostics().stream().filter(d -> d.severity() == Diagnostic.Severity.ERROR)
 				.limit(3).map(Diagnostic::toString).reduce("", (a, b) -> a + b + "; ")};

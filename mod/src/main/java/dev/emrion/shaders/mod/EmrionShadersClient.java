@@ -6,7 +6,6 @@ import dev.emrion.shaders.mod.debug.Profiler;
 import dev.emrion.shaders.mod.pack.PackManager;
 import dev.emrion.shaders.mod.photo.PhotoMode;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
-import dev.emrion.shaders.mod.vertex.DebugVertex;
 import dev.emrion.shaders.mod.pack.PackScreen;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
@@ -169,13 +168,12 @@ public final class EmrionShadersClient implements ClientModInitializer {
 				dev.emrion.shaders.mod.debug.HitchLog.shutdown();
 				dev.emrion.shaders.mod.rt.RtDebugView.shutdown();
 				dev.emrion.shaders.mod.rt.RtScene.shutdown();
-				if (dev.emrion.shaders.mod.compat.SodiumTerrain.LOADED) dev.emrion.shaders.mod.compat.sodium.SodiumShadow.shutdown();
+				dev.emrion.shaders.mod.compat.sodium.SodiumShadow.shutdown();
 				dev.emrion.shaders.mod.pbr.PbrTextures.closeDefaults();
 				VulkanContext.onShutdown(buildsDone);
 			});
 			VulkanContext.get().pipelineCache(); // render thread: background pipeline builds only read these
 			PackManager.init();
-			if (DebugVertex.ENABLED) DebugVertex.init();
 			LOG.info("Emberlight active on Vulkan ({})", RenderSystem.getDevice().getDeviceInfo().name());
 		});
 	}

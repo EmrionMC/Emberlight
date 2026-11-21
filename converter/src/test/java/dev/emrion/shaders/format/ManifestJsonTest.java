@@ -23,7 +23,7 @@ class ManifestJsonTest {
 				List.of(new Manifest.CustomUniform("framemod2", "float", true, expr)),
 				new Manifest.Block("EmrionPhase", 144, List.of()), new Manifest.Block(null, 48, List.of()));
 		var program = new Manifest.Program("gbuffers", "gbuffers", List.of("gbuffers_terrain_solid"),
-				new Manifest.Stages(new Manifest.VertexStage(Map.of("terrain_mdi", "spv/world0/gbuffers_terrain.vsh.terrain_mdi.spv")),
+				new Manifest.Stages(new Manifest.VertexStage(Map.of("terrain_sodium", "spv/world0/gbuffers_terrain.vsh.terrain_sodium.spv")),
 						null, null, null, new Manifest.SpvRef("spv/world0/gbuffers_terrain.fsh.spv"), null),
 				List.of(new Manifest.Output(0, "colortex0")),
 				new Manifest.Blend(new Manifest.BlendMode("vanilla", null, null, null, null), Map.of("colortex6", new Manifest.BlendMode("off", null, null, null, null))),

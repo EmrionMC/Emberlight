@@ -164,7 +164,7 @@ public final class RtLights {
 		return v.containsKey(key) ? Boolean.parseBoolean(v.get(key)) : def;
 	}
 
-	// ---- compile hooks (SectionCompilerMixin / ChunkBuilderMeshingTaskMixin, section worker threads) -------------------------------------------------------
+	// ---- compile hooks (ChunkBuilderMeshingTaskMixin, section worker threads) -------------------------------------------------------
 
 	public static void begin() {
 		FOUND.get()[0] = 0;

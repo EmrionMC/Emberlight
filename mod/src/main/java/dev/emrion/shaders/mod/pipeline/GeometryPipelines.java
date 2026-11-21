@@ -46,7 +46,7 @@ public final class GeometryPipelines {
 
 	/** Vertex buffer slot of the constant default attributes (MC uses slots 0 and 1). */
 	public static final int DEFAULTS_BINDING = 15;
-	/** Canonical input → {VkFormat, offset} in {@link #defaultsBuffer}, formats as in EMRION_BLOCK. */
+	/** Canonical input → {VkFormat, offset} in {@link #defaultsBuffer} (the extended vertex formats' element formats). */
 	public static final Map<String, int[]> DEFAULTS = Map.of(
 			"Normal", new int[] {VK_FORMAT_R8G8B8A8_SNORM, 0}, "mc_Entity", new int[] {VK_FORMAT_R16G16_SINT, 4},
 			"mc_midTexCoord", new int[] {VK_FORMAT_R32G32_SFLOAT, 8}, "at_tangent", new int[] {VK_FORMAT_R8G8B8A8_SNORM, 16},
