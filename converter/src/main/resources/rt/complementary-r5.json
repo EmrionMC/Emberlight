@@ -323,8 +323,7 @@
               "find": "vec3 sceneLighting = lightColorM * shadowLightMult + ambientColorM * ambientMult;",
               "body": "rt/complementary/rtx/gi_scene_lighting.glsl",
               "programs": ["gbuffers_basic", "gbuffers_line", "gbuffers_textured", "gbuffers_terrain", "gbuffers_block", "gbuffers_entities",
-               "gbuffers_lightning", "gbuffers_entities_glowing", "gbuffers_hand", "gbuffers_block_translucent", "gbuffers_entities_translucent",
-               "gbuffers_hand_water"]
+               "gbuffers_lightning", "gbuffers_entities_glowing", "gbuffers_block_translucent", "gbuffers_entities_translucent"]
             },
             {
               "function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float) | void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",

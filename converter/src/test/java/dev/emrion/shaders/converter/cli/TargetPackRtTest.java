@@ -30,7 +30,7 @@ class TargetPackRtTest {
 	static final Path SETTINGS = ROOT.resolve("ComplementaryUnbound_r5.9.3 + EuphoriaPatches_1.10.5.txt");
 	/** sha256 over the RT-off output (paths + bytes); changes only with an intended output change and a Converter.VERSION bump. */
 
-	static final String RT_OFF_GOLDEN = "76be34f99ff968a4542a1e5245ddf375abdcb0b710bc464dd0f7805c0699165f";
+	static final String RT_OFF_GOLDEN = "3ebda573e3e4d5b1a30e69b34661a14016ca4137ad40aae8115ca7cb82fcfd85";
 
 	static Converter.Result convert(Path out, Set<String> rt) {
 		try (var compiler = new ShadercSpirvCompiler()) {
