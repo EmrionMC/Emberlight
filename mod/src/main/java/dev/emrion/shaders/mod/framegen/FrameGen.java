@@ -141,7 +141,7 @@ public final class FrameGen {
 			Profiler.mark(cb, "frame generation");
 			interpThisFrame = out;
 			FfxPasses.barrier(cb);
-			FrameCapture.record(ctx, cb, out.image, backbufferImage, genDW, genDH);
+			FrameCapture.record(ctx, cb, reset ? 0 : out.image, backbufferImage, genDW, genDH); // a reset frame's "interpolation" is a copy of this frame
 			if (dev.emrion.shaders.mod.hdr.Hdr.active()) interpThisFrame = dev.emrion.shaders.mod.hdr.Hdr.encodeInterpolated(ctx, cb, si, out, backbufferView, hudless);
 			slotFrames[si] = frameNumber + 1; // last: on a throw above no presenter copy of this slot will ever be signalled
 		} catch (RuntimeException e) {
@@ -171,8 +171,12 @@ public final class FrameGen {
 			return;
 		}
 		double fps = 1e9 / avgFrameNanos;
+		boolean was = bypass;
 		if (!bypass && fps >= hz) bypass = true;
 		else if (bypass && fps < hz * 0.9) bypass = false; // the next frame has no HUD-less copy yet: that gap resets the history
+		if (bypass != was) EmrionShadersClient.LOG.info(bypass
+				? "Frame generation paused: {} rendered FPS reach the {} Hz refresh rate (auto pause, framegen.autoPause=false keeps interpolating)"
+				: "Frame generation resumed: {} rendered FPS below 90 % of the {} Hz refresh rate", String.format(java.util.Locale.ROOT, "%.0f", fps), String.format(java.util.Locale.ROOT, "%.0f", hz));
 	}
 
 	/** blitFromTexture TAIL: the frame's submission signals our timeline semaphore once the GPU is done with it. */

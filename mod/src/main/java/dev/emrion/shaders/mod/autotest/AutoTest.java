@@ -140,6 +140,7 @@ public final class AutoTest {
 	private int shot;
 	private boolean vsync;
 	private int fpsLimit;
+	private long benchInterp;
 	private long settleStartFrame;
 	private static final int EXACT_FRAMES = Integer.getInteger(P + "settle.exactFrames", 0);
 	private static final int WEATHER_FRAMES = Integer.getInteger(P + "settle.weatherFrames", 6000);
@@ -749,9 +750,11 @@ public final class AutoTest {
 				}
 				return swapsBefore == -2 ? ticks > 2 : PackManager.swaps != swapsBefore || PackManager.selected() == null;
 			}
-			case "framegen" -> { // "framegen off|fsr|dlss": the Frame Generation page's Done (takes effect at the next frame)
+			case "framegen" -> { // "framegen off|fsr|dlss [pause|nopause]": the Frame Generation page's Done (takes effect at the next frame); pause/nopause sets the auto pause
 				if (first) {
-					dev.emrion.shaders.mod.framegen.FrameGenConfig.mode = dev.emrion.shaders.mod.framegen.FrameGenConfig.Mode.valueOf(arg.toUpperCase(java.util.Locale.ROOT));
+					String[] m = arg.split("\\s+");
+					if (m.length > 1) dev.emrion.shaders.mod.framegen.FrameGenConfig.autoPause = m[1].equals("pause");
+					dev.emrion.shaders.mod.framegen.FrameGenConfig.mode = dev.emrion.shaders.mod.framegen.FrameGenConfig.Mode.valueOf(m[0].toUpperCase(java.util.Locale.ROOT));
 					PackManager.applyFrameGen();
 				}
 				return ticks > 10;
@@ -816,14 +819,17 @@ public final class AutoTest {
 				if (ticks == TPS) {
 					FrameTimeLogger.INSTANCE.start();
 					dev.emrion.shaders.mod.framegen.Presenter.PRESENTS.start();
+					benchInterp = dev.emrion.shaders.mod.framegen.Presenter.interpolatedPresents;
 					dev.emrion.shaders.mod.framegen.Reflex.statsReset();
 					if (PROFILE) { if (EmrionShadersClient.active()) Profiler.benchmarkStart(); else GlGpuTimer.reset(); } // per-pass GPU ms for this bench
 				}
 				if (ticks < (Float.parseFloat(m[0]) + 1) * TPS) return false;
 				if (PROFILE) { if (EmrionShadersClient.active()) Profiler.benchmarkEnd(); else GlGpuTimer.log(); }
 				FrameTimeLogger.INSTANCE.stopAndDump(mc.gameDirectory.toPath().resolve("emrion-bench-" + m[1] + ".csv"));
+				long interp = dev.emrion.shaders.mod.framegen.Presenter.interpolatedPresents - benchInterp;
 				var pr = dev.emrion.shaders.mod.framegen.Presenter.PRESENTS.stopAndDump(mc.gameDirectory.toPath().resolve("emrion-presents-" + m[1] + ".csv"));
-				EmrionShadersClient.LOG.info("Bench {}: presents {} (avg {} per second)", m[1], pr.frames(), String.format("%.1f", pr.avgFps()));
+				EmrionShadersClient.LOG.info("Bench {}: presents {} (avg {} per second), {} interpolated{}", m[1], pr.frames(), String.format(java.util.Locale.ROOT, "%.1f", pr.avgFps()),
+						interp, dev.emrion.shaders.mod.framegen.FrameGen.bypassed() ? " (frame generation auto-paused at refresh rate)" : "");
 				dev.emrion.shaders.mod.framegen.Reflex.statsLog(m[1]);
 				if (!keep) {
 					mc.options.enableVsync().set(vsync);
@@ -841,6 +847,7 @@ public final class AutoTest {
 			}
 			case "fgshots" -> { // "fgshots N NAME": the next N frames as presented (interpolated, then real) -> screenshots/NAME-NN-{a-interp,b-real}.png
 				String[] m = arg.split("\\s+");
+				if (dev.emrion.shaders.mod.framegen.FrameGenConfig.effective() == dev.emrion.shaders.mod.framegen.FrameGenConfig.Mode.OFF) return true; // FG unavailable: nothing to capture
 				if (first) dev.emrion.shaders.mod.framegen.FrameCapture.request(Integer.parseInt(m[0]), mc.gameDirectory.toPath().resolve("screenshots"), m[1]);
 				return dev.emrion.shaders.mod.framegen.FrameCapture.done();
 			}

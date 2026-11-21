@@ -144,7 +144,7 @@ Moving entities and animated foliage have no motion vectors (Iris packs write no
 `config/emberlight.properties`: `framegen.mode` = off | fsr | dlss; `-Demberlight.framegen.mode=` overrides. Page "Frame
 Generation..." next to "Upscaling..." (cycle button Off / AMD FSR 3 Frame Generation / NVIDIA DLSS Frame Generation; DLSS
 shows `unavailable: <reason>`). Switching is live (no reload: FG adds no converter effect); the presenter is drained, the
-generator replaced and the history reset. Autotest script step `framegen off|fsr|dlss`; `fgshots N` saves the next N
+generator replaced and the history reset. Autotest script step `framegen off|fsr|dlss [pause|nopause]` (the second word sets the auto pause, §11); `fgshots N` saves the next N
 presented frames (interpolated and real, in display order) as PNGs.
 
 ## 9. Implementation notes
@@ -216,6 +216,11 @@ frames and paced unevenly (presented ≈ 88/s at 120 Hz with ≈ 49 rendered); t
   the extra frames cannot be shown, so FG only costs. FG then interpolates nothing and presents the real frames (presenter
   and swapchain stay, no restart); it resumes below 90 % of the refresh rate. The overlay says `frame generation paused`.
   `-Demberlight.framegen.autoBypass=false` turns this off (benchmarks).
+  Pause and resume are logged (`Frame generation paused: 177 rendered FPS reach the 144 Hz refresh rate ...`), and the
+  autotest `bench` line counts the interpolated presents and says when FG was paused: the Windows test (docs/WINDOWS-TEST-FINDINGS.md
+  R6) read "FG interpolates nothing with present mode 0" because its uncapped benches ran above the monitor's refresh and
+  were paused, silently. `fgshots` does not count a history reset's output (FSR returns the current frame unchanged
+  then, e.g. the first frame after a pause or a mode switch) as an interpolated frame.
 * **Cost per rendered frame** (2560×1386, DLSS Quality, RT off, overview, 6 s each): FG off 100.2 FPS (9.98 ms); FSR FG
   85.3 rendered / 170.5 shown (11.72 ms, +1.74 ms); DLSS FG 79.8 / 159.7 (12.52 ms, +2.54 ms). The pack passes' GPU time
   stays (10.37 vs 9.87 ms incl. the HUD-less copy); the rest is the interpolation itself, recorded after the level and so
