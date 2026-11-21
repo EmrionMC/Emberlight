@@ -72,10 +72,13 @@ bool emrBlPrimary(vec3 o, vec3 d, out float t, out vec3 n, out float lm) {
 	vec2 b = rayQueryGetIntersectionBarycentricsEXT(rq, true);
 	vec3 w = vec3(1.0 - b.x - b.y, b.x, b.y);
 	bool entity = emrRtIsEntity(ci); // EMRION_ENTITY: UV1 (overlay) is word 6, UV2 word 7
-	// cutout plants and leaves (rtx/bl_common.glsl): the pack's foliage ids 10003 to 10031 as a bit set (refraction_water_out.glsl);
+	// cutout plants and leaves (rtx/bl_common.glsl): the pack's foliage ids 10003 to 10031 as a bit set (refraction_water_out.glsl),
+	// plus the glowing plants the pack also gives subsurfaceMode 1: cave vines (10628-10635) and torchflowers (10768-10771). Their
+	// cross quads lie edge-on to a berry in the same column, so one-sided they got no N.L and the next vine blocked every ray;
 	// not trapdoors, bars or grates, whose back face would let the light through them
 	int id = entity ? 0 : emrRtId(v, tri.x);
-	emrBlTwoSided = !entity && emrRtSection[ci].z == 1u && uint(id - 10003) < 29u && (0x141553F5u >> uint(id - 10003) & 1u) != 0u;
+	emrBlTwoSided = !entity && emrRtSection[ci].z == 1u && (uint(id - 10003) < 29u && (0x141553F5u >> uint(id - 10003) & 1u) != 0u
+		|| uint(id - 10628) < 8u || uint(id - 10768) < 4u);
 	for (int k = 0; k < 3; k++) {
 		uint i = tri[k];
 		uint l = entity ? v.p.d[i * 14u + 7u] : emrRtWord(v, i, 6u, 4u);

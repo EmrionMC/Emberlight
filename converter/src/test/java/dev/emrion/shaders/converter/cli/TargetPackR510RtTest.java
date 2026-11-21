@@ -19,7 +19,7 @@ class TargetPackR510RtTest {
 	static final Path PACK = ROOT.resolve("unbound-euphoria-r510");
 	static final Path SETTINGS = ROOT.resolve("ComplementaryUnbound_r5.10 + EuphoriaPatches_1.11.2.txt");
 	/** sha256 over the RT-off output, as TargetPackRtTest.RT_OFF_GOLDEN. */
-	static final String RT_OFF_GOLDEN = "38367d4dbf7ed783ab8a9eb733f106b30adc46e63951c5972c4f699df37f2627";
+	static final String RT_OFF_GOLDEN = "f93e3dd19dbb87cd67088c6f7fd48ba2920d803b45a37006110bfb730eba59ea";
 	/** What RtConfig.request() asks for with the user's settings (RTX style, full shadows, high GI, 8 block-light rays). */
 	static final Set<String> USER_RT = Set.of("shadows", "shadows:full", "shadows:rays=4", "shadows:entities", "shadows:rtx", "reflections",
 			"reflections:halfRate=1", "materials", "shafts", "refraction", "refraction:entities", "refraction:glass=0", "caustics", "ao",
