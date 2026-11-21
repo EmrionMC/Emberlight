@@ -29,16 +29,18 @@ public final class LightColors {
 
 	/** Powered repeaters and comparators: redstone red, a touch less green than the torches. */
 	private static final float[] DIODE_RGB = {1.0f, 0.09f, 0.05f};
+	/** Copper torches and lanterns: r5.10's green (light id 84, vec3(0.7, 1.35, 0.8)), before "torch" and "lantern" match them. */
+	private static final float[] COPPER_RGB = {0.52f, 1.0f, 0.59f};
 
 	private static final String[] NAMES = {
-			"soul", "redstone_torch", "redstone_wall_torch", "repeater", "comparator", "redstone_ore", "redstone_lamp", "lava", "magma", "campfire", "fire",
+			"soul", "copper_torch", "copper_wall_torch", "copper_lantern", "redstone_torch", "redstone_wall_torch", "repeater", "comparator", "redstone_ore", "redstone_lamp", "lava", "magma", "campfire", "fire",
 			"jack_o_lantern", "torch", "lantern", "glowstone", "shroomlight", "sea_lantern", "conduit", "beacon", "end_rod",
 			"amethyst", "ochre_froglight", "verdant_froglight", "pearlescent_froglight", "crying_obsidian", "respawn_anchor",
 			"glow_lichen", "sculk", "copper_bulb", "furnace", "smoker", "nether_portal", "end_portal", "enchanting",
 			"brewing_stand", "light", "candle", "cave_vines", "glow_berries", "firefly", "creaking_heart",
 	};
 	private static final float[][] RGB = {
-			{0.25f, 0.75f, 1.0f}, {1.0f, 0.12f, 0.05f}, {1.0f, 0.12f, 0.05f}, DIODE_RGB, DIODE_RGB, {1.0f, 0.15f, 0.08f}, {1.0f, 0.62f, 0.35f},
+			{0.25f, 0.75f, 1.0f}, COPPER_RGB, COPPER_RGB, COPPER_RGB, {1.0f, 0.12f, 0.05f}, {1.0f, 0.12f, 0.05f}, DIODE_RGB, DIODE_RGB, {1.0f, 0.15f, 0.08f}, {1.0f, 0.62f, 0.35f},
 			{1.0f, 0.40f, 0.08f}, {1.0f, 0.35f, 0.10f}, {1.0f, 0.50f, 0.15f}, {1.0f, 0.50f, 0.15f},
 			{1.0f, 0.58f, 0.20f}, {1.0f, 0.60f, 0.28f}, {1.0f, 0.66f, 0.34f}, {1.0f, 0.80f, 0.50f}, {1.0f, 0.55f, 0.25f},
 			{0.65f, 0.90f, 1.0f}, {0.65f, 0.90f, 1.0f}, {0.75f, 0.95f, 1.0f}, {0.95f, 0.90f, 1.0f},
@@ -177,10 +179,13 @@ public final class LightColors {
 	}
 
 	static final int LAVA = vanilla("lava"), MAGMA = vanilla("magma");
+	private static final int REDSTONE_TORCH = vanilla("redstone_torch"), REDSTONE_WALL_TORCH = vanilla("redstone_wall_torch");
+	/** r5.10 raised the redstone torch's light colour from redstoneSpecialLightColor * 0.25 to * 0.4 (light id 35, wall torch too). */
+	static final float REDSTONE_TORCH_POWER = 1.6f;
 
-	/** Brightness of a source relative to a vanilla source of the same level: 1 for vanilla, from the pack's alpha otherwise. */
+	/** Brightness of a source relative to a vanilla source of the same level: 1 for vanilla (but redstone torches), from the pack's alpha otherwise. */
 	public static float power(int type, float oreMult) {
-		if (type < PACK0) return 1f;
+		if (type < PACK0) return type == REDSTONE_TORCH || type == REDSTONE_WALL_TORCH ? REDSTONE_TORCH_POWER : 1f;
 		Pack p = PACK[type - PACK0];
 		float a = p.alpha * (p.kind == Kind.ORE ? oreMult : 1f);
 		float k = p.kind == Kind.WIRE || p.kind == Kind.DIODE ? REDSTONE_MULT : 1f;

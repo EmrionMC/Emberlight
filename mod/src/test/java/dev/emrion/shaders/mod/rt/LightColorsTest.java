@@ -15,6 +15,12 @@ class LightColorsTest {
 		assertArrayEquals(new float[]{0.2f, 0.3f, 1.0f}, LightColors.rgb(LightColors.vanilla("blue_candle")));
 		assertArrayEquals(new float[]{1.0f, 0.65f, 0.30f}, LightColors.rgb(LightColors.vanilla("candle")));
 		assertArrayEquals(new float[]{1.0f, 0.82f, 0.62f}, LightColors.rgb(LightColors.vanilla("some_modded_lamp")));
+		// copper torches and lanterns are r5.10's green, not the torch or lantern orange; the other "*torch*" keep their own
+		for (String n : new String[]{"copper_torch", "copper_wall_torch", "copper_lantern", "oxidized_copper_lantern", "waxed_weathered_copper_lantern"})
+			assertArrayEquals(new float[]{0.52f, 1.0f, 0.59f}, LightColors.rgb(LightColors.vanilla(n)), n);
+		assertArrayEquals(new float[]{1.0f, 0.60f, 0.28f}, LightColors.rgb(LightColors.vanilla("wall_torch")));
+		assertArrayEquals(new float[]{0.25f, 0.75f, 1.0f}, LightColors.rgb(LightColors.vanilla("soul_wall_torch")));
+		assertArrayEquals(new float[]{1.0f, 0.12f, 0.05f}, LightColors.rgb(LightColors.vanilla("redstone_torch")));
 		assertEquals(31 << 10 | 12 << 5 | 2, LightColors.rgb555(LightColors.rgb(LightColors.vanilla("lava"))));
 	}
 
@@ -37,6 +43,11 @@ class LightColorsTest {
 		assertEquals(-1, LightColors.packType("torchflower_crop"));
 		assertEquals(LightColors.Kind.VANILLA, LightColors.kind(LightColors.vanilla("torch")));
 		assertEquals(1f, LightColors.power(LightColors.vanilla("torch"), 2f));
+		// r5.10: redstone torches (wall ones too) at redstone * 0.4 instead of 0.25; lit lamps unchanged
+		assertEquals(1.6f, LightColors.power(LightColors.vanilla("redstone_torch"), 1f), 1e-6);
+		assertEquals(1.6f, LightColors.power(LightColors.vanilla("redstone_wall_torch"), 1f), 1e-6);
+		assertEquals(1f, LightColors.power(LightColors.vanilla("redstone_lamp"), 1f));
+		assertEquals(1f, LightColors.power(LightColors.vanilla("copper_torch"), 1f));
 		// stronger in the pack (alpha): longer range, more power; ore brightness scales ores only
 		assertEquals(LightColors.LEVEL_AT_ORE, LightColors.level(iron));
 		assertTrue(LightColors.level(diamond) > LightColors.level(iron) && LightColors.level(iron) > LightColors.level(diode));
