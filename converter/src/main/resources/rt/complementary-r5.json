@@ -64,7 +64,7 @@
         "terrainAoCurve": {"program": "gbuffers_terrain", "function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float) | void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
           "at": "vanillaAO = min1(vanillaAO + 0.08);", "statements": 2, "otherwise": ""},
         "lightSource": {"program": "gbuffers_terrain", "function": "void main()", "at": "if (lmCoord.x > 0.99 ||", "otherwise": ""},
-        "lavaEmission": {"program": "gbuffers_terrain", "function": "void main()", "at": "if (emission < 1.0)", "otherwise": ""},
+        "lavaEmission": {"program": "gbuffers_terrain", "function": "void main()", "at": "if (emission < 1.0)", "otherwise": "if (emission < 1.0) emission = max(2.0, emission);"},
         "materialEmission": {"program": "gbuffers_terrain", "function": "void main()", "at": "if (mat > 20999", "otherwise": ";"},
         "crossModel": {"program": "gbuffers_terrain", "function": "void main()", "at": "if (length(abs(worldGeoNormal.xz)", "otherwise": ""},
         "subsurfaceHighlight": {"program": "gbuffers_terrain", "function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float) | void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
@@ -148,11 +148,11 @@
       "skipIds": [10003, 10005, 10015, 10017, 10019, 10021, 10023, 10029, 10031, 10039],
       "skipIdsWhen": "10003",
       "patches": [
-        {"function": "vec4 GetVolumetricLight(inout float,vec3,float,float,vec3,float,float,float,float,float,float)",
+        {"function": "vec4 GetVolumetricLight(inout float,vec3,float,float,vec3,float,float,float,float,float,float) | vec4 GetVolumetricLight(inout float,vec3,float,float,vec3,float,float,float,float,float,float,float)",
          "find": "localDensity = vec3(shadowSample);", "body": "rt/complementary/rtx/shafts_visibility.glsl", "programs": ["composite1"]},
-        {"function": "vec4 GetVolumetricLight(inout float,vec3,float,float,vec3,float,float,float,float,float,float)",
+        {"function": "vec4 GetVolumetricLight(inout float,vec3,float,float,vec3,float,float,float,float,float,float) | vec4 GetVolumetricLight(inout float,vec3,float,float,vec3,float,float,float,float,float,float,float)",
          "find": "nextDistance = pow(t, sampleDistribution) * activeThreshold;", "body": "rt/complementary/rtx/shafts_spread.glsl", "programs": ["composite1"]},
-        {"function": "vec4 GetVolumetricLight(inout float,vec3,float,float,vec3,float,float,float,float,float,float)",
+        {"function": "vec4 GetVolumetricLight(inout float,vec3,float,float,vec3,float,float,float,float,float,float) | vec4 GetVolumetricLight(inout float,vec3,float,float,vec3,float,float,float,float,float,float,float)",
          "after": "volumetricLight.rgb *= vlMult;", "body": "rt/complementary/rtx/shafts_apply.glsl"}
       ]
     },
@@ -191,7 +191,7 @@
       ],
       "variants": {
         "rtx": {
-          "options": {"strength": "1.9", "chroma": "0.5", "far": "1.0", "ref": "0", "debug": "0", "visRay": "1", "bias": "1", "mcap": "20", "radius": "16.0", "frames": "8",
+          "options": {"strength": "1.9", "chroma": "0.5", "far": "1.0", "ref": "0", "debug": "0", "visRay": "1", "bias": "1", "mcap": "4", "radius": "16.0", "reach": "1.0", "frames": "8",
             "clamp": "2.0", "filter": "1", "hidden": "0", "hiddenMargin": "1.5"},
           "helpers": "rt/complementary/rtx/bl_common.glsl,rt/complementary/rtx/blocklight.glsl",
           "patches": [
@@ -395,8 +395,11 @@
       "helpers": "rt/complementary/prepass_info.glsl",
       "library": false,
       "patches": [
-        {"function": "void main()", "find": "if (color.a <= 0.5) discard;", "body": "rt/complementary/prepass.glsl", "programs": ["gbuffers_terrain"], "bare": true},
+        {"function": "void main()", "find": "if (color.a <= 0.5) discard;", "body": "rt/complementary/prepass.glsl", "programs": ["gbuffers_terrain"], "bare": true, "oneOf": "alphaTest"},
         {"function": "void main()", "find": "if (dither + 0.25 < snowFadeOut) discard;", "body": "rt/complementary/prepass_snow.glsl",
+         "programs": ["gbuffers_terrain"], "bare": true, "optional": true},
+        {"function": "void main()", "find": "if (color.a <= 0.00001) discard;", "body": "rt/complementary/prepass_r510.glsl", "programs": ["gbuffers_terrain"], "bare": true, "oneOf": "alphaTest"},
+        {"function": "void main()", "find": "if (dither + 0.01 < snowFadeOut) discard;", "body": "rt/complementary/prepass_snow_r510.glsl",
          "programs": ["gbuffers_terrain"], "bare": true, "optional": true}
       ]
     }

@@ -186,9 +186,10 @@ public record RtPatchTable(String id, List<String> detect, Map<String, Effect> e
 	 *                 {@code body} replaces the function body
 	 * @param optional a stage of one of {@code programs} need not match this patch (two patches for code a pack setting switches
 	 *                 between, where one of them is enough)
+	 * @param oneOf    null or a group name: a stage needs only one patch of the group (the same anchor in two pack versions)
 	 */
 	public record Patch(String function, String body, List<String> programs, List<String> needs, boolean bare, String after, String find,
-	                    boolean optional) {
+	                    boolean optional, String oneOf) {
 		public Patch(String function, String body) {
 			this(function, body, null, null, false, null, null);
 		}
@@ -198,7 +199,7 @@ public record RtPatchTable(String id, List<String> detect, Map<String, Effect> e
 		}
 
 		public Patch(String function, String body, List<String> programs, List<String> needs, boolean bare, String after, String find) {
-			this(function, body, programs, needs, bare, after, find, false);
+			this(function, body, programs, needs, bare, after, find, false, null);
 		}
 	}
 

@@ -26,10 +26,10 @@ def emrionProps = providers.systemPropertiesPrefixedBy('emrion.').zip(providers.
 // copied into the repo), plus the shared pack, settings and options for side-by-side comparisons with runClient -Pcompare.
 // -PirisModsDir=<launcher instance>/mods; default: mod/run-iris/mods (untracked).
 def irisModsDir = file(findProperty('irisModsDir') ?: 'run-iris/mods')
-def packDir = file(findProperty('shaderPack') ?: rootProject.file('testpacks/unbound-euphoria'))
+def packDir = file(findProperty('shaderPack') ?: rootProject.file('testpacks/unbound-euphoria-r510'))
 // -PshaderSettings= (empty): no settings file, the pack's defaults. A zip pack is linked under its own file name.
 def settingsProp = findProperty('shaderSettings')
-def packSettings = settingsProp == '' ? null : file(settingsProp ?: rootProject.file('testpacks/ComplementaryUnbound_r5.9.3 + EuphoriaPatches_1.10.5.txt'))
+def packSettings = settingsProp == '' ? null : file(settingsProp ?: rootProject.file('testpacks/ComplementaryUnbound_r5.10 + EuphoriaPatches_1.11.2.txt'))
 def packName = packDir.isFile() || packSettings == null ? packDir.name : packSettings.name - ~/\.txt$/ // so Iris finds <pack>.txt
 def compare = providers.gradleProperty('compare').isPresent()
 // The canonical comparison world: the one the Iris reference run created (and keeps using). runClient -Pcompare copies it

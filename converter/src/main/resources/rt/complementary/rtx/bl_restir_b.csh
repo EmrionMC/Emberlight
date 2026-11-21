@@ -61,7 +61,10 @@ void main() {
 		ivec2 qp = p + ivec2(round(rad * vec2(cos(a), sin(a))));
 		if (any(lessThan(qp, ivec2(0))) || any(greaterThanEqual(qp, size)) || qp == p) continue;
 		vec4 gq = imageLoad(emrBlG, qp);
-		if (!emrBlSimilar(g, pos, gq, emrBlPixelPos(qp, size, gq.w))) continue;
+		vec3 pq = emrBlPixelPos(qp, size, gq.w);
+		// a pixel radius spans blocks on far or grazing surfaces: a neighbour lit by other sources there made blotches that the
+		// temporal history carried on for many frames
+		if (!emrBlSimilar(g, pos, gq, pq) || emrRt_blocklight_reach > 0.0 && distance(pq, pos) > emrRt_blocklight_reach) continue;
 		if ((imageLoad(emrBlU, qp).a > 1.5) != emrBlTwoSided) continue; // a plant beside a wall in its plane: other light support
 		uvec4 rq = imageLoad(emrBlRes, qp);
 		if (rq.x == ~0u) continue;
@@ -69,7 +72,7 @@ void main() {
 		m += mq;
 		mqs[j] = mq;
 		nq[j] = gq.xyz;
-		qq[j] = emrBlPixelPos(qp, size, gq.w) + gq.xyz * 0.02;
+		qq[j] = pq + gq.xyz * 0.02;
 		if (wq <= 0.0) continue;
 		wsum += wq;
 		if (emrBlRand(seed) * wsum < wq) {

@@ -80,6 +80,8 @@ public final class LightColors {
 			new Pack("warped_fungus", new float[]{1.0f, 0.3f, 0.067f}, 0.0125f, Kind.IPBR), new Pack("crimson_fungus", new float[]{1.0f, 0.3f, 0.067f}, 0.0125f, Kind.IPBR),
 			new Pack("weeping_vines_plant", new float[]{1.0f, 0.3f, 0.067f}, 0.0125f, Kind.IPBR), new Pack("chorus_flower", new float[]{1.0f, 0.5f, 0.75f}, 0.1f, Kind.IPBR),
 			new Pack("redstone_block", new float[]{1.0f, 0.025f, 0.025f}, 0.15f, Kind.REDSTONE_BLOCK), new Pack("lapis_block", new float[]{0.25f, 0.25f, 1.0f}, 0.15f, Kind.LAPIS_BLOCK),
+			// new in r5.10 (light id 40, as the brewing stand); r5.10's other new block light, ice_crystal, is a 26.4 block
+			new Pack("torchflower", new float[]{1.0f, 0.48f, 0.16f}, 0.05f, Kind.IPBR),
 	};
 
 	/** Type ids: [0, NAMES) by name, then the dyes, warm white, then {@link #PACK}. */
@@ -140,6 +142,7 @@ public final class LightColors {
 
 	private static int packIndex(String name) {
 		if (name.contains("trial_spawner")) return -1; // only active trial spawners glow, and those have vanilla light
+		if (name.contains("torchflower_crop")) return -1; // the pack lights only the grown flower
 		if (name.startsWith("potted_")) name = name.substring(7);
 		for (int i = 0; i < PACK.length; i++) if (name.contains(PACK[i].name)) return i;
 		return -1;

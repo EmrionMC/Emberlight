@@ -7,8 +7,9 @@ The new on-disk format is specified in [FORMAT.md](FORMAT.md).
 
 ## 1. Goals and target
 
-- **Acceptance target:** *Complementary Unbound r5.9.3 + Euphoria Patches 1.10.5*, with the reference Iris settings file
-  `ComplementaryUnbound_r5.9.3 + EuphoriaPatches_1.10.5.txt`. It must look like Iris on
+- **Acceptance target:** *Complementary Unbound r5.10 + Euphoria Patches 1.11.2* (since 2026-11-21; r5.9.3 + 1.10.5 stays
+  supported as legacy), with the reference Iris settings file `ComplementaryUnbound_r5.10 + EuphoriaPatches_1.11.2.txt`
+  (testpacks/unbound-euphoria-r510). It must look like Iris on
   OpenGL with the same settings. Plain Reimagined/Unbound share the same code (they differ only in `SHADER_STYLE`), so they come for free.
 - Priority on conflicts: correct look, then FPS, then everything else.
 - The FPS goal is to beat Iris + Sodium on OpenGL with the same pack and settings.

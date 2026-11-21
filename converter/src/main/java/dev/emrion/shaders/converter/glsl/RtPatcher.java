@@ -220,7 +220,8 @@ public final class RtPatcher {
 					List<Match> m = matches(GlslParser.parse(t), t, effect, program);
 					if (m.isEmpty()) continue;
 					var missing = effect.patches().stream() // a stage that matches part of a program's patch set is never half-patched
-							.filter(patch -> !patch.optional() && patch.programs() != null && patch.programs().contains(program) && m.stream().noneMatch(x -> x.patch() == patch))
+							.filter(patch -> !patch.optional() && patch.programs() != null && patch.programs().contains(program) && m.stream().noneMatch(x -> x.patch() == patch
+									|| patch.oneOf() != null && patch.oneOf().equals(x.patch().oneOf())))
 							.findFirst();
 					if (missing.isPresent()) {
 						// only optional extras matched (the Nether's composite without world-space reflections): not one of this effect's stages

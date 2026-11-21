@@ -17,7 +17,7 @@ dependencies {
 }
 
 tasks.withType(JavaCompile).configureEach { options.release = 25; options.encoding = 'UTF-8' }
-test { useJUnitPlatform(); jvmArgs '--enable-native-access=ALL-UNNAMED'; systemProperty 'emrion.testpacks', rootProject.file('testpacks').absolutePath; systemProperty 'emberlight.packs', rootProject.file('packs').absolutePath }
+test { useJUnitPlatform(); maxHeapSize = '3g'; jvmArgs '--enable-native-access=ALL-UNNAMED'; systemProperty 'emrion.testpacks', rootProject.file('testpacks').absolutePath; systemProperty 'emberlight.packs', rootProject.file('packs').absolutePath }
 application { mainClass = 'dev.emrion.shaders.converter.cli.ConverterCli' }
 jar {
 	manifest { attributes 'Main-Class': 'dev.emrion.shaders.converter.cli.ConverterCli' }

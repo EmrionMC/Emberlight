@@ -33,6 +33,8 @@ class LightColorsTest {
 		assertNotEquals(LightColors.packType("gold_ore"), LightColors.packType("nether_gold_ore"));
 		assertEquals(-1, LightColors.packType("trial_spawner"));
 		assertEquals(-1, LightColors.packType("stone"));
+		assertEquals(LightColors.Kind.IPBR, LightColors.kind(LightColors.packType("potted_torchflower")));
+		assertEquals(-1, LightColors.packType("torchflower_crop"));
 		assertEquals(LightColors.Kind.VANILLA, LightColors.kind(LightColors.vanilla("torch")));
 		assertEquals(1f, LightColors.power(LightColors.vanilla("torch"), 2f));
 		// stronger in the pack (alpha): longer range, more power; ore brightness scales ores only

@@ -1393,9 +1393,9 @@ Buffer layout: `rt/complementary/bl_buffer.glsl` (the one declaration for every 
 before the gbuffers, on this frame's surfaces (view ray against the TLAS like RTX GI):
 1. `bl_restir_a`: surface, vertex lightmap, U (all sources in reach, the §23 gate), one exact weighted draw over the whole
    cell list with a visibility test (occluded candidates keep M but no weight), temporal reuse of last frame's final
-   reservoir at the reprojected pixel (M cap 20, 3 inside the light-change box of §25).
+   reservoir at the reprojected pixel (M cap 4, 3 inside the light-change box of §25).
 2. `bl_restir_b`: spatial reuse (2 / 4 / 6 neighbours for the Low / Medium / High setting, i.e. block light 2 / 4 / 8,
-   radius 16 px, same plane), one final shadow ray to the sample's disk point (glass tints), ratio S / U.
+   radius 16 px, same plane, at most 1 block away), one final shadow ray to the sample's disk point (glass tints), ratio S / U.
 3. `bl_restir_c`: temporal accumulation of the ratio (8 frames, 3 in the change box), history clamped to the 3x3 spread.
 4. `bl_restir_d`: one 5x5 edge-aware à-trous step → `emrBlOut`; history images written.
 The gbuffers (`rtx/blocklight.glsl`) only look the ratio up (own pixel if the surface matches, else a ring up to 8 px; no
@@ -1407,9 +1407,14 @@ emrBlLightAt(p, n, seed)` is the stable one-sample interface for other passes (u
 A pack-only source lights from the point of its block nearest the surface (`emrBlSourceAt`): an ore flush with a wall then
 lights that wall, as the pack's floodfill does; from the block centre it sat behind the face and lit nothing there.
 
-Options: `blocklight:visRay` (1), `bias` (1, ray-traced bias correction, see below; 0 = plain 1/M), `mcap` (20), `radius` (16), `frames` (8), `clamp` (2), `ref=1` (every source, 32 disk
+Options: `blocklight:visRay` (1), `bias` (1, ray-traced bias correction, see below; 0 = plain 1/M), `mcap` (4), `radius` (16), `reach` (1.0, blocks: farthest spatial neighbour; 0 = no limit), `frames` (8), `clamp` (2), `ref=1` (every source, 32 disk
 points, no reuse), `debug=1` (ratio), `debug=2` (green: traced surface, red: fallback). Removed: `gi:lightRays`,
 `gi:noblocklight`, `gi:wrap/falloff/lightSize`, `blocklight:size/glass/wrap/falloff` (constants in `bl_common.glsl`).
+
+Boiling (2026-11-21): with `mcap` 20 and the pixel radius alone, far and grazing floors near torches showed slow blotches
+("like water reflections"): 16 px there span several blocks, a neighbour's sample was weighted by its own very different
+light, and the history passed it on for 20 frames. `reach` 1 + `mcap` 4: blotch std on the far farm-hall floor 2.3-4.6 -> 0.2
+(reference `ref=1`: 0.15), mean unchanged.
 
 **Measured** (user's config: Sodium, RTX, block light 2, GI high, DLSS Quality + FG, 2560×1386; snapshots replayed; mean
 luma of the frame, RT off / RTX before / RTX now):

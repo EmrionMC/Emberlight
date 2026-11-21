@@ -91,7 +91,7 @@ camera. Ray tracing needs a patch table per pack and is only available for Compl
 
 | Shader pack | Runs | Ray tracing | Notes |
 |---|---|---|---|
-| Complementary Unbound / Reimagined r5.10 (+ Euphoria Patches) | ✅ | ✅ | Light shafts are not ray-traced yet |
+| Complementary Unbound / Reimagined r5.10 (+ Euphoria Patches) | ✅ | ✅ | Current target; Reimagined r5.10 not tested yet |
 | Complementary Unbound / Reimagined r5.9.3 (+ Euphoria Patches) | ✅ | ✅ | Matches Iris |
 | BSL v10 | ✅ | – | Matches Iris |
 | Photon v1.4 | ✅ | – | Matches Iris |

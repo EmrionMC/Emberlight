@@ -53,6 +53,7 @@ public final class GbufferPipelines {
 	/**
 	 * Push-constant alpha refs: TERRAIN_PREPASS returns after the pack's alpha test (above 1.5); TERRAIN_MAIN (below -1.5) skips
 	 * every later discard (the converter's alpha test, Euphoria's snow fade), so it never leaves a texel the prepass kept uncoloured.
+	 * The prepass ref carries the draw's own ref on top (2.5 cutout, 2 solid): Complementary r5.10 leaves the cutout test to it.
 	 */
 	private static final float PREPASS_REF = 2f, MAIN_REF = -2f;
 	/** This dimension's conversion has the prepass patch: its Sodium opaque terrain has TERRAIN_PREPASS/MAIN pipelines. */
@@ -514,7 +515,7 @@ public final class GbufferPipelines {
 				modules.add(ShaderModules.create(ctx, fs));
 				b.stage(VK_SHADER_STAGE_FRAGMENT_BIT, modules.getLast());
 				if (p.alphaTest() != null) alphaRef = p.alphaTest().ref();
-				if (k.terrain() != null) alphaRef = k.terrain() == Context.TERRAIN_PREPASS ? PREPASS_REF : MAIN_REF;
+				if (k.terrain() != null) alphaRef = k.terrain() == Context.TERRAIN_PREPASS ? PREPASS_REF + Math.max(alphaRef, 0f) : MAIN_REF;
 				if (k.terrain() == Context.TERRAIN_MAIN) b.depthWrite(false);
 			}
 			if (k.hidden() || k.program() == null) b.depth(VK_FORMAT_D32_SFLOAT, true, false, VK_COMPARE_OP_LESS_OR_EQUAL);
