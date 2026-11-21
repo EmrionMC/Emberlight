@@ -4,8 +4,8 @@ Emberlight builds for Fabric and NeoForge (Minecraft 26.3) from one repository, 
 (https://github.com/Updated-VoxelMap/VoxelMap): shared code plus one module per loader. Sodium is required on both
 loaders; Sodium's Fabric and NeoForge builds contain the same classes, so our Sodium mixins are shared too.
 
-**Status:** the NeoForge jar builds and its mixins pass a static check against NeoForge's Minecraft, but it has
-**never been started**. Everything below "Untested" applies.
+**Status:** first dev-client runs on 2026-11-21 work: Vulkan, Complementary r5.10 + Euphoria converts, RT, DLSS SR and
+frame generation through five test scenes, no errors. Better Block Entities on NeoForge is not tested yet.
 
 ## Layout
 

@@ -2,7 +2,7 @@
 // autotests). The shared code lives in common/ and is packed into this jar (docs/NEOFORGE.md).
 plugins { id 'net.fabricmc.fabric-loom' version "${loom_version}" }
 
-base { archivesName = 'emberlight' }
+base { archivesName = 'emberlight-fabric' }
 
 // Sodium is a required dependency (fabric.mod.json): compiled against, never bundled (Polyform Shield). runClient loads the
 // local Sodium jar from -PirisModsDir (not the runtime classpath, which runIrisReference shares with its own Sodium).
