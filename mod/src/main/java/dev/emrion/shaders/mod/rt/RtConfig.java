@@ -112,7 +112,12 @@ public final class RtConfig {
 			if (shadowEntities) s.add("shadows:entities");
 			if (rtx) s.add("shadows:rtx");
 		}
-		if (reflections) s.add("reflections");
+		if (reflections) {
+			s.add("reflections");
+			// rough reflectors at a quarter rate only pay off with a PBR pack's rough materials (BENCHMARK.md); without one they
+			// save nothing and the skipped tiles flickered on copper while turning
+			if (!dev.emrion.shaders.mod.pbr.PbrAtlases.blockSpecular()) s.add("reflections:halfRate=1");
+		}
 		if (rtx) {
 			s.add("materials"); // material table for packs without labPBR maps
 			s.add("shafts");

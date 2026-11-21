@@ -98,6 +98,16 @@ public final class PbrAtlases {
 		return labPbr;
 	}
 
+	/** A resource pack ships block specular maps ({@code _s}). Read from the current resource manager: at startup the pack
+	 * converts while the block atlas is still loading, so the loaded maps are not known yet. */
+	public static boolean blockSpecular() {
+		try {
+			return !Minecraft.getInstance().getResourceManager().listResources("textures/block", id -> id.getPath().endsWith("_s.png")).isEmpty();
+		} catch (RuntimeException e) { // a pack closed by a concurrent reload: keep the table's default
+			return true;
+		}
+	}
+
 	public static int generation() {
 		return generation;
 	}

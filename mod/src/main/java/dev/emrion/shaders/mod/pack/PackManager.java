@@ -517,6 +517,8 @@ public final class PackManager {
 		Loaded l = next != null ? next : loaded;
 		java.util.Set<String> want = request(l != null && l.rtSupport().nativePack());
 		java.util.Set<String> have = l == null || l.manifest().rt() == null ? java.util.Set.of() : rtRequestOf(l.manifest());
+		// an unavailable effect keeps only its name there: its options (reflections:halfRate=1) must not force a reload every time
+		if (l != null && l.manifest().rt() != null) want.removeIf(e -> e.indexOf(':') > 0 && l.manifest().rt().unavailable().containsKey(e.substring(0, e.indexOf(':'))));
 		if (want.equals(have) || selected == null) return false;
 		reload();
 		return true;

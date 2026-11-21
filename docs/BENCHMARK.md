@@ -1391,3 +1391,10 @@ Still open (proposals, not done): static block-entity geometry is rebuilt every 
 still ~35 % of the storage room's render thread; tangents alone 14 %); the shadow receiver grid costs ~0.6 ms per frame in the
 forest; world text opts out of Sodium's glyph writer. Without Sodium, DLSS frame generation crashed the game in NGX at the
 snapshot load twice (`DlssFrameGen` on the "Emberlight NGX" thread, SIGSEGV), so these runs force frame generation off.
+
+**2026-11-20, quarter rate only with a PBR pack.** Without one it saved nothing (above) but the skipped tiles showed while
+turning: the upper copper row of a wall flickered (16 px tile residual of a slow turn 1.03 at quarter rate, 0.91 full rate).
+The mod now requests `reflections:halfRate=1` when no resource pack has `textures/block/*_s.png`; the copper scene is the
+same speed either way (72.3 vs 71.8 FPS, three interleaved pairs). Tried, not kept: tracing skipped pixels whose history fails
+the pack's depth/normal test (turn residual 0.81, but with the PBR pack forest 84.0 → 77.2 FPS and copper 85.1 → 81.7, as slow
+as full rate 79.0 / 81.8).
