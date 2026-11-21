@@ -176,7 +176,9 @@ tasks.named('runClient') {
 			optionsFile.text = 'preferredGraphicsBackend:"vulkan"\nonboardAccessibility:false\n'
 		}
 		linkResourcePacks(optionsFile.parentFile)
-		jvmArgs "-Dfabric.addMods=${(sodiumJars.files + bbeJars.files).join(File.pathSeparator)}"
+		// -PextraMods=<jar>[:<jar>]: more mods for compat tests (e.g. VoxelMap); env ORG_GRADLE_PROJECT_extraMods works through gamequeue
+		def extraMods = (findProperty('extraMods') ?: '').toString().split(File.pathSeparator).findAll { it }
+		jvmArgs "-Dfabric.addMods=${((sodiumJars.files + bbeJars.files)*.path + extraMods).join(File.pathSeparator)}"
 		def sodium = new File(irisModsDir.parentFile, 'config/sodium-options.json')
 		new File(optionsFile.parentFile, 'config').mkdirs()
 		if (sodium.isFile()) java.nio.file.Files.copy(sodium.toPath(), new File(optionsFile.parentFile, 'config/sodium-options.json').toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)

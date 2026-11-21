@@ -35,6 +35,8 @@ import java.util.concurrent.Executors;
 public final class PackPipelines {
 	/** MC's main render target format (MainTarget): what final writes. */
 	public static final GpuFormat SCREEN_FORMAT = GpuFormat.RGBA8_UNORM;
+	/** Its depth format: what {@link #depthExport} writes. */
+	public static final GpuFormat MAIN_DEPTH_FORMAT = GpuFormat.D32_FLOAT;
 
 	// not final: a constructor that fails half-way releases what it built (handles still 0 are skipped by vkDestroy*)
 	public long setLayout, emptySetLayout, layout;
@@ -50,6 +52,8 @@ public final class PackPipelines {
 	public final Map<Integer, Long> blit = new java.util.concurrent.ConcurrentHashMap<>();
 	/** Area-filter mip generation per colour format of the mipmapped targets (FrameExecutor.mipmaps). */
 	public final Map<Integer, Long> mip = new java.util.concurrent.ConcurrentHashMap<>();
+	/** depthtex0 into MC's main depth (D32, reverse Z) after final: what mods drawing after the level test against. */
+	public long depthExport;
 	public GbufferPipelines gbuffers;
 	/** Constant default vertex attributes for gbuffers inputs the vanilla formats lack (GeometryPipelines.DEFAULTS). */
 	public dev.emrion.shaders.mod.vk.RawBuffer defaults;
@@ -92,7 +96,7 @@ public final class PackPipelines {
 		var push = manifest.uniforms().pushConstants();
 		layout = Descriptors.pipelineLayout(ctx, push == null ? 0 : push.size(), emptySetLayout, setLayout);
 		helperSetLayout = new Descriptors.LayoutBuilder().add(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT).build(ctx, true);
-		helperLayout = Descriptors.pipelineLayout(ctx, 0, helperSetLayout);
+		helperLayout = Descriptors.pipelineLayout(ctx, 8, helperSetLayout); // emrion_depth_export's scale
 		clearSetLayout = new Descriptors.LayoutBuilder().add(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_SHADER_STAGE_COMPUTE_BIT).build(ctx, true);
 		clearLayout = Descriptors.pipelineLayout(ctx, 16, clearSetLayout);
 		if (ctx.storageWriteWithoutFormat) { // the clear shaders need it; without it FrameExecutor clears by transfer
@@ -128,6 +132,7 @@ public final class PackPipelines {
 			for (int f : targets.values().stream().filter(t -> t.mipLevels() != 1 && (t.kind().equals("color") || t.kind().equals("shadow_color")) && !Formats.isInteger(Formats.gpu(t.format())))
 					.map(t -> VulkanConst.toVk(Formats.gpu(t.format()))).distinct().toList())
 				jobs.add(CompletableFuture.runAsync(() -> mip.put(f, helper("emrion_mip", f)), pool));
+			jobs.add(CompletableFuture.runAsync(() -> depthExport = helper("emrion_depth_export", VK_FORMAT_UNDEFINED), pool));
 			gbuffers = new GbufferPipelines(ctx, cacheDir, manifest, dim, setLayout, vanilla, pool, this);
 			CompletableFuture.allOf(jobs.toArray(CompletableFuture[]::new)).join();
 		}
@@ -212,8 +217,11 @@ public final class PackPipelines {
 		long vs = ShaderModules.create(ctx, ShaderModules.resource("/assets/emberlight/spv/fullscreen.vert.spv")), fs = 0;
 		try {
 			fs = ShaderModules.create(ctx, ShaderModules.resource("/assets/emberlight/spv/" + frag + ".frag.spv"));
-			return new GraphicsPipelineBuilder().stage(VK_SHADER_STAGE_VERTEX_BIT, vs).stage(VK_SHADER_STAGE_FRAGMENT_BIT, fs).layout(helperLayout)
-					.colors(new int[] {colorFormat}).build(ctx, ctx.pipelineCache().handle);
+			var b = new GraphicsPipelineBuilder().stage(VK_SHADER_STAGE_VERTEX_BIT, vs).stage(VK_SHADER_STAGE_FRAGMENT_BIT, fs).layout(helperLayout);
+			// VK_FORMAT_UNDEFINED: depth only, written unconditionally (gl_FragDepth)
+			if (colorFormat == VK_FORMAT_UNDEFINED) b.colors(new int[0]).depth(VulkanConst.toVk(MAIN_DEPTH_FORMAT), true, true, VK_COMPARE_OP_ALWAYS);
+			else b.colors(new int[] {colorFormat});
+			return b.build(ctx, ctx.pipelineCache().handle);
 		} finally {
 			ShaderModules.destroy(ctx, vs);
 			ShaderModules.destroy(ctx, fs);
@@ -265,6 +273,7 @@ public final class PackPipelines {
 			raygen.values().forEach(r -> r.sbt().destroyLater());
 			blit.values().forEach(p -> vkDestroyPipeline(ctx.vk, p, null));
 			mip.values().forEach(p -> vkDestroyPipeline(ctx.vk, p, null));
+			vkDestroyPipeline(ctx.vk, depthExport, null);
 			vkDestroyPipeline(ctx.vk, clear2d, null);
 			vkDestroyPipeline(ctx.vk, clear3d, null);
 			vkDestroyPipelineLayout(ctx.vk, clearLayout, null);

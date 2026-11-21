@@ -73,6 +73,7 @@ public final class FrameExecutor {
 	/** GPU profiler label per frame / once command (built once: no string building per frame). */
 	private final String[] frameLabels, onceLabels;
 	private final PackRuntime.Img mcColor = new PackRuntime.Img("minecraft main color", null);
+	private final PackRuntime.Img mcDepth = new PackRuntime.Img("minecraft main depth", null);
 	private boolean oncePending = true;
 	private final boolean hasShadowPass;
 	/** A pass that runs before the shadow pass ends reads the TLAS (see {@link #readsTlasBeforeShadowEnd}). */
@@ -377,7 +378,10 @@ public final class FrameExecutor {
 			case "clear" -> clear(cb, firstFrame ? c.targets() : deferred.start().getOrDefault(c, c.targets()));
 			case "compute" -> compute(cb, c);
 			case "fullscreen" -> fullscreen(cb, c);
-			case "final" -> finalPass(cb, c);
+			case "final" -> {
+				finalPass(cb, c);
+				exportDepth(cb);
+			}
 			case "mipmaps" -> mipmaps(cb, rt.image(c.target(), c.side()));
 			case "copy" -> {
 				// end-of-frame copies (no flipState) of swapped targets are replaced by the image swap
@@ -582,6 +586,29 @@ public final class FrameExecutor {
 			setOverride = 0;
 			dynamicOffsets[0] = frame;
 		}
+	}
+
+	/**
+	 * depthtex0 (hand included, as Iris's depthtex0 is MC's own depth) into MC's main depth, which the gbuffers never write:
+	 * mods that draw into the world after the level (VoxelMap waypoint beams, ...) test against it. One fullscreen depth write.
+	 */
+	private void exportDepth(VkCommandBuffer cb) {
+		var main = Minecraft.getInstance().gameRenderer.mainRenderTarget();
+		var depth = rt.image("depthtex0", "main");
+		if (depth == null || main.getDepthTexture() == null || main.getDepthTexture().getFormat() != PackPipelines.MAIN_DEPTH_FORMAT) return;
+		mcDepth.image = ((VulkanGpuTexture) main.getDepthTexture()).vkImage();
+		mcDepth.attach = ((VulkanGpuTextureView) main.getDepthTextureView()).vkImageView();
+		hazards.read(depth, FRAGMENT, SAMPLED_READ);
+		hazards.write(mcDepth, DEPTH, DEPTH_WRITE | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT); // loadOp LOAD
+		hazards.flush(cb);
+		RawPass.beginDepth(cb, main.width, main.height, mcDepth.attach);
+		try (MemoryStack stack = MemoryStack.stackPush()) {
+			vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pp.depthExport);
+			RawPass.pushImages(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pp.helperLayout, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, rt.nearestSampler(), depth.sampled);
+			vkCmdPushConstants(cb, pp.helperLayout, VK_SHADER_STAGE_ALL, 0, stack.floats((float) depth.width / main.width, (float) depth.height / main.height));
+			vkCmdDraw(cb, 3, 1, 0, 0);
+		}
+		RawPass.end(cb);
 	}
 
 	/** Motion vectors and FSR/DLSS from the cut target (render size) to rt.upscaled (window size). */
