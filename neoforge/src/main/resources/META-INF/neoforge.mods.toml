@@ -6,7 +6,7 @@ license = "LGPL-3.0-only AND LicenseRef-Emberlight-DLSS"
 modId = "emberlight"
 version = "${version}"
 displayName = "Emberlight"
-logoFile = "assets/emberlight/icon.png"
+iconFile = "assets/emberlight/icon.png"
 description = '''
 Runs OptiFine/Iris shaderpacks on Minecraft's Vulkan renderer. Uses NVIDIA DLSS. NVIDIA, NVIDIA RTX and DLSS are trademarks of NVIDIA Corporation; the bundled DLSS bridge is under LICENSE-DLSS.txt, not the LGPL.
 '''
