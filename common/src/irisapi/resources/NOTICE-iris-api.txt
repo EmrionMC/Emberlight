@@ -1,6 +1,6 @@
 net.irisshaders.iris.api.v0 is the public API of Iris (https://github.com/IrisShaders/Iris),
 Copyright the Iris contributors, licensed under the GNU LGPL v3 (LICENSE, COPYING in this jar).
 Copied from Iris commit bff1e69cb6c5519d8745784aa9c8b92984de67e7, common/src/api. Modified by Emberlight:
-RenderPipeline/VertexFormat imports use the Minecraft 26.3 names, and IrisApiInternal returns Emberlight'
-implementation. Emberlight loads these classes only when Iris is not installed. Source: src/irisapi in the
+RenderPipeline/VertexFormat imports use the Minecraft 26.3 names, and IrisApiInternal returns Emberlight's
+implementation. Emberlight loads these classes only when Iris is not installed. Source: common/src/irisapi in the
 Emberlight repository.

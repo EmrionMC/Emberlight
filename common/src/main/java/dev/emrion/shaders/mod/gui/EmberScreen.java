@@ -1,11 +1,14 @@
 package dev.emrion.shaders.mod.gui;
 
+import dev.emrion.shaders.mod.framegen.FrameGen;
 import dev.emrion.shaders.mod.framegen.FrameGenConfig;
 import dev.emrion.shaders.mod.pack.PackManager;
 import dev.emrion.shaders.mod.rt.RtCapability;
 import dev.emrion.shaders.mod.rt.RtConfig;
 import dev.emrion.shaders.mod.runtime.ReceiverGrid;
+import dev.emrion.shaders.mod.upscale.Dlss;
 import dev.emrion.shaders.mod.upscale.UpscaleConfig;
+import dev.emrion.shaders.mod.upscale.Xess;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.BooleanSupplier;
@@ -521,6 +524,27 @@ public abstract class EmberScreen extends Screen {
 				: rt.effects().isEmpty() ? "Emberlight can add ray tracing only to packs with an RT patch table (Complementary, or packs that ship one)." : null;
 	}
 
+	static @Nullable Component warning(@Nullable String text) {
+		return text == null ? null : Component.literal(text).withColor(BAD);
+	}
+
+	/** The selected upscaler silently runs FSR instead (files missing, no runtime, failed start): a short warning, else null. */
+	static @Nullable String upscaleFallback(UpscaleConfig.Mode m) {
+		String why = m == UpscaleConfig.Mode.DLSS ? Dlss.unavailable() : m == UpscaleConfig.Mode.XESS ? Xess.unavailable() : null;
+		if (why == null) return null;
+		boolean download = m == UpscaleConfig.Mode.DLSS ? Dlss.needsDownload() && !Dlss.has(Dlss.MODEL) : Xess.needsDownload();
+		return m.shortLabel + (download ? " not downloaded" : " unavailable") + ", using FSR";
+	}
+
+	/** The selected frame generation does not run (DLSS FG files missing or unsupported, failed start): a short warning, else null. */
+	static @Nullable String frameGenFallback(FrameGenConfig.Mode m) {
+		if (m == FrameGenConfig.Mode.DLSS && FrameGenConfig.dlssUnavailable() != null)
+			return Dlss.needsDownload() && !(Dlss.has(Dlss.MODEL) && Dlss.has(Dlss.FG_MODEL)) ? "DLSS FG not downloaded, off" : "DLSS FG unavailable, off";
+		if (m == FrameGenConfig.Mode.OFF) return null;
+		String stalled = FrameGen.stalled();
+		return FrameGen.failure() != null ? "Failed to start, off" : stalled != null ? "Off: " + stalled : null;
+	}
+
 	protected List<Tile> pageTiles() {
 		return List.of(
 				tile("Ray tracing", (d, s) -> openRt()).value(() -> {
@@ -532,13 +556,15 @@ public abstract class EmberScreen extends Screen {
 					return rt == null ? RtCapability.enabled && RtConfig.enabled : rt.nativePack() || !rt.effects().isEmpty() && RtCapability.enabled && RtConfig.enabled;
 				}).tooltip(rtHint()),
 				tile("Upscaling", (d, s) -> minecraft.gui.setScreen(new UpscaleScreen(this))).value(() -> Component.literal(
-						UpscaleConfig.mode == UpscaleConfig.Mode.OFF ? "Off" : UpscaleConfig.mode.shortLabel + " · " + UpscaleConfig.preset.label))
-						.lit(() -> UpscaleConfig.mode != UpscaleConfig.Mode.OFF),
-				tile("Frame generation", (d, s) -> minecraft.gui.setScreen(new FrameGenScreen(this))).value(() -> Component.literal(switch (FrameGenConfig.mode) {
+						UpscaleConfig.mode == UpscaleConfig.Mode.OFF ? "Off" : UpscaleConfig.effective().shortLabel + " · " + UpscaleConfig.preset.label))
+						.hint(warning(upscaleFallback(UpscaleConfig.mode))).lit(() -> UpscaleConfig.mode != UpscaleConfig.Mode.OFF),
+				tile("Frame generation", (d, s) -> minecraft.gui.setScreen(new FrameGenScreen(this))).value(() -> Component.literal(
+						frameGenFallback(FrameGenConfig.mode) != null ? "Off" : switch (FrameGenConfig.mode) {
 					case OFF -> "Off";
 					case FSR -> "On · FSR 3";
 					case DLSS -> "On · DLSS";
-				})).lit(() -> FrameGenConfig.mode != FrameGenConfig.Mode.OFF),
+				})).hint(warning(frameGenFallback(FrameGenConfig.mode)))
+						.lit(() -> FrameGenConfig.mode != FrameGenConfig.Mode.OFF && frameGenFallback(FrameGenConfig.mode) == null),
 				tile("Performance", (d, s) -> minecraft.gui.setScreen(new PerformanceScreen(this))).value(() -> Component.literal(ReceiverGrid.mode.equals("off") ? "No tweaks" : "Shadow culling on"))
 						.lit(() -> !ReceiverGrid.mode.equals("off")));
 	}

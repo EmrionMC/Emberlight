@@ -270,6 +270,7 @@ public final class PackManager {
 					loaded = l;
 					status = pack + ": loaded";
 					progress = -1;
+					checkPbrMode();
 				});
 			} catch (Throwable t) {
 				Minecraft.getInstance().execute(() -> {
@@ -449,6 +450,7 @@ public final class PackManager {
 					else next = l;
 					status = pack + ": converted in " + (System.nanoTime() - start) / 1_000_000 + " ms";
 					progress = -1;
+					checkPbrMode();
 				});
 			} catch (Throwable t) {
 				Minecraft.getInstance().execute(() -> {
@@ -1014,6 +1016,43 @@ public final class PackManager {
 				EmrionShadersClient.LOG.error("Tearing down {} failed too", pack, inner);
 			}
 		});
+	}
+
+	private static final net.minecraft.client.gui.components.toasts.SystemToast.SystemToastId PBR_TOAST =
+			new net.minecraft.client.gui.components.toasts.SystemToast.SystemToastId(10000L);
+	private static @Nullable String pbrWarned;
+
+	/**
+	 * Complementary and its forks (Unbound, Euphoria Patches) with RP_MODE 2/3 (seuspbr/labPBR, "RP Required") read every
+	 * material from the resource pack: with no block PBR maps at all glass, metals etc. turn fully matte. Warns once per pack
+	 * load or block atlas build (render thread, never per frame); the labels come from the pack's own lang file.
+	 */
+	public static void checkPbrMode() {
+		if (PbrAtlases.blockMaps() != 0 || selected == null) return;
+		var s = optionSession();
+		String v = s == null ? null : s.applied.get("RP_MODE");
+		int mode;
+		try {
+			mode = v == null ? -1 : Integer.parseInt(v.trim());
+		} catch (NumberFormatException e) {
+			return;
+		}
+		String key = generation + ":" + PbrAtlases.generation();
+		if (mode < 2 || key.equals(pbrWarned)) return;
+		pbrWarned = key;
+		String option = strip(s.lang("option.RP_MODE", "Resource Pack Support")), value = strip(s.lang("value.RP_MODE." + mode, v)),
+				integrated = strip(s.lang("value.RP_MODE.1", "Integrated PBR"));
+		EmrionShadersClient.LOG.warn("{}: {} = {} (RP_MODE={}) but no PBR resource pack is loaded (0 normal and 0 specular block maps): materials will look matte",
+				selected, option, value, mode);
+		Minecraft mc = Minecraft.getInstance();
+		net.minecraft.client.gui.components.toasts.SystemToast.addOrUpdate(mc.gui.toastManager(), PBR_TOAST,
+				Component.literal("No PBR resource pack loaded"), Component.literal(option + " is " + value + ": materials look matte."));
+		chat(Component.literal("Emberlight: " + option + " is set to " + value + ", but no PBR resource pack is loaded, so materials look matte. Set "
+				+ option + " to " + integrated + " in the shader options.").withStyle(ChatFormatting.YELLOW));
+	}
+
+	private static String strip(String s) {
+		return ChatFormatting.stripFormatting(s).trim();
 	}
 
 	/** Messages from before a world was joined (MC drops chat on the title screen); render thread only. */

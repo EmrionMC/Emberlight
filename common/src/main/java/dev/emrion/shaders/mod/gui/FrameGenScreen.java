@@ -24,12 +24,15 @@ public final class FrameGenScreen extends EmberScreen {
 	@Override
 	protected void build() {
 		String dlss = FrameGenConfig.dlssUnavailable();
+		boolean fgFiles = Dlss.has(Dlss.MODEL) && Dlss.has(Dlss.FG_MODEL);
 		section("Frame generation");
 		row(tile("Mode", (d, s) -> {
 			mode = Mode.values()[Math.floorMod(mode.ordinal() + d, Mode.values().length)];
 			rebuild();
-		}).value(shortLabel(mode)).lit(() -> mode != Mode.OFF).hint(() -> mode == Mode.DLSS && Dlss.needsDownload() ? Component.literal("Needs a one-time download, see below")
-				: mode == Mode.DLSS && dlss != null ? Component.literal("Unavailable: " + dlss).withColor(BAD)
+		}).value(shortLabel(mode)).lit(() -> mode != Mode.OFF && !(mode == Mode.DLSS && dlss != null))
+				.hint(() -> mode == Mode.DLSS && dlss != null && Dlss.needsDownload() && !fgFiles ? warning(frameGenFallback(mode) + " (download below)")
+				: mode == Mode.DLSS && Dlss.needsDownload() ? Component.literal("Needs a one-time download, see below")
+				: mode == Mode.DLSS && dlss != null ? Component.literal("Unavailable, stays off: " + dlss).withColor(BAD)
 				: FrameGen.failure() != null ? Component.literal("Unavailable: " + FrameGen.failure()).withColor(BAD)
 				: mode == Mode.OFF ? null : Component.literal(mode == Mode.FSR ? "Works on any GPU" : "Needs an NVIDIA RTX 40 GPU or newer")).tooltip(
 				"Shows an interpolated frame between every two rendered frames: about twice the frames on screen, "
@@ -38,7 +41,7 @@ public final class FrameGenScreen extends EmberScreen {
 						+ (dlss != null ? " (unavailable: " + dlss + ")" : "") + "."));
 		if (mode == Mode.DLSS && Dlss.needsDownload())
 			row(tile("Download NVIDIA DLSS files", (d, s) -> minecraft.gui.setScreen(new DlssDownloadScreen(this))).value("›")
-					.tooltip("About " + DlssDownloadScreen.TOTAL_MB + " MB from NVIDIA's GitHub, once. Until then FSR is used."));
+					.tooltip("About " + DlssDownloadScreen.TOTAL_MB + " MB from NVIDIA's GitHub, once. Until then frame generation stays off."));
 		row(tile("Pause at refresh rate", (d, s) -> {
 			autoPause = !autoPause;
 			rebuild();
@@ -47,14 +50,15 @@ public final class FrameGenScreen extends EmberScreen {
 						+ "can't be shown and only cost GPU time. It resumes below 90 % of the refresh rate."));
 		if (Reflex.supported) {
 			// frame generation needs Reflex: Off then shows as On, the choice left is On or On + Boost
-			boolean forced = mode != Mode.OFF;
+			boolean forced = mode == Mode.FSR || mode == Mode.DLSS && dlss == null;
 			section("Latency");
 			row(tile("NVIDIA Reflex", (d, s) -> {
 				int n = Reflex.Mode.values().length;
 				do reflex = Reflex.Mode.values()[Math.floorMod(reflex.ordinal() + d, n)]; while (forced && reflex == Reflex.Mode.OFF);
 				rebuild();
 			}).value((forced && reflex == Reflex.Mode.OFF ? Reflex.Mode.ON : reflex).label).lit(() -> forced || reflex != Reflex.Mode.OFF)
-					.hint(forced ? Component.literal("Required by frame generation") : null).tooltip(
+					.hint(Reflex.broken() ? warning("Stopped: the driver rejected it")
+							: forced ? Component.literal("Required by frame generation") : null).tooltip(
 					"Lowers input latency: the game waits until just before the GPU is free before it reads your input and "
 							+ "builds a frame, so no frames queue up in front of the GPU. Biggest effect when the GPU is the limit.\n"
 							+ "On + Boost: also keeps the GPU clocks up (more power).\n"
@@ -71,7 +75,8 @@ public final class FrameGenScreen extends EmberScreen {
 
 	@Override
 	protected @Nullable Component headerStatus() {
-		return Component.literal(shortLabel(FrameGenConfig.mode));
+		String fallback = frameGenFallback(FrameGenConfig.mode);
+		return fallback != null ? warning(fallback) : Component.literal(shortLabel(FrameGenConfig.mode));
 	}
 
 	private static String shortLabel(Mode m) {

@@ -30,16 +30,17 @@ public final class UpscaleScreen extends EmberScreen {
 
 	@Override
 	protected void build() {
-		String dlss = Dlss.unavailable();
+		String dlss = Dlss.unavailable(), fallback = upscaleFallback(mode);
+		boolean needsDownload = mode == Mode.DLSS && Dlss.needsDownload() || mode == Mode.XESS && Xess.needsDownload();
 		section("Upscaler");
 		row(tile("Upscaler", (d, s) -> {
 			do mode = Mode.values()[Math.floorMod(mode.ordinal() + d, Mode.values().length)];
 			while (mode == Mode.XESS && !Xess.platformSupported()); // Intel ships no Linux runtime
 			rebuild();
 		}).value(mode.label).lit(() -> mode != Mode.OFF)
-				.hint(mode == Mode.DLSS && Dlss.needsDownload() ? Component.literal("Needs a one-time download, see below")
+				.hint(needsDownload && fallback != null ? warning(fallback + " (download below)")
+				: needsDownload ? Component.literal("Needs a one-time download, see below") // DLSS runs, only the FG/RR models are missing
 				: mode == Mode.DLSS && dlss != null ? Component.literal("Unavailable, using FSR: " + dlss).withColor(BAD)
-				: mode == Mode.XESS && Xess.needsDownload() ? Component.literal("Needs a one-time download, see below")
 				: mode == Mode.XESS && Xess.unavailable() != null ? Component.literal("Unavailable, using FSR: " + Xess.unavailable()).withColor(BAD)
 				: mode != Mode.OFF && dev.emrion.shaders.mod.upscale.VanillaUpscale.failure() != null
 						? Component.literal("Unavailable: " + dev.emrion.shaders.mod.upscale.VanillaUpscale.failure()).withColor(BAD)
@@ -82,7 +83,7 @@ public final class UpscaleScreen extends EmberScreen {
 				+ "only the anti-aliasing of the upscaler."), tile("Sharpness", (d, s) -> {
 			sharpness = Math.floorMod(sharpness + d, 11);
 			rebuild();
-		}).value(sharpness * 10 + "%").active(mode != Mode.OFF).hint(mode == Mode.DLSS || mode == Mode.XESS ? Component.literal("Not used by " + mode.shortLabel) : null)
+		}).value(sharpness * 10 + "%").active(mode != Mode.OFF).hint((mode == Mode.DLSS || mode == Mode.XESS) && fallback == null ? Component.literal("Not used by " + mode.shortLabel) : null)
 				.tooltip("FSR's RCAS sharpening (0 = off). DLSS and XeSS ignore it."));
 		String hdrWhy = dev.emrion.shaders.mod.hdr.Hdr.unsupported();
 		section("HDR");
@@ -115,8 +116,9 @@ public final class UpscaleScreen extends EmberScreen {
 
 	@Override
 	protected @Nullable Component headerStatus() {
-		return Component.literal(UpscaleConfig.mode == Mode.OFF ? "Off" : (UpscaleConfig.rrActive() ? "DLSS RR" : UpscaleConfig.mode.shortLabel)
-				+ " · " + UpscaleConfig.preset.label);
+		String fallback = upscaleFallback(UpscaleConfig.mode);
+		return fallback != null ? warning(fallback) : Component.literal(UpscaleConfig.mode == Mode.OFF ? "Off"
+				: (UpscaleConfig.rrActive() ? "DLSS RR" : UpscaleConfig.mode.shortLabel) + " · " + UpscaleConfig.preset.label);
 	}
 
 	private int percent() {

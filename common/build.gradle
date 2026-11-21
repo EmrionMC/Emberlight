@@ -116,6 +116,8 @@ sourceSets.main.resources.srcDir(compileFsr3Fg)
 
 processResources {
 	from rootProject.file('LICENSE-DLSS.txt') // terms of the bundled DLSS shim in natives/
+	from rootProject.files('LICENSE', 'COPYING', 'NOTICE')
+	from(file('src/main/glsl/fidelityfx/LICENSE.txt')) { rename { 'LICENSE-FidelityFX.txt' } }
 }
 
 tasks.withType(JavaCompile).configureEach { it.options.release = 25; it.options.encoding = 'UTF-8' }

@@ -93,6 +93,11 @@ public final class Reflex {
 		return FrameGenConfig.effective() != FrameGenConfig.Mode.OFF;
 	}
 
+	/** The driver rejected Reflex this session: it stays off. */
+	public static boolean broken() {
+		return supported && sleepBroken;
+	}
+
 	public static Mode effective() {
 		if (!supported || sleepBroken) return Mode.OFF;
 		return mode == Mode.OFF && fgForces && forcedByFrameGen() ? Mode.ON : mode;

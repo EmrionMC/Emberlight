@@ -72,7 +72,7 @@ import org.jspecify.annotations.Nullable;
  *     framegen off|fsr|dlss | hdr on|off | reflex off|on|boost|fgoff | move YAW/s DX/s DZ/s SECONDS (per-frame camera motion, continues during later steps) | vsync on|off |
  *     turnshot DEG_PER_FRAME FRAMES NAME [DX DZ [T]] (frame-exact turn and move, shot of its last frame) | fgturn (the same, captures the
  *     interpolated frame in front of the last one) | bob WALK AMOUNT|off (view bobbing on, at a fixed walk distance and bob amount) | hurt TIME DIR|off | nausea INTENSITY ANGLE|off (frozen damage tilt / nausea skew) | mats NAME (logs gbufferModelView/Projection, Iris's when it renders) |
- *     bench|benchv SECONDS NAME (rendered + presented frame times; benchv keeps VSync/cap) | trace start | trace stop NAME (every frame time in between -> emrion-trace-NAME.csv) | fgshots N NAME (the next N presented frame pairs as PNGs) | frames SECONDS NAME (every frame for SECONDS, quarter size, -> &lt;tag&gt;-NAME-NNN-MSms.png; runs on during later steps) | screen pause|inventory|chat|packs|rt|upscale|framegen|perf|dlss|options[:ID]|none | key KEY [ctrl] (into the open screen) | drop PATH[;PATH] (onto the open screen) | use down|up (hold the use key) | press KEY (key.keyboard.KEY) | irisapi (logs what the Iris API reports) | repeat N { steps } (no nesting) |
+ *     bench|benchv SECONDS NAME (rendered + presented frame times; benchv keeps VSync/cap) | trace start | trace stop NAME (every frame time in between -> emrion-trace-NAME.csv) | fgshots N NAME (the next N presented frame pairs as PNGs) | frames SECONDS NAME (every frame for SECONDS, quarter size, -> &lt;tag&gt;-NAME-NNN-MSms.png; runs on during later steps) | screen pause|inventory|chat|packs|rt|upscale|framegen|perf|dlss|options[:ID]|none | key KEY [ctrl] (into the open screen) | scroll N (mouse wheel, N notches down) | drop PATH[;PATH] (onto the open screen) | use down|up (hold the use key) | press KEY (key.keyboard.KEY) | irisapi (logs what the Iris API reports) | repeat N { steps } (no nesting) |
  *     photo SCALE SAMPLES NAME [rt+up|rt|up|none] (photo mode, &lt;tag&gt;-NAME.png; which histories reset per frame, sticky) |
  *     snapshot FILE (replays a debug snapshot.json: pose, dimension, time, weather, effects, items, options, pack settings and
  *     Emberlight config, then shoots &lt;tag&gt;-snapshot-&lt;folder&gt;.png; without world/server it picks the snapshot's own)
@@ -949,6 +949,11 @@ public final class AutoTest {
 					if (mc.gui.screen() != null && mc.gui.screen().getFocused() instanceof net.minecraft.client.gui.components.AbstractWidget w)
 						EmrionShadersClient.LOG.info("Autotest: key {} -> focus '{}'", arg, w.getMessage().getString());
 				}
+				return true;
+			}
+			case "scroll" -> { // "scroll N": N mouse-wheel notches down (negative: up) at the centre of the open screen
+				var sc = mc.gui.screen();
+				if (sc != null) sc.mouseScrolled(sc.width / 2.0, sc.height / 2.0, 0, -Double.parseDouble(arg));
 				return true;
 			}
 			case "drop" -> { // files dropped onto the open screen

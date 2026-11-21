@@ -32,6 +32,8 @@ dependencies {
 processResources {
 	from(common.sourceSets.main.resources) { exclude 'emberlight-irisapi.jar' } // assets, natives, generated SPIR-V, mixin configs; the Iris API shim is Fabric-only
 	from rootProject.file('LICENSE-DLSS.txt')
+	from rootProject.files('LICENSE', 'COPYING', 'NOTICE')
+	from(common.file('src/main/glsl/fidelityfx/LICENSE.txt')) { rename { 'LICENSE-FidelityFX.txt' } }
 	def version = project.version
 	inputs.property 'version', version
 	filesMatching('META-INF/neoforge.mods.toml') { expand 'version': version }

@@ -55,6 +55,11 @@ public final class FrameGen {
 		return failure;
 	}
 
+	/** Why selected frame generation is not producing frames for another reason (stopped presenter, waiting for VRAM), or null. */
+	public static @Nullable String stalled() {
+		return Presenter.wedged() ? "stopped after a present error" : vramWaiting ? "waiting for GPU memory" : null;
+	}
+
 	/** Restarts the interpolation history (pack swap, camera cut, mode change). */
 	public static void requestReset() {
 		resetNext = true;

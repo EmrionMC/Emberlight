@@ -80,6 +80,8 @@ public final class PbrAtlases {
 	/** The resource packs declare {@code format=lab-pbr} in optifine/texture.properties (Iris's TextureFormatLoader). */
 	private static boolean labPbr;
 	private static int generation;
+	/** Normal plus specular maps found for the block atlas at its last build; -1 until one finished. */
+	private static int blockMaps = -1;
 
 	private final Layout layout;
 	private @Nullable PbrAtlas normals, specular;
@@ -110,6 +112,10 @@ public final class PbrAtlases {
 
 	public static int generation() {
 		return generation;
+	}
+
+	public static int blockMaps() {
+		return blockMaps;
 	}
 
 	/** The instance of the atlas at {@code location}, null if that atlas was not uploaded while the mod was active. */
@@ -163,6 +169,7 @@ public final class PbrAtlases {
 		if (old != null) old.release();
 		if (!atlas.location().equals(TextureAtlas.LOCATION_BLOCKS)) return; // the others are built on first use
 		generation++;
+		blockMaps = -1; // unknown until this atlas's maps are built
 		dev.emrion.shaders.mod.rt.RtOmm.onAtlasUpload(prep);
 		if (PackManager.selected() != null) fresh.build();
 	}
@@ -318,6 +325,10 @@ public final class PbrAtlases {
 		EmrionShadersClient.LOG.info("PBR atlases of {}: sprites cover {}% of the atlas, normal maps {}%, specular maps {}%", location,
 				coverage(l, null), coverage(l, loaded.normals()), coverage(l, loaded.specular()));
 		if (DUMP) dump(l);
+		if (location.equals(TextureAtlas.LOCATION_BLOCKS)) {
+			blockMaps = loaded.normals().size() + loaded.specular().size();
+			PackManager.checkPbrMode();
+		}
 	}
 
 	/** Percentage of the atlas area covered by the regions (with padding) of all sprites, or of those in {@code with}. */

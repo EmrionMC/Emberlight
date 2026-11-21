@@ -26,3 +26,8 @@ the mod downloads Intel's XeSS SDK v3.0.2 release from github.com/intel/xess onl
 libxess.dll unmodified together with Intel's licence (Intel Simplified Software License, October 2022) and calls its
 public C API (dev.emrion.shaders.mod.upscale.Xess, XessUpscaler; no Intel source or headers are included).
 Intel(R) Xe Super Sampling (XeSS) SDK: Copyright (C) 2025 Intel Corporation.
+
+Iris API (net.irisshaders.iris.api.v0), LGPL-3.0, Copyright the Iris contributors, https://github.com/IrisShaders/Iris
+  Location: common/src/irisapi/ (copied from Iris commit bff1e69cb6c5519d8745784aa9c8b92984de67e7, common/src/api; imports
+  adapted to Minecraft 26.3, IrisApiInternal returns Emberlight's implementation). Fabric jar only, loaded only when Iris
+  is not installed; see common/src/irisapi/resources/NOTICE-iris-api.txt.
