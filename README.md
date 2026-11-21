@@ -1,8 +1,10 @@
 # Emberlight
 
+![Emberlight](docs/branding/emberlight-banner.png)
+
 *Formerly "Emrion Shaders". Version 0.1.0-alpha.1, see [CHANGELOG.md](CHANGELOG.md).*
 
-Emberlight is a Fabric mod for Minecraft Java **26.3** that runs OptiFine/Iris shaderpacks on Minecraft's new **Vulkan**
+Emberlight is a Fabric and NeoForge mod for Minecraft Java **26.3** that runs OptiFine/Iris shaderpacks on Minecraft's new **Vulkan**
 renderer. Iris only works on OpenGL; Emberlight fills that gap.
 
 On top of the pack it can add:
