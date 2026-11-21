@@ -8,7 +8,7 @@
   "environment": "client",
   "entrypoints": {
     "client": [
-      "dev.emrion.shaders.mod.EmrionShadersClient"
+      "dev.emrion.shaders.mod.fabric.EmberlightFabric"
     ],
     "preLaunch": [
       "dev.emrion.shaders.mod.compat.IrisApiShim"

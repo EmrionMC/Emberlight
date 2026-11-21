@@ -213,9 +213,11 @@ Other packs may work but hit unimplemented paths. Details: [docs/BENCHMARK.md](d
 Needs Java 25 or newer and `glslc` (from the Vulkan SDK or shaderc) on the `PATH`.
 
 ```sh
-./gradlew build             # mod jar in mod/build/libs/, all tests
+./gradlew build             # Fabric jar in mod/build/libs/, NeoForge jar in neoforge/build/libs/, all tests
 ./gradlew :converter:fatJar # standalone converter: java -jar converter/build/libs/converter-*-all.jar <pack> <settings.txt|-> <out-dir>
 ```
+
+The NeoForge build is new and not tested in game yet ([NEOFORGE.md](docs/NEOFORGE.md)).
 
 Developer documentation is in [docs/](docs): [ARCHITECTURE.md](docs/ARCHITECTURE.md), the cache format
 [FORMAT.md](docs/FORMAT.md), [RAYTRACING.md](docs/RAYTRACING.md), [UPSCALING.md](docs/UPSCALING.md),

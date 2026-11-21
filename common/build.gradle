@@ -1,0 +1,144 @@
+// Loader-independent code (renderer, RT, upscalers, frame generation, pack runtime, mixins into Minecraft and Sodium),
+// shared by the Fabric (mod/) and NeoForge (neoforge/) modules, which pack these classes and resources into their jars.
+// Loom only provides the (unobfuscated) Minecraft jar here; no Fabric API or loader classes may be used (docs/NEOFORGE.md).
+plugins { id 'net.fabricmc.fabric-loom' version "${loom_version}" }
+
+repositories { exclusiveContent { forRepository { maven { name = 'Modrinth'; url = 'https://api.modrinth.com/maven' } }; filter { includeGroup 'maven.modrinth' } } }
+
+dependencies {
+	minecraft "com.mojang:minecraft:${minecraft_version}"
+	// Sodium's Fabric and NeoForge builds share these classes; never bundled (Polyform Shield, docs/SODIUM.md)
+	compileOnly "maven.modrinth:sodium:${sodium_version}"
+	compileOnly "net.fabricmc:sponge-mixin:${mixin_version}"
+	compileOnly "io.github.llamalad7:mixinextras-common:${mixinextras_version}"
+	implementation project(':converter')
+}
+loom { accessWidenerPath = file('emberlight.accesswidener') }
+
+// Fails with a readable message instead of Gradle's "A problem occurred starting process 'command 'glslc''".
+class Glslc {
+	static void require() {
+		try { new ProcessBuilder('glslc', '--version').redirectErrorStream(true).start().with { it.inputStream.text; it.waitFor() } }
+		catch (IOException e) { throw new GradleException('glslc not found on PATH: install the Vulkan SDK (or shaderc)', e) }
+	}
+}
+
+// Test/debug shaders: mod/src/main/glsl/*.{vert,frag,comp} -> assets/emberlight/spv/<name>.spv (glslc on PATH).
+abstract class CompileGlsl extends DefaultTask {
+	@InputDirectory abstract DirectoryProperty getSource()
+	@OutputDirectory abstract DirectoryProperty getOutput()
+	@javax.inject.Inject abstract ExecOperations getExecOps()
+
+	@TaskAction
+	void compile() {
+		Glslc.require()
+		def out = output.get().dir('assets/emberlight/spv').asFile
+		out.deleteDir()
+		out.mkdirs()
+		source.get().asFile.eachFileMatch(~/.*\.(vert|frag|comp)$/) { f ->
+			execOps.exec { commandLine 'glslc', '--target-env=vulkan1.2', '-O', f.absolutePath, '-o', new File(out, f.name + '.spv').absolutePath }
+		}
+	}
+}
+def compileGlsl = tasks.register('compileGlsl', CompileGlsl) {
+	source = layout.projectDirectory.dir('src/main/glsl')
+	output = layout.buildDirectory.dir('generated/spv')
+}
+sourceSets.main.resources.srcDir(compileGlsl)
+
+// AMD FSR 3.1 upscaler (MIT, vendored in src/main/glsl/fidelityfx): one fixed permutation per pass
+// (LDR colour, render-size unjittered motion vectors, forward depth, Lanczos LUT, no FP16), plus accumulate with sharpening.
+// No -O: spirv-opt strips the resource names the host binds by (the driver optimises anyway).
+abstract class CompileFsr3 extends DefaultTask {
+	@InputDirectory abstract DirectoryProperty getSource()
+	@OutputDirectory abstract DirectoryProperty getOutput()
+	@javax.inject.Inject abstract ExecOperations getExecOps()
+
+	@TaskAction
+	void compile() {
+		def src = source.get().asFile
+		Glslc.require()
+		def out = output.get().dir('assets/emberlight/spv/fsr3').asFile
+		out.deleteDir()
+		out.mkdirs()
+		def defines = ['FFX_GPU=1', 'FFX_GLSL=1', 'FFX_HALF=0', 'FFX_FSR3UPSCALER_OPTION_UPSAMPLE_SAMPLERS_USE_DATA_HALF=0',
+				'FFX_FSR3UPSCALER_OPTION_ACCUMULATE_SAMPLERS_USE_DATA_HALF=0', 'FFX_FSR3UPSCALER_OPTION_REPROJECT_SAMPLERS_USE_DATA_HALF=1',
+				'FFX_FSR3UPSCALER_OPTION_POSTPROCESSLOCKSTATUS_SAMPLERS_USE_DATA_HALF=0', 'FFX_FSR3UPSCALER_OPTION_UPSAMPLE_USE_LANCZOS_TYPE=2',
+				'FFX_FSR3UPSCALER_OPTION_REPROJECT_USE_LANCZOS_TYPE=1', 'FFX_FSR3UPSCALER_OPTION_HDR_COLOR_INPUT=0',
+				'FFX_FSR3UPSCALER_OPTION_LOW_RESOLUTION_MOTION_VECTORS=1', 'FFX_FSR3UPSCALER_OPTION_JITTERED_MOTION_VECTORS=0',
+				'FFX_FSR3UPSCALER_OPTION_INVERTED_DEPTH=0']
+		def passes = ['prepare_inputs', 'luma_pyramid', 'shading_change_pyramid', 'shading_change', 'prepare_reactivity', 'luma_instability', 'accumulate', 'rcas']
+		def variants = passes.collect { [it, it, 0] } + [['accumulate_sharpen', 'accumulate', 1]]
+		variants.each { v ->
+			def args = ['glslc', '--target-env=vulkan1.2', '-fshader-stage=comp', "-I${src}/gpu", "-I${src}/gpu/fsr3upscaler"]
+			args += defines.collect { "-D${it}" } + ["-DFFX_FSR3UPSCALER_OPTION_APPLY_SHARPENING=${v[2]}"]
+			args += [new File(src, "passes/ffx_fsr3upscaler_${v[1]}_pass.glsl").absolutePath, '-o', new File(out, "${v[0]}.spv").absolutePath]
+			execOps.exec { commandLine args }
+		}
+	}
+}
+def compileFsr3 = tasks.register('compileFsr3', CompileFsr3) {
+	source = layout.projectDirectory.dir('src/main/glsl/fidelityfx')
+	output = layout.buildDirectory.dir('generated/fsr3')
+}
+sourceSets.main.resources.srcDir(compileFsr3)
+
+// AMD FSR 3 frame interpolation + optical flow (MIT, same vendored SDK): every pass in one permutation
+// (render-size unjittered motion vectors, forward depth, SDR, no FP16) -> assets/emberlight/spv/fsr3fg/<pass>.spv.
+abstract class CompileFsr3Fg extends DefaultTask {
+	@InputDirectory abstract DirectoryProperty getSource()
+	@OutputDirectory abstract DirectoryProperty getOutput()
+	@javax.inject.Inject abstract ExecOperations getExecOps()
+
+	@TaskAction
+	void compile() {
+		def src = source.get().asFile
+		Glslc.require()
+		def out = output.get().dir('assets/emberlight/spv/fsr3fg').asFile
+		out.deleteDir()
+		out.mkdirs()
+		def defines = ['FFX_GPU=1', 'FFX_GLSL=1', 'FFX_HALF=0', 'FFX_FRAMEINTERPOLATION_OPTION_LOW_RES_MOTION_VECTORS=1',
+				'FFX_FRAMEINTERPOLATION_OPTION_JITTER_MOTION_VECTORS=0', 'FFX_FRAMEINTERPOLATION_OPTION_INVERTED_DEPTH=0',
+				'FFX_OPTICALFLOW_OPTION_HDR_COLOR_INPUT=0']
+		new File(src, 'passes').eachFileMatch(~/ffx_(frameinterpolation|opticalflow)(_.*)?_pass(_v5)?\.glsl$/) { f ->
+			def effect = f.name.startsWith('ffx_frameinterpolation') ? 'frameinterpolation' : 'opticalflow'
+			def args = ['glslc', '--target-env=vulkan1.2', '-fshader-stage=comp', "-I${src}/gpu", "-I${src}/gpu/${effect}"]
+			args += defines.collect { "-D${it}" } + [f.absolutePath, '-o', new File(out, f.name.replace('.glsl', '.spv')).absolutePath]
+			execOps.exec { commandLine args }
+		}
+	}
+}
+def compileFsr3Fg = tasks.register('compileFsr3Fg', CompileFsr3Fg) {
+	source = layout.projectDirectory.dir('src/main/glsl/fidelityfx')
+	output = layout.buildDirectory.dir('generated/fsr3fg')
+}
+sourceSets.main.resources.srcDir(compileFsr3Fg)
+
+processResources {
+	from rootProject.file('LICENSE-DLSS.txt') // terms of the bundled DLSS shim in natives/
+}
+
+tasks.withType(JavaCompile).configureEach { it.options.release = 25; it.options.encoding = 'UTF-8' }
+java { sourceCompatibility = JavaVersion.VERSION_25; targetCompatibility = JavaVersion.VERSION_25 }
+
+dependencies {
+	testImplementation platform('org.junit:junit-bom:5.11.3')
+	testImplementation 'org.junit.jupiter:junit-jupiter'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+test { useJUnitPlatform() }
+
+// Iris API copy (LGPL-3.0-only, src/irisapi): packed as a nested jar resource that IrisApiShim puts on the class path
+// at pre-launch only when Iris is not installed. Not on main's runtime class path, so the dev run behaves as release.
+sourceSets { irisapi { compileClasspath += sourceSets.main.compileClasspath } }
+def irisApiJar = tasks.register('irisApiJar', Jar) {
+	archiveFileName = 'emberlight-irisapi.jar'
+	destinationDirectory = layout.buildDirectory.dir('generated/irisapi')
+	from sourceSets.irisapi.output
+	from rootProject.files('LICENSE', 'COPYING')
+}
+sourceSets.main.resources.srcDir(irisApiJar.map { it.destinationDirectory })
+processResources.dependsOn irisApiJar
+sourceSets.main.compileClasspath += sourceSets.irisapi.output // after the line above: irisapi keeps main's original class path
+dependencies { testImplementation sourceSets.irisapi.output }
+

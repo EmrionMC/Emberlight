@@ -135,8 +135,8 @@ jitter, which the upscaler sees as slightly softer AO/GI (by < 1 render pixel).
 
 * Source: FidelityFX SDK **v1.1.4** (`GPUOpen-LibrariesAndSDKs/FidelityFX-SDK`, the last release with the Vulkan backend
   and GLSL shaders): `sdk/include/FidelityFX/gpu` (`ffx_core`, `fsr3upscaler/`, `spd/`, `fsr1/` for RCAS) and the eight
-  `sdk/src/backends/vk/shaders/fsr3upscaler/*_pass.glsl`, vendored unmodified under `mod/src/main/glsl/fidelityfx/` with
-  AMD's licence file. The build compiles them with `glslc` (like `mod/src/main/glsl`) to `assets/emrionshaders/spv/fsr3/`
+  `sdk/src/backends/vk/shaders/fsr3upscaler/*_pass.glsl`, vendored unmodified under `common/src/main/glsl/fidelityfx/` with
+  AMD's licence file. The build compiles them with `glslc` (like `common/src/main/glsl`) to `assets/emrionshaders/spv/fsr3/`
   with one fixed permutation: LDR, render-size motion vectors, unjittered motion vectors, forward depth, Lanczos LUT in
   reproject, no FP16, plus the sharpening variant of accumulate. No `-O`: spirv-opt strips the resource names the host
   binds by; the driver optimises the SPIR-V anyway.
@@ -384,10 +384,10 @@ reconverted without the denoiser bypass (`PackManager.resizeTimed`). The Upscali
 `emrion_ngx.c` gained `emrion_ngx_rr_available`, `emrion_ngx_rr_create` (`NGX_VULKAN_CREATE_DLSSD_EXT1`, DL-unified
 denoise mode, packed roughness, HW depth, `MVLowRes`) and `emrion_ngx_rr_evaluate` (`NGX_VULKAN_EVALUATE_DLSSD_EXT`).
 Java binds them optionally: an older shim simply reports RR unavailable. Linux: `build-dlss.sh --shim
-mod/src/main/resources/natives/linux-x86_64/libemrion_ngx.so` (rebuilt). Windows: the same source change applies; the
+common/src/main/resources/natives/linux-x86_64/libemrion_ngx.so` (rebuilt). Windows: the same source change applies; the
 DLL must be rebuilt in the Windows VM with `build-dlss.ps1` (no source changes needed there: `emrion_ngx.c` includes
 `nvsdk_ngx_helpers_dlssd_vk.h` from the same SDK v310.9.16; the link line is unchanged) and copied to
-`mod/src/main/resources/natives/windows-x86_64/emrion_ngx.dll`.
+`common/src/main/resources/natives/windows-x86_64/emrion_ngx.dll`.
 
 ### 11.3 Model download and licence
 

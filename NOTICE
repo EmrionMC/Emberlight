@@ -6,7 +6,7 @@ This product includes third-party software:
 AMD FidelityFX SDK v1.1.4 (FSR 3.1 upscaler, frame interpolation and optical flow shaders), MIT licence
   Copyright (C) 2024 Advanced Micro Devices, Inc.
   https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK
-  Location: mod/src/main/glsl/fidelityfx/ (licence text: mod/src/main/glsl/fidelityfx/LICENSE.txt), compiled into
+  Location: common/src/main/glsl/fidelityfx/ (licence text: common/src/main/glsl/fidelityfx/LICENSE.txt), compiled into
   assets/emberlight/spv/fsr3/; the host logic in dev.emrion.shaders.mod.upscale.Fsr3Upscaler is a port of
   sdk/src/components/fsr3upscaler/ffx_fsr3upscaler.cpp from the same SDK and licence. Frame generation: the
   frameinterpolation/ and opticalflow/ shaders, compiled into assets/emberlight/spv/fsr3fg/; dev.emrion.shaders.mod.framegen

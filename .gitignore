@@ -11,9 +11,12 @@ mod/run/
 *.iml
 out/
 mod/logs/
+common/logs/
 mod/run-iris/
 mod/run-compare/
 /testpacks
 *.log
 mod/tools/testworld/torch_hall.schem
 __pycache__/
+neoforge/run/
+neoforge/run-mods/

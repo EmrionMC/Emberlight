@@ -1,0 +1,66 @@
+// The NeoForge module: entrypoint, neoforge.mods.toml and a dev client run. It compiles common/'s sources itself, against
+// NeoForge's patched Minecraft, so a NeoForge API or access difference fails the build instead of the game (docs/NEOFORGE.md).
+plugins { id 'net.neoforged.moddev' version "${moddev_version}" }
+
+base { archivesName = 'emberlight-neoforge' }
+
+repositories { exclusiveContent { forRepository { maven { name = 'Modrinth'; url = 'https://api.modrinth.com/maven' } }; filter { includeGroup 'maven.modrinth' } } }
+
+def common = project(':common')
+evaluationDependsOn(':common')
+sourceSets.main.java.srcDir common.file('src/main/java')
+
+neoForge {
+	version = neoforge_version
+	runs {
+		client {
+			client()
+			programArguments.addAll('--graphicsBackend', providers.gradleProperty('graphicsBackend').orElse('vulkan').get())
+		}
+	}
+	mods { emberlight { sourceSet sourceSets.main } }
+}
+
+dependencies {
+	// Sodium's classes are the same in its Fabric and NeoForge builds; the NeoForge jar nests them (jar-in-jar)
+	compileOnly "maven.modrinth:sodium:${sodium_version}"
+	compileOnly common.sourceSets.irisapi.output
+	implementation project(':converter')
+	jarJar project(':converter')
+}
+
+processResources {
+	from(common.sourceSets.main.resources) { exclude 'emberlight-irisapi.jar' } // assets, natives, generated SPIR-V, mixin configs; the Iris API shim is Fabric-only
+	from rootProject.file('LICENSE-DLSS.txt')
+	def version = project.version
+	inputs.property 'version', version
+	filesMatching('META-INF/neoforge.mods.toml') { expand 'version': version }
+}
+
+tasks.withType(JavaCompile).configureEach { it.options.release = 25; it.options.encoding = 'UTF-8' }
+java { sourceCompatibility = JavaVersion.VERSION_25; targetCompatibility = JavaVersion.VERSION_25 }
+
+// Dev client: -PneoforgeMods=<dir> with exactly one sodium-neoforge-*.jar (plus bbe-neoforge-*.jar with -Pbbe) is copied
+// into run/mods; -Pserver=<host:port> joins a test server; every -Demberlight.* / -Demrion.* goes to the game as emrion.*.
+def neoMods = file(findProperty('neoforgeMods') ?: 'run-mods') // untracked, like mod/'s run-iris/mods
+tasks.named('runClient') {
+	def server = findProperty('server')
+	def bbe = findProperty('bbe') != null
+	doFirst {
+		def jars = neoMods.listFiles()?.findAll { it.name ==~ /sodium-neoforge-.*\.jar/ || (bbe && it.name ==~ /bbe-neoforge-.*\.jar/) } ?: []
+		if (jars.count { it.name.startsWith('sodium-') } != 1) throw new GradleException("Expected one sodium-neoforge-*.jar in ${neoMods} (-PneoforgeMods), found ${jars*.name}")
+		if (bbe && jars.count { it.name.startsWith('bbe-') } != 1) throw new GradleException("Expected one bbe-neoforge-*.jar in ${neoMods} for -Pbbe, found ${jars*.name}")
+		def modsDir = file('run/mods')
+		if (neoMods.canonicalFile == modsDir.canonicalFile) throw new GradleException('-PneoforgeMods must not be run/mods (its jars are replaced there)')
+		project.delete(fileTree(modsDir) { include 'sodium-neoforge-*.jar', 'bbe-neoforge-*.jar' })
+		project.copy { from jars; into modsDir }
+		def props = [:] + System.properties.findAll { k, v -> k.startsWith('emrion.') } +
+				System.properties.findAll { k, v -> k.startsWith('emberlight.') }.collectEntries { k, v -> ['emrion.' + k.substring('emberlight.'.length()), v] }
+		// scene lists live in mod/ (shared with the Fabric runs)
+		props.each { k, v -> jvmArgs "-D${k}=${k == 'emrion.autotest.scenes' ? project(':mod').file(v).absolutePath : v}" }
+		if (server) {
+			jvmArgs "-Demrion.autotest.server=${server}"
+			args '--username', findProperty('testUsername') ?: 'EmbTest'
+		}
+	}
+}

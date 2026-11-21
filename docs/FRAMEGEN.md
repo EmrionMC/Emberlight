@@ -47,7 +47,7 @@ the dlssg library missing, pre-Ada GPU (`FrameGeneration_Available = 0`), NGX in
 
 * Source: `GPUOpen-LibrariesAndSDKs/FidelityFX-SDK` tag **v1.1.4** (the same release as M8's upscaler):
   `sdk/include/FidelityFX/gpu/frameinterpolation/` and `opticalflow/` headers and the 18 Vulkan GLSL pass files from
-  `sdk/src/backends/vk/shaders/{frameinterpolation,opticalflow}/`, vendored unmodified under `mod/src/main/glsl/fidelityfx/`
+  `sdk/src/backends/vk/shaders/{frameinterpolation,opticalflow}/`, vendored unmodified under `common/src/main/glsl/fidelityfx/`
   (AMD's licence file is already there). The build compiles them with `glslc` (task `compileFsr3Fg`) in one permutation:
   render-size (low-res) motion vectors, unjittered motion vectors, forward depth, no FP16, SDR input.
 * Host side: Java ports of `ffx_opticalflow.cpp` (`framegen/OpticalFlow.java`) and `ffx_frameinterpolation.cpp`

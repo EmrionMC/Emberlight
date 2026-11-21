@@ -1,0 +1,47 @@
+modLoader = "javafml"
+loaderVersion = "[1,)"
+license = "LGPL-3.0-only AND LicenseRef-Emberlight-DLSS"
+
+[[mods]]
+modId = "emberlight"
+version = "${version}"
+displayName = "Emberlight"
+logoFile = "assets/emberlight/icon.png"
+description = '''
+Runs OptiFine/Iris shaderpacks on Minecraft's Vulkan renderer. Uses NVIDIA DLSS. NVIDIA, NVIDIA RTX and DLSS are trademarks of NVIDIA Corporation; the bundled DLSS bridge is under LICENSE-DLSS.txt, not the LGPL.
+'''
+
+# same as fabric.mod.json's custom "sodium:options" (Sodium reads it from this mod entry)
+[mods."sodium:options"]
+"mixin.features.render.world.sky" = false
+
+[[mixins]]
+config = "emrionshaders.mixins.json"
+
+[[mixins]]
+config = "emrionshaders.iris.mixins.json"
+
+[[mixins]]
+config = "emrionshaders.bbe.mixins.json"
+
+[[mixins]]
+config = "emrionshaders.sodium.mixins.json"
+
+[[dependencies.emberlight]]
+modId = "neoforge"
+type = "required"
+versionRange = "[26.3.0.0,)"
+side = "CLIENT"
+
+[[dependencies.emberlight]]
+modId = "minecraft"
+type = "required"
+versionRange = "[26.3,26.4)"
+side = "CLIENT"
+
+# pinned to the Sodium build our compat mixins target (fabric.mod.json: depends >= and breaks >)
+[[dependencies.emberlight]]
+modId = "sodium"
+type = "required"
+versionRange = "[0.9.3-beta.5,0.9.3-beta.6)"
+side = "CLIENT"

@@ -22,6 +22,7 @@ The new on-disk format is specified in [FORMAT.md](FORMAT.md).
 | Fabric Loader | 0.20.1 | latest from meta.fabricmc.net |
 | Fabric API | 0.166.2+26.3 | latest for 26.3 on Modrinth |
 | Loom | 1.19-SNAPSHOT, plugin `net.fabricmc.fabric-loom` | Fabric example mod for 26.3. MC 26.x ships unobfuscated, so there are **no mappings** and we use `implementation` instead of `modImplementation`. |
+| NeoForge | 26.3.0.115, ModDevGradle 2.0.148 | second loader (module `neoforge/`, [NEOFORGE.md](NEOFORGE.md)); shared code in `common/` |
 | Java | release 25 (MC requirement), built with JDK 27 | |
 | LWJGL | 3.4.3 (MC's) | MC already ships `lwjgl-shaderc` and `lwjgl-spvc`, so the converter's SPIR-V toolchain exists at runtime with no extra natives. |
 
@@ -37,7 +38,7 @@ Porting to 26.4 later should be cheap. The renderpearl API is the same family, a
             │   → ManifestWriter  ==>  cache/<key>/manifest.json + *.spv + report.json              │
             └───────────────────────────────────────────────────────────────────────────────────────┘
                                              │  (FORMAT.md contract; Java records in dev.emrion.shaders.format)
-            ┌──────────────────────────────── mod/ (Fabric, MC 26.3, Vulkan only) ────────────────────┐
+            ┌──────────────────────────────── common/ (MC 26.3, Vulkan only) ─────────────────────────┐
             │ PackManager (select, convert async, cache) → PackRuntime                                │
             │   Targets (colortex/depthtex/shadow*, custom textures, images)                          │
             │   PipelineFactory (raw VkPipelines, wrapped as MC CompiledRenderPipeline for geometry)  │

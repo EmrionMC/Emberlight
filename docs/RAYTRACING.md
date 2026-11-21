@@ -36,7 +36,7 @@ the existing renderer without touching the Iris-equivalent path. Read [ARCHITECT
 | Reflection | lwjgl-spvc 3.4.3 reports the TLAS under `SPVC_RESOURCE_TYPE_ACCELERATION_STRUCTURE` with the right set and binding (tested). `SpirvReflection` needs one more `addDescriptors(..., "acceleration_structure")` line. |
 | Required device extensions | `VK_KHR_acceleration_structure`, `VK_KHR_deferred_host_operations` (a dependency of the former, never used: all builds happen on the device), `VK_KHR_ray_query`. Features: `accelerationStructure`, `rayQuery`, `bufferDeviceAddress`. The RTX 4070 Ti / NVIDIA 615.78 has all of them. |
 
-## 2. Acceleration structures (`mod/.../rt/`)
+## 2. Acceleration structures (`common/.../rt/`)
 
 New package `dev.emrion.shaders.mod.rt`:
 
