@@ -5,7 +5,7 @@ Emberlight builds for Fabric and NeoForge (Minecraft 26.3) from one repository, 
 loaders; Sodium's Fabric and NeoForge builds contain the same classes, so our Sodium mixins are shared too.
 
 **Status:** first dev-client runs on 2026-11-21 work: Vulkan, Complementary r5.10 + Euphoria converts, RT, DLSS SR and
-frame generation through five test scenes, no errors. Better Block Entities on NeoForge is not tested yet.
+frame generation through five test scenes, no errors. A short Better Block Entities run (storage scene, RT on) works too.
 
 ## Layout
 

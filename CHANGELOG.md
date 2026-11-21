@@ -2,7 +2,7 @@
 
 ## 0.1.0-alpha.1
 
-First public alpha of **Emberlight** (developed as "Emrion Shaders"): a Fabric mod for Minecraft Java **26.3** that runs
+First public alpha of **Emberlight** (developed as "Emrion Shaders"): a Fabric and NeoForge mod for Minecraft Java **26.3** that runs
 OptiFine/Iris shaderpacks on Minecraft's **Vulkan** renderer. Expect bugs and keep backups of your worlds.
 
 ### Requirements
@@ -58,7 +58,7 @@ OptiFine/Iris shaderpacks on Minecraft's **Vulkan** renderer. Expect bugs and ke
 **DLSS installation**
 - The DLSS bridge library ships in the jar (under its own terms, `LICENSE-DLSS.txt`, not the LGPL). Selecting DLSS the
   first time offers to download NVIDIA's DLSS and DLSS-FG model files (~67 MB) from NVIDIA's GitHub; by downloading you
-  accept NVIDIA's RTX SDK licence. Restart the game once. Linux only for now. `mod/native/build-dlss.sh` remains as the
+  accept NVIDIA's RTX SDK licence. Restart the game once. Linux and Windows. `mod/native/build-dlss.sh` remains as the
   manual route.
 
 **Iris API compatibility**
@@ -97,7 +97,7 @@ against itself scores 0.2–0.9). ✅ matches Iris, 🟡 works with visible diff
 - 256× resource packs with PBR need a lot of VRAM, as with Iris (`-Demberlight.pbr=false` turns PBR off).
 - A compute pass named like a fullscreen pass (`composite.csh` next to `composite.fsh`) is not supported yet.
 - O is also vanilla 26.3's *Friends* key: both fire, rebind one of them.
-- Tested on NVIDIA (RTX 4070 Ti, Linux) only. DLSS is Linux only for now.
+- Tested on NVIDIA (RTX 4070 Ti) on Linux and Windows 11.
 
 ### Upgrading from Emrion Shaders dev builds
 

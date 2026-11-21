@@ -32,7 +32,7 @@ that it renders through Minecraft's own Vulkan backend, with every pipeline buil
 | DLSS upscaling | an NVIDIA RTX GPU; NVIDIA's model files are downloaded once on request (see below) |
 | DLSS frame generation | an NVIDIA RTX 40 series GPU or newer, plus the same files |
 | DLSS Ray Reconstruction | an NVIDIA RTX GPU, ray tracing on, DLSS as the upscaler, plus the same files |
-| XeSS upscaling | Windows x86_64 (Intel ships no Linux runtime), any GPU with DP4a; Intel's runtime is downloaded once on request (see below). Not tested yet |
+| XeSS upscaling | Windows x86_64 (Intel ships no Linux runtime), any GPU with DP4a; Intel's runtime is downloaded once on request (see below). Tested on Windows 11 |
 
 ## Installation
 
@@ -56,7 +56,7 @@ Pick *NVIDIA DLSS* on the Upscaling or Frame Generation page. The first time, Em
 model files (Super Resolution, Frame Generation, Ray Reconstruction; ~110 MB) from NVIDIA's GitHub (github.com/NVIDIA/DLSS, pinned version, checked against fixed SHA-256 hashes);
 by downloading you accept NVIDIA's RTX SDK licence, which is saved next to them in `<.minecraft>/emberlight/dlss/`.
 Restart the game once; after that DLSS can be switched on and off live. If something is missing, the Upscaling and Frame
-Generation pages say *"DLSS unavailable: <reason>"*. Linux only for now (the Windows bridge is not built yet).
+Generation pages say *"DLSS unavailable: <reason>"*. Works on Linux and Windows.
 
 The small bridge library Emberlight uses to call DLSS ships inside the jar and contains NVIDIA's NGX SDK library, so it is
 under its own terms ([LICENSE-DLSS.txt](LICENSE-DLSS.txt)), not the LGPL. To build it yourself instead,
@@ -210,7 +210,7 @@ Other packs may work but hit unimplemented paths. Details: [docs/BENCHMARK.md](d
   The same goes for moving mobs and the hand.
 - 256× resource packs with PBR need a lot of VRAM together with Complementary's voxel data, as with Iris
   (`-Demberlight.pbr=false` turns PBR off).
-- Only tested on NVIDIA on Linux. DLSS is Linux only for now.
+- Only tested on NVIDIA (RTX 4070 Ti) on Linux and Windows 11.
 
 ## Building from source
 
@@ -221,7 +221,7 @@ Needs Java 25 or newer and `glslc` (from the Vulkan SDK or shaderc) on the `PATH
 ./gradlew :converter:fatJar # standalone converter: java -jar converter/build/libs/converter-*-all.jar <pack> <settings.txt|-> <out-dir>
 ```
 
-The NeoForge build is new and not tested in game yet ([NEOFORGE.md](docs/NEOFORGE.md)).
+The NeoForge build is new; it runs with Sodium and Better Block Entities ([NEOFORGE.md](docs/NEOFORGE.md)).
 
 Developer documentation is in [docs/](docs): [ARCHITECTURE.md](docs/ARCHITECTURE.md), the cache format
 [FORMAT.md](docs/FORMAT.md), [RAYTRACING.md](docs/RAYTRACING.md), [UPSCALING.md](docs/UPSCALING.md),
