@@ -4,6 +4,8 @@
 # shim bundled in the mod jar plus the in-game model download).
 # usage: build-dlss.sh <minecraft game dir>      (needs git, a C/C++ compiler and the Vulkan headers)
 #        build-dlss.sh --shim <output file>      only builds the shim; this is how the bundled copy is made
+# Any change to the .c/.cpp files here must rebuild BOTH bundled shims (mod/src/main/resources/natives/): this script
+# (--shim) for linux-x86_64/libemrion_ngx.so and build-dlss.ps1 on Windows for windows-x86_64/emrion_ngx.dll.
 # DLSS_SDK=<checkout of NVIDIA/DLSS at the tag> skips the download.
 # Downloads the DLSS SDK only from NVIDIA's GitHub (github.com/NVIDIA/DLSS). By running this you accept NVIDIA's
 # RTX SDK licence (LICENSE.txt in that repository).

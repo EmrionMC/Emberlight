@@ -76,8 +76,8 @@ public final class FrameCapture {
 	private static void save(int age) {
 		while (!pending.isEmpty() && frame - pending.peek().frame() > age) {
 			Pending p = pending.poll();
-			write(p.interp(), p.w(), p.h(), String.format("%s-%02d-a-interp.png", name, p.index()));
-			write(p.real(), p.w(), p.h(), String.format("%s-%02d-b-real.png", name, p.index()));
+			write(p.interp(), p.w(), p.h(), String.format(java.util.Locale.ROOT, "%s-%02d-a-interp.png", name, p.index()));
+			write(p.real(), p.w(), p.h(), String.format(java.util.Locale.ROOT, "%s-%02d-b-real.png", name, p.index()));
 			p.interp().destroyLater();
 			p.real().destroyLater();
 		}

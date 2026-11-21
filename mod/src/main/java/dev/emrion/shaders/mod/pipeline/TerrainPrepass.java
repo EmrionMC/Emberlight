@@ -94,7 +94,7 @@ public final class TerrainPrepass {
 		double overdraw = r[2] == 0 ? 0 : (double) r[0] / r[2];
 		observe(overdraw);
 		if (DEBUG) dev.emrion.shaders.mod.EmrionShadersClient.LOG.info("Terrain prepass: overdraw {} ({} / {} fragments) -> {}",
-				String.format("%.3f", overdraw), r[0], r[2], on ? "on" : "off");
+				String.format(java.util.Locale.ROOT, "%.3f", overdraw), r[0], r[2], on ? "on" : "off");
 	}
 
 	/** One measured frame: fragments with / without the prepass's help. Package-private for the test. */

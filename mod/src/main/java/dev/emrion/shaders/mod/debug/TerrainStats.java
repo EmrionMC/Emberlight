@@ -92,7 +92,7 @@ public final class TerrainStats {
 				}
 				if (++frames == 600) {
 					StringBuilder sb = new StringBuilder("Terrain stats (per frame, avg of 600): prims in / VS invocations / prims after clip / FS invocations");
-					acc.forEach((k, a) -> sb.append(String.format("%n  %-60s %9d %9d %9d %10d", k, a[0] / frames, a[1] / frames, a[2] / frames, a[3] / frames)));
+					acc.forEach((k, a) -> sb.append(String.format(java.util.Locale.ROOT, "%n  %-60s %9d %9d %9d %10d", k, a[0] / frames, a[1] / frames, a[2] / frames, a[3] / frames)));
 					EmrionShadersClient.LOG.info(sb.toString());
 					acc.clear();
 					frames = 0;

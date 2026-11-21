@@ -201,14 +201,14 @@ public final class Profiler {
 		double ours = 0;
 		for (int i = 0; i < CPU_SECTIONS; i++) ours += accCpu[i];
 		int shown = dev.emrion.shaders.mod.framegen.Presenter.running() ? dev.emrion.shaders.mod.framegen.Presenter.presentedFps : 0;
-		if (shown > 0) out.add(String.format("frame generation: %d FPS shown, %.0f rendered", shown, 1000 / frame));
+		if (shown > 0) out.add(String.format(java.util.Locale.ROOT, "frame generation: %d FPS shown, %.0f rendered", shown, 1000 / frame));
 		String reflex = dev.emrion.shaders.mod.framegen.Reflex.overlayLine();
 		if (reflex != null) out.add(reflex);
-		out.add(String.format("frame %.2f ms (%.0f FPS)  GPU %.2f ms  -> %s", frame, 1000 / frame, gpu,
+		out.add(String.format(java.util.Locale.ROOT, "frame %.2f ms (%.0f FPS)  GPU %.2f ms  -> %s", frame, 1000 / frame, gpu,
 				accCpu[WAIT] / accFrames / 1e6 > 0.5 ? "GPU-bound" : "CPU-bound"));
 		out.add("CPU (render thread, ms/frame):");
-		for (int i = 0; i < CPU_SECTIONS; i++) out.add(String.format("  %6.2f  %s", accCpu[i] / accFrames / 1e6, CPU_NAMES[i]));
-		out.add(String.format("  %6.2f  MC (everything else)", frame - ours / accFrames / 1e6));
+		for (int i = 0; i < CPU_SECTIONS; i++) out.add(String.format(java.util.Locale.ROOT, "  %6.2f  %s", accCpu[i] / accFrames / 1e6, CPU_NAMES[i]));
+		out.add(String.format(java.util.Locale.ROOT, "  %6.2f  MC (everything else)", frame - ours / accFrames / 1e6));
 		out.add("GPU (ms/frame):");
 		double small = 0, gaps = 0;
 		for (int i = 1; i < accMarks; i++) {
@@ -216,9 +216,9 @@ public final class Profiler {
 			String label = accLabels[i];
 			if (compact && label.startsWith("MC (between")) gaps += ms;
 			else if (compact && ms < 0.02) small += ms;
-			else if (ms >= 0.005 || !label.startsWith("MC")) out.add(String.format("  %6.2f  %s", ms, compact && label.length() > 44 ? label.substring(0, 42) + ".." : label));
+			else if (ms >= 0.005 || !label.startsWith("MC")) out.add(String.format(java.util.Locale.ROOT, "  %6.2f  %s", ms, compact && label.length() > 44 ? label.substring(0, 42) + ".." : label));
 		}
-		if (compact) out.add(String.format("  %6.2f  MC between our passes + %.2f in passes < 0.02 ms", gaps, small));
+		if (compact) out.add(String.format(java.util.Locale.ROOT, "  %6.2f  MC between our passes + %.2f in passes < 0.02 ms", gaps, small));
 		return out;
 	}
 

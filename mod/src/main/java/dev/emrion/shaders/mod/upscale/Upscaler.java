@@ -74,6 +74,7 @@ public abstract class Upscaler {
 	/** {@code rayReconstruction} false: DLSS SR even when RR is selected (no pack: no RT signal and no guide inputs). */
 	public static Upscaler create(VulkanContext ctx, int rw, int rh, int dw, int dh, boolean rayReconstruction) {
 		long start = System.nanoTime();
+		logFallback();
 		try {
 			return switch (UpscaleConfig.effective()) {
 				case FSR -> new Fsr3Upscaler(ctx, rw, rh, dw, dh);
@@ -84,6 +85,17 @@ public abstract class Upscaler {
 		} finally {
 			dev.emrion.shaders.mod.debug.HitchLog.add(dev.emrion.shaders.mod.debug.HitchLog.UPSCALER, start);
 		}
+	}
+
+	private static @Nullable String lastFallback;
+
+	/** Says once (per reason) why DLSS or XeSS runs as FSR; {@link UpscaleConfig#effective} itself is called every frame. */
+	private static void logFallback() {
+		UpscaleConfig.Mode m = UpscaleConfig.mode;
+		String why = m == UpscaleConfig.Mode.DLSS ? Dlss.unavailable() : m == UpscaleConfig.Mode.XESS ? Xess.unavailable() : null;
+		String msg = why == null ? null : (m == UpscaleConfig.Mode.DLSS ? "DLSS" : "XeSS") + " unavailable (" + why + "), using FSR";
+		if (msg != null && !msg.equals(lastFallback)) dev.emrion.shaders.mod.EmrionShadersClient.LOG.warn(msg);
+		lastFallback = msg;
 	}
 
 	/**

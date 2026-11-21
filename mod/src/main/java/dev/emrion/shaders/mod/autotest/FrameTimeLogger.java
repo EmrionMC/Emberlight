@@ -76,13 +76,13 @@ public final class FrameTimeLogger {
 			EmrionShadersClient.LOG.warn("Could not write {}", csv, e);
 		}
 		EmrionShadersClient.LOG.info("Benchmark: {} frames, avg {} FPS, 1% low {} FPS, avg {} ms, max {} ms -> {}", s.frames(),
-				String.format("%.1f", s.avgFps()), String.format("%.1f", s.low1Fps()), String.format("%.2f", s.avgMs()), String.format("%.2f", s.maxMs()), csv);
+				String.format(java.util.Locale.ROOT, "%.1f", s.avgFps()), String.format(java.util.Locale.ROOT, "%.1f", s.low1Fps()), String.format(java.util.Locale.ROOT, "%.2f", s.avgMs()), String.format(java.util.Locale.ROOT, "%.2f", s.maxMs()), csv);
 		double[] w = windowFps(start, n, 0.5);
 		if (w.length > 1) {
 			double mean = Arrays.stream(w).average().orElse(0), sd = Math.sqrt(Arrays.stream(w).map(f -> (f - mean) * (f - mean)).sum() / (w.length - 1));
 			EmrionShadersClient.LOG.info("Benchmark spread: {} windows of 0.5 s, FPS min {} max {} sd {} (avg +- {} at 95%)", w.length,
-					String.format("%.1f", Arrays.stream(w).min().orElse(0)), String.format("%.1f", Arrays.stream(w).max().orElse(0)),
-					String.format("%.1f", sd), String.format("%.1f", 1.96 * sd / Math.sqrt(w.length)));
+					String.format(java.util.Locale.ROOT, "%.1f", Arrays.stream(w).min().orElse(0)), String.format(java.util.Locale.ROOT, "%.1f", Arrays.stream(w).max().orElse(0)),
+					String.format(java.util.Locale.ROOT, "%.1f", sd), String.format(java.util.Locale.ROOT, "%.1f", 1.96 * sd / Math.sqrt(w.length)));
 		}
 		return s;
 	}

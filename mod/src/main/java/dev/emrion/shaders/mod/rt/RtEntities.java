@@ -899,7 +899,7 @@ public final class RtEntities {
 	}
 
 	String summary() {
-		return String.format("entities: %d draws, %d triangles (%d built, %d refitted, %d over budget), %d KiB BLAS, CPU %.2f ms", draws, triangles, builds,
+		return String.format(java.util.Locale.ROOT, "entities: %d draws, %d triangles (%d built, %d refitted, %d over budget), %d KiB BLAS, CPU %.2f ms", draws, triangles, builds,
 				refits, dropped, blasBytes() >> 10, cpuNs / 1e6);
 	}
 }

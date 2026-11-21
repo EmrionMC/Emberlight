@@ -16,7 +16,7 @@ final class ShadowStats {
 		long now = System.nanoTime();
 		if (now - last < 5_000_000_000L) return;
 		last = now;
-		EmrionShadersClient.LOG.info(String.format("ShadowStats: cpu ms/frame collect %.3f entities %.3f recordOpaque %.3f; ",
+		EmrionShadersClient.LOG.info(String.format(java.util.Locale.ROOT, "ShadowStats: cpu ms/frame collect %.3f entities %.3f recordOpaque %.3f; ",
 				collect / 1e6 / frames, entities / 1e6 / frames, record / 1e6 / frames)
 				+ dev.emrion.shaders.mod.compat.sodium.SodiumShadow.stats(cam.x, cam.y, cam.z));
 		collect = entities = record = frames = 0;

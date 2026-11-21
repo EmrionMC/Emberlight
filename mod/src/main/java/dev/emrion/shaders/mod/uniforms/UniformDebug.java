@@ -83,7 +83,7 @@ public final class UniformDebug {
 	private static void log(Minecraft mc) {
 		StringBuilder s = new StringBuilder("Uniform snapshot after ").append(frames).append(" frames\n");
 		var p = mc.player;
-		s.append(String.format("player pos = [%.4f %.4f %.4f] eye = %.4f, camera = %s, dayTime = %d%n",
+		s.append(String.format(java.util.Locale.ROOT, "player pos = [%.4f %.4f %.4f] eye = %.4f, camera = %s, dayTime = %d%n",
 				p.getX(), p.getY(), p.getZ(), p.getEyeY(), mc.gameRenderer.mainCamera().position(), mc.level.getDefaultClockTime()));
 		for (var b : UniformCatalog.all()) s.append("  ").append(system.describe(b.name())).append('\n');
 		for (String n : Std140LayoutBuilder.INJECTED.keySet()) s.append("  ").append(system.describe(n)).append('\n');
@@ -109,7 +109,7 @@ public final class UniformDebug {
 			phase.position(0);
 			boolean inverseOk = new Matrix4f(m).mul(inv).equals(new Matrix4f(), 1e-3f);
 			Vector4f near = m.transform(new Vector4f(0, 0, -0.05f, 1)), far = m.transform(new Vector4f(0, 0, -100f, 1));
-			s.append(String.format("  phase %s: det=%.4g inverseOk=%s  ndc.z(view z=−0.05)=%.4f ndc.z(view z=−100)=%.4f%n",
+			s.append(String.format(java.util.Locale.ROOT, "  phase %s: det=%.4g inverseOk=%s  ndc.z(view z=−0.05)=%.4f ndc.z(view z=−100)=%.4f%n",
 					ph, m.determinant(), inverseOk, near.z / near.w, far.z / far.w));
 		}
 		EmrionShadersClient.LOG.info(s.toString());

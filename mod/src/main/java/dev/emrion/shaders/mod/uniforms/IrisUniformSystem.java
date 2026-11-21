@@ -285,7 +285,7 @@ public final class IrisUniformSystem implements UniformSystem, HostValues {
 		for (int w = 0; w < words; w++) {
 			if (d.type().startsWith("mat") && w % 4 == 0 && w > 0) s.append(" |");
 			if (w > 0) s.append(' ');
-			s.append(ints ? Integer.toString(v[w]) : String.format("%.5g", Float.intBitsToFloat(v[w])));
+			s.append(ints ? Integer.toString(v[w]) : String.format(java.util.Locale.ROOT, "%.5g", Float.intBitsToFloat(v[w])));
 		}
 		if (words > 1) s.append(']');
 		return s.toString();

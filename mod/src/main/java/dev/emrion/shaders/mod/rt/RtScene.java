@@ -666,7 +666,7 @@ public final class RtScene {
 
 	/** One line for the RT options page. */
 	public String summary() {
-		String s = String.format("BLAS: %d MiB, %d section layers, %.1f M triangles; TLAS %d instances", blasBytes >> 20, sodium.built(), triangles / 1e6, instanceCount);
+		String s = String.format(java.util.Locale.ROOT, "BLAS: %d MiB, %d section layers, %.1f M triangles; TLAS %d instances", blasBytes >> 20, sodium.built(), triangles / 1e6, instanceCount);
 		if (omm != null && ommOn) s += "; " + omm.summary();
 		return entities == null ? s : s + "; " + entities.summary();
 	}

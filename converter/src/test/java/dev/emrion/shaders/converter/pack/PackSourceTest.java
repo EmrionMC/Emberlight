@@ -69,7 +69,11 @@ class PackSourceTest {
 		Path secret = Files.writeString(tmp.resolve("secret.txt"), "private");
 		Path pack = Files.createDirectories(tmp.resolve("pack/shaders"));
 		Files.writeString(pack.resolve("final.fsh"), "x");
-		Files.createSymbolicLink(pack.resolve("leak.glsl"), secret);
+		try {
+			Files.createSymbolicLink(pack.resolve("leak.glsl"), secret);
+		} catch (java.io.IOException | UnsupportedOperationException e) { // Windows without Developer Mode or admin
+			org.junit.jupiter.api.Assumptions.assumeTrue(false, "cannot create symlinks: " + e);
+		}
 		Files.createSymbolicLink(pack.resolve("same.fsh"), pack.resolve("final.fsh"));
 		Files.createSymbolicLink(pack.resolve("dangling.glsl"), tmp.resolve("nope"));
 		Files.createSymbolicLink(pack.resolve("outdir"), tmp);

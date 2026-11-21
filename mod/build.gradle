@@ -59,13 +59,28 @@ def writeOptions = { File dir, String backend ->
 	dir.mkdirs()
 	f.text = opts.collect { k, v -> "${k}:${v}" }.join('\n') + '\n'
 }
+// Windows without Developer Mode or admin cannot create symlinks: copy the target instead.
+def linkOrCopy = { java.nio.file.Path link, java.nio.file.Path target ->
+	// only a copy this fallback made (marker) is deleted recursively; anything else keeps the old deleteIfExists behaviour
+	if (java.nio.file.Files.exists(link.resolve('.emberlight-copy'), java.nio.file.LinkOption.NOFOLLOW_LINKS)) project.delete(link.toFile())
+	else java.nio.file.Files.deleteIfExists(link)
+	try {
+		java.nio.file.Files.createSymbolicLink(link, target)
+	} catch (IOException | UnsupportedOperationException e) {
+		logger.warn("Cannot symlink ${link} (${e}), copying ${target} instead")
+		if (java.nio.file.Files.isDirectory(target)) {
+			project.copy { from target.toFile(); into link.toFile() }
+			java.nio.file.Files.createFile(link.resolve('.emberlight-copy'))
+		}
+		else java.nio.file.Files.copy(target, link)
+	}
+}
 // shaderpacks/<packName> -> the pack folder (symlink), shaderpacks/<packName>.txt = copy of the settings (Iris rewrites it).
 def linkPack = { File dir ->
 	if (!packDir.exists() || (packSettings != null && !packSettings.isFile())) throw new GradleException("Shader pack ${packDir} or settings ${packSettings} missing (-PshaderPack, -PshaderSettings)")
 	def link = new File(dir, "shaderpacks/${packName}").toPath()
 	java.nio.file.Files.createDirectories(link.parent)
-	java.nio.file.Files.deleteIfExists(link)
-	java.nio.file.Files.createSymbolicLink(link, packDir.toPath().toAbsolutePath())
+	linkOrCopy(link, packDir.toPath().toAbsolutePath())
 	def txt = link.resolveSibling("${packName}.txt")
 	if (packSettings != null) java.nio.file.Files.copy(packSettings.toPath(), txt, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
 	else java.nio.file.Files.deleteIfExists(txt) // a settings file a previous run (or Iris) left behind
@@ -83,8 +98,7 @@ def linkResourcePacks = { File runDir ->
 		def src = new File(p)
 		if (!src.exists()) throw new GradleException("resource pack not found: $p")
 		def link = new File(dir, src.name).toPath()
-		java.nio.file.Files.deleteIfExists(link)
-		java.nio.file.Files.createSymbolicLink(link, src.toPath())
+		linkOrCopy(link, src.toPath())
 		'file/' + src.name
 	}
 	// MC refuses symlinked packs unless their targets are listed here (prefix match)
@@ -185,6 +199,14 @@ disableUpdateMessage=true
 	}
 }
 
+// Fails with a readable message instead of Gradle's "A problem occurred starting process 'command 'glslc''".
+class Glslc {
+	static void require() {
+		try { new ProcessBuilder('glslc', '--version').redirectErrorStream(true).start().with { it.inputStream.text; it.waitFor() } }
+		catch (IOException e) { throw new GradleException('glslc not found on PATH: install the Vulkan SDK (or shaderc)', e) }
+	}
+}
+
 // Test/debug shaders: mod/src/main/glsl/*.{vert,frag,comp} -> assets/emberlight/spv/<name>.spv (glslc on PATH).
 abstract class CompileGlsl extends DefaultTask {
 	@InputDirectory abstract DirectoryProperty getSource()
@@ -193,6 +215,7 @@ abstract class CompileGlsl extends DefaultTask {
 
 	@TaskAction
 	void compile() {
+		Glslc.require()
 		def out = output.get().dir('assets/emberlight/spv').asFile
 		out.deleteDir()
 		out.mkdirs()
@@ -218,6 +241,7 @@ abstract class CompileFsr3 extends DefaultTask {
 	@TaskAction
 	void compile() {
 		def src = source.get().asFile
+		Glslc.require()
 		def out = output.get().dir('assets/emberlight/spv/fsr3').asFile
 		out.deleteDir()
 		out.mkdirs()
@@ -253,6 +277,7 @@ abstract class CompileFsr3Fg extends DefaultTask {
 	@TaskAction
 	void compile() {
 		def src = source.get().asFile
+		Glslc.require()
 		def out = output.get().dir('assets/emberlight/spv/fsr3fg').asFile
 		out.deleteDir()
 		out.mkdirs()

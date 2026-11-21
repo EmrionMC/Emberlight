@@ -325,7 +325,7 @@ public final class SodiumShadow {
 				}
 			}
 		}
-		return String.format("Sodium shadow: %d sections, opaque draws %d, translucent draws %d; main view: %d sections, opaque %d kTri (%d after face culling) in %d facing ranges (%d), translucent %d kTri; per pass kTri %s",
+		return String.format(java.util.Locale.ROOT, "Sodium shadow: %d sections, opaque draws %d, translucent draws %d; main view: %d sections, opaque %d kTri (%d after face culling) in %d facing ranges (%d), translucent %d kTri; per pass kTri %s",
 				sectionCount, shadow[0], shadow[2], sections, tri / 1000, triCulled / 1000, draws, drawsCulled, triT / 1000, java.util.Arrays.toString(java.util.Arrays.stream(perPass).map(x -> x / 1000).toArray()));
 	}
 

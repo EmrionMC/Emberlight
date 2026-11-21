@@ -260,11 +260,11 @@ public final class PhotoMode {
 		Util.ioPool().execute(() -> {
 			try (image) {
 				image.writeToFile(file);
-				EmrionShadersClient.LOG.info("Photo mode: {} ({}×{}, {} samples at {}×) in {} s", file.getName(), ow, oh, n, s, String.format("%.1f", seconds));
+				EmrionShadersClient.LOG.info("Photo mode: {} ({}×{}, {} samples at {}×) in {} s", file.getName(), ow, oh, n, s, String.format(java.util.Locale.ROOT, "%.1f", seconds));
 				Component link = Component.literal(file.getName()).withStyle(ChatFormatting.UNDERLINE)
 						.withStyle(st -> st.withClickEvent(new ClickEvent.OpenFile(file.getAbsoluteFile())));
 				mc.execute(() -> mc.showDebugChat(Component.literal("Photo saved (" + n + " samples, "
-						+ String.format("%.1f", seconds) + " s): ").append(link)));
+						+ String.format(java.util.Locale.ROOT, "%.1f", seconds) + " s): ").append(link)));
 			} catch (Exception e) {
 				EmrionShadersClient.LOG.warn("Photo mode: could not save {}", file, e);
 				mc.execute(() -> mc.showDebugChat(Component.translatable("screenshot.failure", e.getMessage())));

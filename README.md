@@ -57,7 +57,8 @@ Generation pages say *"DLSS unavailable: <reason>"*. Linux only for now (the Win
 The small bridge library Emberlight uses to call DLSS ships inside the jar and contains NVIDIA's NGX SDK library, so it is
 under its own terms ([LICENSE-DLSS.txt](LICENSE-DLSS.txt)), not the LGPL. To build it yourself instead,
 `mod/native/build-dlss.sh <.minecraft>` (or `build-dlss.ps1` on Windows) builds it from NVIDIA's SDK and installs it
-with the model files.
+with the model files. A change to `mod/native/*.c|*.cpp` must rebuild both bundled copies (`libemrion_ngx.so` and,
+on Windows with `build-dlss.ps1`, `emrion_ngx.dll`).
 
 NVIDIA, NVIDIA RTX and DLSS are trademarks of NVIDIA Corporation.
 

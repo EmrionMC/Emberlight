@@ -389,7 +389,7 @@ public final class RtOmm {
 
 	String summary() {
 		Map m = current;
-		return String.format("OMM: micromap %d KiB (level %d), indices %d KiB for %d cutout layers, built in %.1f ms (CPU)",
+		return String.format(java.util.Locale.ROOT, "OMM: micromap %d KiB (level %d), indices %d KiB for %d cutout layers, built in %.1f ms (CPU)",
 				m == null ? 0 : m.bytes >> 10, m == null ? 0 : m.level, indexBytes >> 10, entries, buildNs / 1e6);
 	}
 

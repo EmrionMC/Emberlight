@@ -53,6 +53,6 @@ public final class GlGpuTimer {
 
 	/** Logs the mean since {@link #reset()} next to the frame-time line. */
 	public static void log() {
-		dev.emrion.shaders.mod.EmrionShadersClient.LOG.info("Benchmark profile (OpenGL): GPU {} ms per frame over {} frames", String.format("%.2f", meanMs()), samples);
+		dev.emrion.shaders.mod.EmrionShadersClient.LOG.info("Benchmark profile (OpenGL): GPU {} ms per frame over {} frames", String.format(java.util.Locale.ROOT, "%.2f", meanMs()), samples);
 	}
 }

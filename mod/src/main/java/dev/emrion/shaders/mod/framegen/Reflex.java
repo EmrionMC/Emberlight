@@ -356,7 +356,7 @@ public final class Reflex {
 	/** One overlay line, or null when the extension is missing. */
 	public static String overlayLine() {
 		if (!supported) return null;
-		return String.format("Reflex %s: sim->present %.1f ms, sim->GPU done %.1f ms (driver)", effective().label, shownPresentMs, shownGpuMs);
+		return String.format(Locale.ROOT, "Reflex %s: sim->present %.1f ms, sim->GPU done %.1f ms (driver)", effective().label, shownPresentMs, shownGpuMs);
 	}
 
 	/** Bench window (autotest): restart the averages / log them. */
@@ -369,9 +369,9 @@ public final class Reflex {
 	public static synchronized void statsLog(String name) {
 		if (!supported) return;
 		EmrionShadersClient.LOG.info("Bench {}: Reflex {} sim->present {} ms ({} frames), sim->GPU done {} ms ({} driver reports), measured {} ms ({} frames), sleep {} ms",
-				name, effective().label, String.format("%.2f", presentCount > 0 ? presentSum / presentCount : 0), presentCount,
-				String.format("%.2f", gpuCount > 0 ? gpuSum / gpuCount : 0), gpuCount, String.format("%.2f", measuredCount > 0 ? measuredSum / measuredCount : 0),
-				measuredCount, String.format("%.2f", sleepCount > 0 ? sleepSum / sleepCount : 0));
+				name, effective().label, String.format(Locale.ROOT, "%.2f", presentCount > 0 ? presentSum / presentCount : 0), presentCount,
+				String.format(Locale.ROOT, "%.2f", gpuCount > 0 ? gpuSum / gpuCount : 0), gpuCount, String.format(Locale.ROOT, "%.2f", measuredCount > 0 ? measuredSum / measuredCount : 0),
+				measuredCount, String.format(Locale.ROOT, "%.2f", sleepCount > 0 ? sleepSum / sleepCount : 0));
 	}
 
 	/** True while the driver's sleep enforces MC's frame cap (then MC's own limiter must not wait as well). */

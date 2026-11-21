@@ -301,7 +301,7 @@ public final class Hdr {
 				for (int c = 0; c < 3; c++) {
 					float v = Float.float16ToFloat(MemoryUtil.memGetShort(probe.mapped + i * 8 + c * 2));
 					double nits = colorSpace == CS_HDR10 ? pqToNits(v) : v * 80.0;
-					s.append(String.format("%.4f=%.0fnt%s", v, nits, c < 2 ? " " : ""));
+					s.append(String.format(java.util.Locale.ROOT, "%.4f=%.0fnt%s", v, nits, c < 2 ? " " : ""));
 				}
 				s.append("]");
 			}

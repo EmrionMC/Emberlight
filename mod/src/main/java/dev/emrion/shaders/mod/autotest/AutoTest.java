@@ -181,7 +181,7 @@ public final class AutoTest {
 			if (now > framesUntil) framesName = null;
 			else {
 				pendingShots.incrementAndGet();
-				Screenshot.grab(Minecraft.getInstance().gameDirectory, String.format("%s-%03d-%05dms.png", fn, framesIndex++, (now - framesStart) / 1_000_000),
+				Screenshot.grab(Minecraft.getInstance().gameDirectory, String.format(java.util.Locale.ROOT, "%s-%03d-%05dms.png", fn, framesIndex++, (now - framesStart) / 1_000_000),
 						Minecraft.getInstance().gameRenderer.mainRenderTarget(), framesScale(Minecraft.getInstance().gameRenderer.mainRenderTarget()), msg -> pendingShots.decrementAndGet());
 			}
 		}
@@ -437,7 +437,7 @@ public final class AutoTest {
 				if (FAST && ticks >= MIN_TICKS && settled(mc) || timeout) {
 					if (FAST) EmrionShadersClient.LOG.info("Autotest: scene {} {} after {} frames (diff {}), {} ms after the teleport", scenes.get(shot).name(),
 							timeout ? "NOT converged, settle timeout" : "converged", FrameTimeLogger.INSTANCE.frames() - settleStartFrame,
-							String.format("%.3f", convergence.lastDiff), (System.nanoTime() - sceneStart) / 1_000_000);
+							String.format(java.util.Locale.ROOT, "%.3f", convergence.lastDiff), (System.nanoTime() - sceneStart) / 1_000_000);
 					go(State.SHOT);
 				}
 			}
@@ -632,7 +632,7 @@ public final class AutoTest {
 				boolean done = ticks >= MIN_TICKS && settled(mc);
 				if (done || ticks >= (arg.isEmpty() ? 30 : Double.parseDouble(arg)) * TPS) {
 					EmrionShadersClient.LOG.info("Autotest: settle {} after {} ms (diff {})", done ? "converged" : "timed out", ticks * 50,
-							String.format("%.3f", convergence.lastDiff));
+							String.format(java.util.Locale.ROOT, "%.3f", convergence.lastDiff));
 					return true;
 				}
 				return false;
@@ -1251,9 +1251,9 @@ public final class AutoTest {
 	private void logTiming() {
 		long total = timing.values().stream().mapToLong(Long::longValue).sum();
 		long jvm = System.currentTimeMillis() - java.lang.management.ManagementFactory.getRuntimeMXBean().getStartTime();
-		StringBuilder sb = new StringBuilder(String.format("Autotest timing: %.1f s since JVM start, %.1f s in the harness:", jvm / 1e3, total / 1e9));
+		StringBuilder sb = new StringBuilder(String.format(java.util.Locale.ROOT, "Autotest timing: %.1f s since JVM start, %.1f s in the harness:", jvm / 1e3, total / 1e9));
 		timing.entrySet().stream().sorted(java.util.Map.Entry.<String, Long>comparingByValue().reversed())
-				.forEach(e -> sb.append(String.format("%n  %8.1f s  %s", e.getValue() / 1e9, e.getKey())));
+				.forEach(e -> sb.append(String.format(java.util.Locale.ROOT, "%n  %8.1f s  %s", e.getValue() / 1e9, e.getKey())));
 		EmrionShadersClient.LOG.info(sb.toString());
 	}
 
@@ -1268,14 +1268,14 @@ public final class AutoTest {
 			StringBuilder sb = new StringBuilder();
 			for (int i = 0; i < props.memoryHeapCount(); i++) {
 				var b = budgets.get(i);
-				sb.append(String.format("heap%d%s allocated %.1f MiB, usage %.1f MiB; ", i,
+				sb.append(String.format(java.util.Locale.ROOT, "heap%d%s allocated %.1f MiB, usage %.1f MiB; ", i,
 						(props.memoryHeaps(i).flags() & org.lwjgl.vulkan.VK10.VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0 ? " (device)" : "",
 						b.statistics().allocationBytes() / 1048576.0, b.usage() / 1048576.0));
-				sb.append(String.format("(%d allocations, %d blocks); ", b.statistics().allocationCount(), b.statistics().blockCount()));
+				sb.append(String.format(java.util.Locale.ROOT, "(%d allocations, %d blocks); ", b.statistics().allocationCount(), b.statistics().blockCount()));
 			}
 			System.gc(); // leak checks compare heap after GC
 			var rt = Runtime.getRuntime();
-			sb.append(String.format("Java heap %.1f MiB; ", (rt.totalMemory() - rt.freeMemory()) / 1048576.0));
+			sb.append(String.format(java.util.Locale.ROOT, "Java heap %.1f MiB; ", (rt.totalMemory() - rt.freeMemory()) / 1048576.0));
 			try {
 				for (String l : Files.readAllLines(Path.of("/proc/self/status")))
 					if (l.startsWith("VmRSS:")) sb.append("RSS ").append(l.substring(6).strip()).append("; ");

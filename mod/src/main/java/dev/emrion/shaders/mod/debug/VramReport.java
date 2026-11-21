@@ -40,7 +40,7 @@ public final class VramReport {
 			VK11.vkGetPhysicalDeviceMemoryProperties2(ctx.vk.getPhysicalDevice(), props);
 			StringBuilder sb = new StringBuilder();
 			for (int i = 0; i < props.memoryProperties().memoryHeapCount(); i++)
-				sb.append(String.format("heap%d driver usage %.1f MiB of budget %.1f MiB; ", i, budget.heapUsage(i) / 1048576.0, budget.heapBudget(i) / 1048576.0));
+				sb.append(String.format(java.util.Locale.ROOT, "heap%d driver usage %.1f MiB of budget %.1f MiB; ", i, budget.heapUsage(i) / 1048576.0, budget.heapBudget(i) / 1048576.0));
 			return sb.toString();
 		}
 	}

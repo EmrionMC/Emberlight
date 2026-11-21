@@ -18,7 +18,11 @@ class PackInstallerTest {
 		Path secret = Files.writeString(tmp.resolve("secret.txt"), "private");
 		Path pack = Files.createDirectories(tmp.resolve("drop/Pack/shaders"));
 		Files.writeString(pack.resolve("final.fsh"), "x");
-		Files.createSymbolicLink(pack.resolve("leak.glsl"), secret);
+		try {
+			Files.createSymbolicLink(pack.resolve("leak.glsl"), secret);
+		} catch (java.io.IOException | UnsupportedOperationException e) { // Windows without Developer Mode or admin
+			org.junit.jupiter.api.Assumptions.assumeTrue(false, "cannot create symlinks: " + e);
+		}
 		Files.createSymbolicLink(pack.resolve("outdir"), tmp);
 		Path packs = tmp.resolve("shaderpacks");
 		int[] copied = {0};
