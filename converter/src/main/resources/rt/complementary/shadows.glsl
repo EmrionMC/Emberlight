@@ -6,19 +6,33 @@
 // or player right next to a leaf shadow it, and only the TAA path did it, so the shadow quality changed what shadowed leaves.
 float emrRtTerrainMin = 0.0;
 
+// emrRtShEntity: the last visibility query was blocked by an entity (an opaque-flagged hit, never processed as a
+// candidate, does not count). emrRtEntShHere: set by the terrain receiver hook
+// (gbuffers_terrain), the pixel shows that terrain.
+bool emrRtShEntity = false, emrRtEntShHere = false;
+
+// An entity's penumbra on terrain (some rays blocked by it, some lit) gets more rays, up to shadows:entityRays in all (a
+// second spiral, rotated, next to the first rays). When the shadow moves over the ground the upscaler has no history to
+// average the few jittered rays with: a grainy, frayed edge in flight and while mobs walk. Only these pixels pay for it.
+bool emrRtShRefine(int rays, float ent, float lit) {
+	return rays < emrRt_shadows_entityRays && ent > 0.0 && lit > 0.0 && emrRtEntShHere;
+}
+
 // 1 = nothing opaque between origin and origin + dir * tMax. Cutout candidates are alpha-tested (mip 0, cutoff 0.1 like the
 // shadow pass); mask 0x01 = solid + cutout terrain (translucent is 0x02 and never traced here), | 0x04 = entities.
 float emrRtVisibilityMask(vec3 origin, vec3 dir, float tMin, float tMax, uint mask) {
 	rayQueryEXT rq;
 	rayQueryInitializeEXT(rq, emrRtTlas, gl_RayFlagsTerminateOnFirstHitEXT, mask, origin, tMin, dir, tMax);
 	bool more;
+	emrRtShEntity = false;
 	for (int guard = 0; (more = rayQueryProceedEXT(rq)) && guard < 32; guard++) {
 		if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;
 		int ci = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false);
 		EmrRtVerts v = emrRtVerts(ci);
 		uvec3 tri = emrRtTri(uint(rayQueryGetIntersectionPrimitiveIndexEXT(rq, false)));
-		if (!emrRtIsEntity(ci) && emrRt_shadows_skip(emrRtId(v, tri.x))) continue;
-		if (emrRtHitAlpha(ci, v, tri, rayQueryGetIntersectionBarycentricsEXT(rq, false)) >= 0.1) rayQueryConfirmIntersectionEXT(rq);
+		bool entity = emrRtIsEntity(ci);
+		if (!entity && emrRt_shadows_skip(emrRtId(v, tri.x))) continue;
+		if (emrRtHitAlpha(ci, v, tri, rayQueryGetIntersectionBarycentricsEXT(rq, false)) >= 0.1) { rayQueryConfirmIntersectionEXT(rq); emrRtShEntity = entity; }
 	}
 	// more candidates than the guard (deep foliage) count as blocked: the rest may hold the blocker (lit specks under canopies)
 	return !more && rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT ? 1.0 : 0.0;
@@ -86,12 +100,16 @@ float emrRtSunVisibility(vec3 shadowPos, float offset, float n, int rays, float 
 	vec3 t = normalize(cross(l, abs(l.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
 	vec3 b = cross(l, t);
 	float cone = offset * emrRt_shadows_cone;
-	float vis = 0.0, m = emrRtDiskJitter(n);
+	float vis = 0.0, ent = 0.0, m = emrRtDiskJitter(n);
+	int i0 = 0;
 	for (int i = 0; i < rays; i++) {
-		vec2 d = emrRtDiskSample(i, rays, n, m) * cone;
+		vec2 d = emrRtDiskSample(i - i0, rays - i0, i0 > 0 ? fract(n + 0.5) : n, m) * cone;
 		vec3 dir = normalize(l + t * d.x + b * d.y);
 		uint mask = emrRt_shadows_entities != 0 ? 0x0Du : 0x01u;
-		vis += emrRtNearEntities(emrRtVisibilityMask(origin, dir, max(tMin, emrRtTerrainMin), 512.0, mask), origin, dir, tMin, mask);
+		float v = emrRtNearEntities(emrRtVisibilityMask(origin, dir, max(tMin, emrRtTerrainMin), 512.0, mask), origin, dir, tMin, mask);
+		vis += v;
+		if (v < 1.0 && emrRtShEntity) ent += 1.0;
+		if (i == rays - 1 && emrRtShRefine(rays, ent, vis)) { i0 = rays; rays = emrRt_shadows_entityRays; }
 	}
 	return vis / float(rays);
 }

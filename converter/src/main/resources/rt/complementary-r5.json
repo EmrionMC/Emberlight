@@ -15,7 +15,7 @@
   "effects": {
     "shadows": {
       "requires": ["gbuffers_terrain"],
-      "options": {"full": "0", "rays": "1", "cone": "30.0", "entities": "0"},
+      "options": {"full": "0", "rays": "1", "cone": "30.0", "entities": "0", "entityRays": "16"},
       "helpers": "rt/complementary/shadows.glsl",
       "uniforms": {"shadowModelViewInverse": "mat4", "shadowProjectionInverse": "mat4", "frameCounter": "int", "gbufferProjection": "mat4"},
       "needs": ["SampleShadow", "GetShadowPos", "InterleavedGradientNoiseForShadows", "shadowMapBias", "shadowtex0", "shadowtex1"],

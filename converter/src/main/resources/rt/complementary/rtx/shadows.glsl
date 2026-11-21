@@ -18,6 +18,7 @@ float emrRtxShVisibility(vec3 origin, vec3 dir, float tMin, float tMax, uint mas
 	rayQueryEXT rq;
 	rayQueryInitializeEXT(rq, emrRtTlas, gl_RayFlagsTerminateOnFirstHitEXT, mask | 0x02u, origin, tMin, dir, tMax);
 	bool more;
+	emrRtShEntity = false;
 	for (int guard = 0; (more = rayQueryProceedEXT(rq)) && guard < 48; guard++) {
 		if (rayQueryGetIntersectionTypeEXT(rq, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;
 		int ci = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false);
@@ -34,7 +35,7 @@ float emrRtxShVisibility(vec3 origin, vec3 dir, float tMin, float tMax, uint mas
 			tint *= emrRtxShGlass(textureLod(emrRtAtlas, emrRtBaryUv(v, tri, b), 0.0) * vec4(emrRtColor(v, tri.x).rgb, 1.0));
 			continue;
 		}
-		if (emrRtHitAlpha(ci, v, tri, b) >= 0.1) rayQueryConfirmIntersectionEXT(rq);
+		if (emrRtHitAlpha(ci, v, tri, b) >= 0.1) { rayQueryConfirmIntersectionEXT(rq); emrRtShEntity = entity; }
 	}
 	emrRtxShTint = tint;
 	// more candidates than the guard (deep foliage, many glass panes) count as blocked: the rest may hold the blocker
@@ -52,14 +53,17 @@ vec3 emrRtxShadowTerm(vec3 shadowPos, float n, int rays, float tMin, bool useMap
 	vec3 vis = vec3(0.0);
 	bool glass = false;
 	emrRtxShWaterT = 1e9;
-	float m = emrRtDiskJitter(n);
+	float m = emrRtDiskJitter(n), ent = 0.0;
+	int i0 = 0;
 	for (int i = 0; i < rays; i++) {
-		vec2 d = emrRtDiskSample(i, rays, n, m) * emrRt_shadows_sun;
+		vec2 d = emrRtDiskSample(i - i0, rays - i0, i0 > 0 ? fract(n + 0.5) : n, m) * emrRt_shadows_sun;
 		vec3 dir = normalize(l + t * d.x + bt * d.y);
 		uint mask = emrRt_shadows_entities != 0 ? 0x0Du : 0x01u;
 		float v = emrRtNearEntities(emrRtxShVisibility(origin, dir, max(tMin, emrRtTerrainMin), 512.0, mask), origin, dir, tMin, mask);
 		vis += v * emrRtxShTint;
 		glass = glass || (v > 0.0 && emrRtxShTint != vec3(1.0));
+		if (v < 1.0 && emrRtShEntity) ent += 1.0;
+		if (i == rays - 1 && emrRtShRefine(rays, ent, max(vis.r, max(vis.g, vis.b)))) { i0 = rays; rays = emrRt_shadows_entityRays; }
 	}
 	vis /= float(rays);
 	if (!useMap || glass || max(vis.r, max(vis.g, vis.b)) <= 0.0) return vis;

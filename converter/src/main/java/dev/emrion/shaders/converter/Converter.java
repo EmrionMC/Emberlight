@@ -10,7 +10,7 @@ import java.util.List;
  * Facade used by the CLI and the mod.
  */
 public interface Converter {
-	String VERSION = "0.1.0-alpha.1.40"; // bump on every change to converter output: it is part of the cache key
+	String VERSION = "0.1.0-alpha.1.41"; // bump on every change to converter output: it is part of the cache key
 	/** Bump on every change to the terrain_sodium output only (cache key of Sodium requests; VERSION would change every output). */
 	String SODIUM_VARIANT = "5";
 
