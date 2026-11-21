@@ -304,9 +304,9 @@ final class ShadowPass {
 		}
 
 		@Override
-		public boolean visible(float x, float y, float z) {
-			return TERRAIN.visible(x - SECTION_MARGIN, y - SECTION_MARGIN, z - SECTION_MARGIN, x + 16 + SECTION_MARGIN, y + 16 + SECTION_MARGIN,
-					z + 16 + SECTION_MARGIN);
+		public boolean visible(float x, float y, float z, float sizeX, float sizeY, float sizeZ) {
+			return TERRAIN.visible(x - SECTION_MARGIN, y - SECTION_MARGIN, z - SECTION_MARGIN, x + sizeX + SECTION_MARGIN, y + sizeY + SECTION_MARGIN,
+					z + sizeZ + SECTION_MARGIN);
 		}
 
 		@Override

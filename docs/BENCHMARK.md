@@ -1359,3 +1359,35 @@ within noise (GI 2.7-4.4 ms either way; leaving them out made `gbuffers opaque` 
 
 With RT the room stays GPU-bound: GI (`prepare_a`) is the swing factor and moved between 3 and 12 ms from session to session
 with identical settings and camera (stable within a session), independent of the chests. Not investigated here.
+
+## Sodium fast paths with a pack active (2026-11-21, `perf/sodium-fastpaths`)
+
+Question: after the cuboid fix above, does Emberlight still bypass Sodium optimisations, and is Sodium a gain? Same setup as
+the storage room (Complementary Unbound + Euphoria, user RT settings, DLSS Quality, Continuity, no PBR pack, frame generation
+off via `-Demrion.framegen.mode=off`), scenes: storage room snapshot 2026-11-20_17-44-00 and the old-growth taiga 540 82 500
+(135/20, noon). Without Sodium = the same queue run without `-Psodium`. Sodium cannot be toggled in-game, so the comparison
+alternates whole runs (S, N, S, N); 12 s benches, render thread = frame time minus "blocked on GPU" from the per-pass profile.
+Scripts, logs, JFR and shots: a local test folder (not in the repo).
+
+| Scene | Sodium before | Sodium after | No Sodium before | No Sodium after |
+|---|---|---|---|---|
+| storage, RT off (CPU-bound) | 91.2 FPS, 10.9 ms | **105.5 FPS, 9.4 ms** | 63.7 FPS, 15.6 ms | 73.0 FPS, 13.6 ms |
+| storage, RT on (GPU-bound) | 53.3 FPS, 14.0 ms | 52.8 FPS, 12.9 ms | 42.5 FPS, 20.8 ms | 46.3 FPS, 18.7 ms |
+| forest, RT off (GPU-bound) | 140.5 FPS | 140.7 FPS | 133.7 FPS | 138.9 FPS |
+| forest, RT on (GPU-bound) | 77.3 FPS (GPU 12.9 ms) | 77.2 FPS | 56.1 FPS (GPU 17.8 ms) | 56.0 FPS |
+
+Sodium is now a clear gain: +45 % in the CPU-bound storage room and +38 % in the forest with RT (there the GPU frame is
+5 ms shorter with Sodium's terrain path; not investigated further). The older "Sodium slightly slower" result predates the
+cuboid fix.
+
+| Change | Effect (JFR, storage RT off, render thread) | Image |
+|---|---|---|
+| `push` copies Sodium's EntityVertex as one 36-byte block (same layout as our entity format) instead of element by element | `ExtendedBufferBuilder.copy` 18 % → `copyPrefix` 2.5 % | identical (pixel diff at noise floor, Codex: identical) |
+| Whole vertices (`addVertex` with 11 arguments: item quads, and every cuboid without Sodium) written directly instead of through the setter chain; BufferBuilder's one-call path only recognises vanilla ENTITY | no Sodium: `BufferBuilder.setLight` 11.5 % gone, 63.7 → 73 FPS | identical |
+| Object motion: previous frame's slot found by index before the hash map | `Long2LongOpenHashMap.get` 5.4 % → 0; 0 mismatches against the old lookup over 1.9M lookups with moving mobs | motion vectors unchanged |
+| Sodium shadow pass: regions outside the shadow volume skipped before their 256 section tests | `ShadowCuller.visible` 2.9 % → below 0.5 % | identical shadows (Codex) |
+
+Still open (proposals, not done): static block-entity geometry is rebuilt every frame (cuboid compile + tangents + push are
+still ~35 % of the storage room's render thread; tangents alone 14 %); the shadow receiver grid costs ~0.6 ms per frame in the
+forest; world text opts out of Sodium's glyph writer. Without Sodium, DLSS frame generation crashed the game in NGX at the
+snapshot load twice (`DlssFrameGen` on the "Emberlight NGX" thread, SIGSEGV), so these runs force frame generation off.

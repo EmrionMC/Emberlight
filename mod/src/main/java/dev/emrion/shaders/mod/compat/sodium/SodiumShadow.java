@@ -45,7 +45,12 @@ public final class SodiumShadow {
 	/** The shadow pass's tests, on a section's camera-relative minimum corner (it is 16 blocks wide). */
 	public interface Culler {
 		/** Inside the shadow volume. */
-		boolean visible(float x, float y, float z);
+		default boolean visible(float x, float y, float z) {
+			return visible(x, y, z, 16, 16, 16);
+		}
+
+		/** A box of that size may be inside the shadow volume (conservative: false means no part of it is). */
+		boolean visible(float x, float y, float z, float sizeX, float sizeY, float sizeZ);
 
 		/** Called for every visible built section, air included: it may receive shadows. */
 		void receiver(float x, float y, float z);
@@ -157,6 +162,9 @@ public final class SodiumShadow {
 		markVisible(acc);
 		for (RenderRegion region : acc.emrion$sections().regions.getLoadedRegions()) {
 			if (region.isEmpty()) continue;
+			// a whole region outside the shadow volume skips its 256 section tests (1 block slack for float rounding)
+			if (!c.visible((float) ((region.getChunkX() << 4) - camX) - 1, (float) ((region.getChunkY() << 4) - camY) - 1, (float) ((region.getChunkZ() << 4) - camZ) - 1,
+					RenderRegion.REGION_WIDTH * 16 + 2, RenderRegion.REGION_HEIGHT * 16 + 2, RenderRegion.REGION_LENGTH * 16 + 2)) continue;
 			int regionIndex = -1;
 			long[] visible = VISIBLE_RECEIVERS ? VISIBLE.get(region) : null;
 			for (int id = 0; id < RenderRegion.REGION_SIZE; id++) {

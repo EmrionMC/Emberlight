@@ -13,7 +13,7 @@ import org.lwjgl.system.MemoryUtil;
 
 /** BufferBuilder for the extended formats (Iris MixinBufferBuilder): adds ids per vertex, and normal, tangent and mid UV per finished polygon. */
 public final class ExtendedBufferBuilder extends BufferBuilder {
-	private final int stride, uv, normal, mid, tangent, extra, midBlock;
+	private final int stride, color, uv, uv1, uv2, normal, mid, tangent, extra, midBlock;
 	private final @Nullable BlockContext block;
 	private final VertexFormat format;
 	/** GLYPH: MC's text code sets neither Normal nor UV1; we set them so the vertex is complete (Normal is replaced per quad). */
@@ -30,7 +30,10 @@ public final class ExtendedBufferBuilder extends BufferBuilder {
 		this.format = format;
 		glyph = format == EmrionVertexFormats.GLYPH;
 		stride = format.getVertexSize();
+		color = format.getElement("Color").offset();
 		uv = format.getElement("UV0").offset();
+		uv1 = block == null ? format.getElement("UV1").offset() : -1; // the terrain format has no UV1
+		uv2 = format.getElement("UV2").offset();
 		normal = format.getElement("Normal").offset();
 		mid = format.getElement("mc_midTexCoord").offset();
 		tangent = format.getElement("at_tangent").offset();
@@ -67,6 +70,36 @@ public final class ExtendedBufferBuilder extends BufferBuilder {
 		return this;
 	}
 
+	/**
+	 * Whole vertices (items' putBakedQuad and others): BufferBuilder writes these in one go only for vanilla ENTITY by identity, so
+	 * ours took the setter chain. The same bytes as that chain (vanilla's putRgba, putPackedUv, putNormals), written directly.
+	 */
+	@Override
+	public void addVertex(float x, float y, float z, int argb, float u, float v, int overlay, int light, float nx, float ny, float nz) {
+		if (block != null || glyph || !LITTLE_ENDIAN) { // big endian: vanilla's byte order handling
+			super.addVertex(x, y, z, argb, u, v, overlay, light, nx, ny, nz);
+			return;
+		}
+		addVertex(x, y, z);
+		var self = (BufferBuilderAccessor) (Object) this;
+		long p = self.emrion$vertexPointer();
+		MemoryUtil.memPutInt(p + color, net.minecraft.util.ARGB.toABGR(argb));
+		MemoryUtil.memPutFloat(p + uv, u);
+		MemoryUtil.memPutFloat(p + uv + 4, v);
+		MemoryUtil.memPutInt(p + uv1, overlay);
+		MemoryUtil.memPutInt(p + uv2, light);
+		MemoryUtil.memPutByte(p + normal, normalByte(nx));
+		MemoryUtil.memPutByte(p + normal + 1, normalByte(ny));
+		MemoryUtil.memPutByte(p + normal + 2, normalByte(nz));
+		self.emrion$setElementsToFill(0);
+	}
+
+	private static final boolean LITTLE_ENDIAN = java.nio.ByteOrder.nativeOrder() == java.nio.ByteOrder.LITTLE_ENDIAN;
+
+	private static byte normalByte(float c) {
+		return (byte) ((int) (net.minecraft.util.Mth.clamp(c, -1.0F, 1.0F) * 127.0F) & 0xFF);
+	}
+
 	/** Sodium's VertexBufferWriter fast path (ExtendedBufferBuilderMixin): entity quads only; text keeps the VertexConsumer calls. */
 	public boolean acceptsPush() {
 		return block == null && !glyph && polygon == 4;
@@ -76,6 +109,8 @@ public final class ExtendedBufferBuilder extends BufferBuilder {
 	private static final String[] PUSHED = {"Color", "UV0", "UV1", "UV2", "Normal"};
 	private @Nullable VertexFormat planFormat;
 	private int[] plan = new int[0];
+	/** Bytes at the start of a vertex that are laid out the same in source and destination (Position to Normal for Sodium's EntityVertex), 0 = copy by element. */
+	private int prefix;
 
 	/**
 	 * VertexBufferWriter.push (Sodium's cuboid, item and shadow writers), written in bulk like Sodium's own push: the same ids,
@@ -85,9 +120,10 @@ public final class ExtendedBufferBuilder extends BufferBuilder {
 		if (from != planFormat) { // one format in practice (Sodium's EntityVertex): no map lookup per cuboid
 			plan = plan(from, format);
 			planFormat = from;
+			prefix = prefix(plan);
 		}
 		int[] plan = this.plan;
-		int pos = plan[0], srcStride = from.getVertexSize();
+		int pos = plan[0], srcStride = from.getVertexSize(), prefix = this.prefix;
 		var self = (BufferBuilderAccessor) (Object) this;
 		if (pending == polygon) finishPolygon();
 		if (pending != 0 || count % polygon != 0) { // a polygon split across calls: vertex by vertex
@@ -103,16 +139,37 @@ public final class ExtendedBufferBuilder extends BufferBuilder {
 		long ids = EntityIds.packed() | (long) (dev.emrion.shaders.mod.upscale.ObjectMotion.w | (EntityIds.localPlayer ? EntityIds.LOCAL_PLAYER_W : 0)) << 48;
 		for (int i = 0; i < count; i++, src += srcStride) {
 			long v = dst + (long) i * stride;
-			MemoryUtil.memPutFloat(v, MemoryUtil.memGetFloat(src + pos)); // Position is at 0 in our formats
-			MemoryUtil.memPutFloat(v + 4, MemoryUtil.memGetFloat(src + pos + 4));
-			MemoryUtil.memPutFloat(v + 8, MemoryUtil.memGetFloat(src + pos + 8));
-			copy(plan, src, v);
+			if (prefix != 0) copyPrefix(src, v, prefix);
+			else {
+				MemoryUtil.memPutFloat(v, MemoryUtil.memGetFloat(src + pos)); // Position is at 0 in our formats
+				MemoryUtil.memPutFloat(v + 4, MemoryUtil.memGetFloat(src + pos + 4));
+				MemoryUtil.memPutFloat(v + 8, MemoryUtil.memGetFloat(src + pos + 8));
+				copy(plan, src, v);
+			}
 			MemoryUtil.memPutLong(v + extra, ids);
 		}
 		self.emrion$setVertices(self.emrion$vertices() + count);
 		self.emrion$setVertexPointer(dst + (long) (count - 1) * stride);
 		self.emrion$setElementsToFill(0);
 		for (int q = 0; q < count; q += polygon) finishPolygon(dst + (long) q * stride, polygon);
+	}
+
+	/** The plan's elements as one block: each at the same offset in both formats, together filling [0, end) without gaps. */
+	static int prefix(int[] plan) {
+		if (plan[0] != 0) return 0;
+		int end = 12, bytes = 12; // Position
+		for (int k = 1; k < plan.length; k += 3) {
+			if (plan[k] != plan[k + 1]) return 0;
+			end = Math.max(end, plan[k] + plan[k + 2]);
+			bytes += plan[k + 2];
+		}
+		return bytes == end ? end : 0;
+	}
+
+	private static void copyPrefix(long src, long dst, int bytes) {
+		int b = 0;
+		for (; b + 8 <= bytes; b += 8) MemoryUtil.memPutLong(dst + b, MemoryUtil.memGetLong(src + b));
+		if (b < bytes) MemoryUtil.memPutInt(dst + b, MemoryUtil.memGetInt(src + b));
 	}
 
 	private static void copy(int[] plan, long src, long dst) {

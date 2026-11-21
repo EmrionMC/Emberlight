@@ -63,6 +63,12 @@ public final class ObjectMotion {
 	static {
 		prevIndex.defaultReturnValue(-1);
 	}
+	/** The previous frame's slots in their order: key, offset and count (mostly the same order every frame, so no hash lookup). */
+	private static long[] prevKeys = new long[0];
+	private static int[] prevOffsets = new int[0], prevCounts = new int[0];
+	private static int prevSlots;
+	/** prevIndex holds the previous frame's slots (built on the first slot whose key moved). */
+	private static boolean prevIndexBuilt;
 	private static float[] prevPos = new float[0];
 	private static boolean havePrev;
 	private static final Matrix4f prevViewProj = new Matrix4f(), prevHandProj = new Matrix4f();
@@ -130,7 +136,7 @@ public final class ObjectMotion {
 
 	/** StagedVertexBuffer.uploadDrawsToBuffers HEAD: read back the positions of tracked vertices. */
 	public static void onUpload(List<StagedVertexBuffer.Draw> draws) {
-		if (!capturing) return;
+		if (!capturing || slots == 0) return; // no slot: no vertex is tracked
 		for (StagedVertexBuffer.Draw d : draws) {
 			StagedDrawAccessor a = (StagedDrawAccessor) d;
 			if (a.emrion$topology() != PrimitiveTopology.QUADS
@@ -187,7 +193,7 @@ public final class ObjectMotion {
 				int s = vslot[i];
 				if (vslot[i + 3] != s || vord[i + 3] != vord[i] + 3) continue;
 				if (s != lastSlot) { // a slot's quads come in a row: one lookup per slot
-					prev = prevIndex.get(slotKeys[s]);
+					prev = previous(s);
 					lastSlot = s;
 				}
 				if (prev == -1 || (int) prev != slotCount[s]) continue;
@@ -225,8 +231,16 @@ public final class ObjectMotion {
 
 		// this frame becomes the previous one, slot-major
 		if (prevPos.length < vertices * 3) prevPos = new float[vertices * 3 + 1024];
-		prevIndex.clear();
-		for (int s = 0; s < slots; s++) prevIndex.putIfAbsent(slotKeys[s], (long) offsets[s] << 32 | slotCount[s]);
+		if (prevKeys.length < slots) {
+			prevKeys = new long[slots * 2];
+			prevOffsets = new int[slots * 2];
+			prevCounts = new int[slots * 2];
+		}
+		System.arraycopy(slotKeys, 0, prevKeys, 0, slots);
+		System.arraycopy(offsets, 0, prevOffsets, 0, slots);
+		System.arraycopy(slotCount, 0, prevCounts, 0, slots);
+		prevSlots = slots;
+		prevIndexBuilt = false;
 		for (int i = 0; i < vertices; i++) System.arraycopy(pos, i * 3, prevPos, (offsets[vslot[i]] + vord[i]) * 3, 3);
 		havePrev = true;
 		prevCam = cam;
@@ -234,6 +248,21 @@ public final class ObjectMotion {
 		prevHandProj.set(handProj);
 		vertices = 0; // the next frame's capture starts empty even if its world frame is skipped
 		slots = 0;
+	}
+
+	/**
+	 * Slot s's previous offset << 32 | count, or -1. Same slot index and key: taken directly (a key used twice resolves to its own
+	 * slot, not the first). Otherwise the hash map, filled once per frame when first needed.
+	 */
+	private static long previous(int s) {
+		long key = slotKeys[s];
+		if (s < prevSlots && prevKeys[s] == key) return (long) prevOffsets[s] << 32 | prevCounts[s];
+		if (!prevIndexBuilt) {
+			prevIndex.clear();
+			for (int i = 0; i < prevSlots; i++) prevIndex.putIfAbsent(prevKeys[i], (long) prevOffsets[i] << 32 | prevCounts[i]);
+			prevIndexBuilt = true;
+		}
+		return prevIndex.get(key);
 	}
 
 	/** Two triangles per quad, as MC's quad index buffer. */
