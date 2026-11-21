@@ -75,7 +75,31 @@ public final class RtEntities {
 
 	// ---- capture (render thread; static: the hooks run whether or not a scene exists) -------------------------------------
 
-	private record Captured(int offset, int vertices, String type, GpuTextureView texture, boolean player) {}
+	/** offset -1: a static draw whose BLAS from an earlier frame is reused (sig != 0, nothing copied). */
+	private record Captured(int offset, int vertices, String type, GpuTextureView texture, boolean player, boolean solid, long sig) {}
+
+	/**
+	 * Static block entities. A draw whose every vertex came from block-entity cache hits (BlockEntityGeometryCache) holds the
+	 * same triangles as long as the set of hits is the same, whatever the camera did: its signature is the sum of the hits'
+	 * entry generations (new on every rewrite of an entry), with the render type and texture. Seen two frames in a row it gets a BLAS over its own vertex copy that later frames reuse (no copy, UV remap, refit
+	 * or rebuild), moved by its instance transform. Off: -Demrion.rt.noStaticBlockEntities=true.
+	 */
+	private static final IdentityHashMap<Object, long[]> cachedHits = new IdentityHashMap<>();
+	private static volatile java.util.Set<Long> staticSigs = java.util.Set.of();
+
+	/** BlockEntityGeometryCache: a hit of {@code vertices} vertices of entry generation {@code key} went into {@code draw}. */
+	public static void noteCached(Object draw, long key, int vertices) {
+		if (!capturing || draw == null) return;
+		long[] a = cachedHits.computeIfAbsent(draw, d -> new long[2]);
+		a[0] += mix(key * 31 + vertices);
+		a[1] += vertices;
+	}
+
+	private static long mix(long z) { // SplitMix64 finaliser
+		z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
+		z = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
+		return z ^ (z >>> 31);
+	}
 
 	private static boolean capturing, shadowCaptured;
 	/** What the last shadow frame submitted (the pack's shadowEntities / shadowBlockEntities). */
@@ -125,7 +149,7 @@ public final class RtEntities {
 		float dx = (float) (capX - cam.x), dy = (float) (capY - cam.y), dz = (float) (capZ - cam.z);
 		long base = MemoryUtil.memAddress0(cap);
 		for (Captured c : captured)
-			for (long v = base + c.offset(), e = v + (long) c.vertices() * STRIDE; v < e; v += STRIDE) {
+			if (c.offset() >= 0) for (long v = base + c.offset(), e = v + (long) c.vertices() * STRIDE; v < e; v += STRIDE) {
 				MemoryUtil.memPutFloat(v, MemoryUtil.memGetFloat(v) + dx);
 				MemoryUtil.memPutFloat(v + 4, MemoryUtil.memGetFloat(v + 4) + dy);
 				MemoryUtil.memPutFloat(v + 8, MemoryUtil.memGetFloat(v + 8) + dz);
@@ -139,6 +163,7 @@ public final class RtEntities {
 
 	public static void end() {
 		capturing = false;
+		cachedHits.clear();
 		drawTypes.clear();
 	}
 
@@ -161,6 +186,12 @@ public final class RtEntities {
 			GpuTextureView tex = null;
 			for (var t : type.textures()) if (t.name().equals("Sampler0")) tex = t.textureView();
 			if (tex == null) continue;
+			long[] hits = cachedHits.get(d);
+			long sig = blockEntity && hits != null && hits[1] == n && !Boolean.getBoolean("emrion.rt.noStaticBlockEntities") ? mix(hits[0] ^ n ^ mix(name.hashCode() * 31L + System.identityHashCode(tex.texture()))) | 1 : 0;
+			if (sig != 0 && staticSigs.contains(sig)) {
+				captured.add(new Captured(-1, n, name, tex, false, solidSheet(tex.texture()), sig));
+				continue;
+			}
 			int bytes = (n & ~3) * STRIDE;
 			if (cap.remaining() < bytes) {
 				int need = cap.position() + bytes;
@@ -179,17 +210,17 @@ public final class RtEntities {
 				cap.position(offset);
 				continue;
 			}
-			split(offset, n & ~3, name, tex);
+			split(offset, n & ~3, name, tex, blockEntity && solidSheet(tex.texture()), sig);
 		}
 	}
 
 	/** Adds the draw at {@code offset}, its local-player quads (EntityIds.LOCAL_PLAYER_W) moved behind the others as a draw of their own. */
-	private static void split(int offset, int vertices, String type, GpuTextureView tex) {
+	private static void split(int offset, int vertices, String type, GpuTextureView tex, boolean solid, long sig) {
 		long base = MemoryUtil.memAddress0(cap) + offset, quad = 4L * STRIDE;
 		int quads = vertices / 4, player = 0;
 		for (int q = 0; q < quads; q++) if (isPlayer(base + q * quad)) player++;
 		if (player == 0 || player == quads) {
-			captured.add(new Captured(offset, vertices, type, tex, player != 0));
+			captured.add(new Captured(offset, vertices, type, tex, player != 0, solid, player == 0 ? sig : 0));
 			return;
 		}
 		ByteBuffer tmp = MemoryUtil.memAlloc((int) (player * quad));
@@ -201,11 +232,21 @@ public final class RtEntities {
 				else MemoryUtil.memCopy(src, base + others++ * quad, quad); // forward, never overtakes src
 			}
 			MemoryUtil.memCopy(MemoryUtil.memAddress(tmp), base + others * quad, player * quad);
-			captured.add(new Captured(offset, others * 4, type, tex, false));
-			captured.add(new Captured(offset + (int) (others * quad), player * 4, type, tex, true));
+			captured.add(new Captured(offset, others * 4, type, tex, false, solid, 0));
+			captured.add(new Captured(offset + (int) (others * quad), player * 4, type, tex, true, solid, 0));
 		} finally {
 			MemoryUtil.memFree(tmp);
 		}
+	}
+
+	/**
+	 * Chests and shulker boxes draw as entity_cutout, so every ray crossing a storage wall alpha-tested each chest triangle in
+	 * the shader; their models only sample opaque texels. Opaque in the BLAS: the hardware takes the hit (big storage view
+	 * -1.1 ms in gbuffers opaque). Off: -Demrion.rt.cutoutChests=true.
+	 */
+	private static boolean solidSheet(GpuTexture tex) {
+		String l = tex.getLabel();
+		return !Boolean.getBoolean("emrion.rt.cutoutChests") && (l.contains("atlas/chest") || l.contains("atlas/shulker"));
 	}
 
 	private static boolean isPlayer(long vertex) {
@@ -258,7 +299,11 @@ public final class RtEntities {
 	private static final class Blas {
 		long as, addr, size, vertexAddr;
 		@Nullable RawBuffer storage;
-		int vertices, refits, kind, lastFrame;
+		@Nullable RawBuffer data; // a static draw's own vertex copy
+		int @Nullable [] rect; // a static draw's atlas rect when its UVs were remapped
+		double ox, oy, oz; // the camera its vertices are relative to
+		long sig; // static draws
+		int vertices, refits, kind, lastFrame, retiredFrame;
 		boolean opaque, player;
 	}
 
@@ -273,7 +318,13 @@ public final class RtEntities {
 	private @Nullable RawBuffer scratch;
 	private final Map<String, Blas> blas = new HashMap<>();
 	private final List<Blas> live = new ArrayList<>();
-	private double liveX, liveY, liveZ;
+	/**
+	 * Retired big static BLAS kept with their vertex buffer and acceleration structure: the next promotion (the chests in view
+	 * changed) reuses them instead of allocating ~30 MB again, which now and then stalled the frame for tens of ms.
+	 */
+	private final java.util.ArrayDeque<Blas> spare = new java.util.ArrayDeque<>();
+	private static final int SPARES = 2, SPARE_MIN_BYTES = 1 << 20, SPARE_FRAMES = 600;
+	private java.util.Set<Long> candidates = new java.util.HashSet<>(); // static signatures of the last frame
 	private int frameNo;
 	/** Frames between copies of the textures in use into the atlas (they may change in place). */
 	private static final int REFRESH_FRAMES = 10;
@@ -296,6 +347,8 @@ public final class RtEntities {
 
 	void destroy() {
 		for (Blas b : blas.values()) free(b);
+		for (Blas b : spare) free(b);
+		spare.clear();
 		blas.clear();
 		live.clear();
 		for (RawBuffer v : verts) if (v != null) v.destroyLater();
@@ -307,6 +360,7 @@ public final class RtEntities {
 			vkDestroyDescriptorSetLayout(ctx.vk, setLayout, null);
 		});
 		captured.clear();
+		staticSigs = java.util.Set.of();
 	}
 
 	/**
@@ -343,13 +397,16 @@ public final class RtEntities {
 		draws = builds = refits = dropped = blits = 0;
 		triangles = 0;
 		if (captured.isEmpty()) {
+			candidates = new java.util.HashSet<>();
+			staticSigs = java.util.Set.of();
 			retire();
 			return;
 		}
 		// previous frames' ray queries (BLAS refitted in place, atlas regions rewritten after a reset) before this frame's writes
 		Barriers.memory(cb, AS_BUILD | Barriers.COMPUTE | Barriers.FRAGMENT | Barriers.RAYGEN, AS_RW | Barriers.SAMPLED_READ, AS_BUILD | Barriers.COMPUTE, AS_RW | Barriers.STORAGE_WRITE);
 
-		long bytes = captured.getLast().offset() + (long) captured.getLast().vertices() * STRIDE;
+		long bytes = 0;
+		for (Captured c : captured) if (c.offset() >= 0) bytes = Math.max(bytes, c.offset() + (long) c.vertices() * STRIDE);
 		if (verts[slot] == null || verts[slot].size < bytes) {
 			if (verts[slot] != null) verts[slot].destroyLater();
 			verts[slot] = new RawBuffer(ctx, Math.max(1L << 20, Long.highestOneBit(bytes) << 1), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR
@@ -363,6 +420,8 @@ public final class RtEntities {
 		List<Boolean> update = new ArrayList<>();
 		List<Long> offsets = new ArrayList<>();
 		long tris = 0, scratchSize = 0;
+		List<Blas> reused = new ArrayList<>();
+		java.util.Set<Long> sigs = new java.util.HashSet<>();
 		try (MemoryStack stack = MemoryStack.stackPush()) {
 			var geom = VkAccelerationStructureGeometryKHR.calloc(1, stack);
 			var info = VkAccelerationStructureBuildGeometryInfoKHR.calloc(stack);
@@ -377,6 +436,19 @@ public final class RtEntities {
 				}
 				GpuTexture tex = c.texture().texture();
 				int[] rect = tex == blocks ? null : rects.get(tex);
+				if (tex != blocks && rect == null) { // left out by placeTextures' budget pass (its count includes skipped reuses): no UVs for it
+					dropped++;
+					continue;
+				}
+				if (c.offset() < 0) { // static: last frame's BLAS, unless an atlas reset moved its texture (then captured again next frame)
+					Blas b = blas.get("static@" + c.sig());
+					if (b == null || b.as == 0 || !java.util.Arrays.equals(b.rect, rect) || b.lastFrame == frameNo) continue;
+					b.lastFrame = frameNo;
+					reused.add(b);
+					tris += quads * 2L;
+					continue;
+				}
+				boolean stat = c.sig() != 0 && sigs.add(c.sig()) && candidates.contains(c.sig()); // twice in a frame: one copy only
 				long src = MemoryUtil.memAddress0(cap) + c.offset(), dst = base + c.offset(); // the capture layout is kept: offsets match
 				int kind = KIND_BLOCKS;
 				if (rect != null && rect != NO_FIT) {
@@ -389,16 +461,36 @@ public final class RtEntities {
 						MemoryUtil.memPutFloat(o + 4, oy + Math.clamp(MemoryUtil.memGetFloat(o + 4), 0f, 1f) * sy);
 					}
 				}
-				MemoryUtil.memCopy(src, dst, (long) c.vertices() * STRIDE);
-				boolean opaque = rect == NO_FIT || c.type().startsWith("entity_solid");
-				String key = c.type() + '@' + System.identityHashCode(tex) + (c.player() ? "@p" : "");
-				int nth = seen.merge(key, 1, Integer::sum);
-				Blas b = blas.computeIfAbsent(key + '#' + nth, k -> new Blas());
-				b.vertexAddr = baseAddr + c.offset();
+				long size = (long) c.vertices() * STRIDE;
+				Blas b;
+				if (stat) {
+					b = blas.get("static@" + c.sig());
+					if (b == null) blas.put("static@" + c.sig(), b = takeSpare(size));
+					else if (b.data != null) { // earlier frames may still read it
+						b.data.destroyLater();
+						b.data = null;
+					}
+					if (b.data == null) b.data = new RawBuffer(ctx, size + size / 8, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR
+							| VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, "rt static entity vertices");
+					MemoryUtil.memCopy(src, b.data.mapped, size);
+					b.rect = rect;
+					b.vertexAddr = scene.address(b.data.handle);
+					b.sig = c.sig();
+				} else {
+					MemoryUtil.memCopy(src, dst, size);
+					String key = c.type() + '@' + System.identityHashCode(tex) + (c.player() ? "@p" : "");
+					int nth = seen.merge(key, 1, Integer::sum);
+					b = blas.computeIfAbsent(key + '#' + nth, k -> new Blas());
+					b.vertexAddr = baseAddr + c.offset();
+				}
+				boolean opaque = rect == NO_FIT || c.type().startsWith("entity_solid") || c.solid();
+				b.ox = capX;
+				b.oy = capY;
+				b.oz = capZ;
 				b.kind = kind;
 				b.lastFrame = frameNo;
 				b.player = c.player();
-				boolean refit = b.as != 0 && b.vertices == c.vertices() && b.opaque == opaque && b.refits < REFITS;
+				boolean refit = !stat && b.as != 0 && b.vertices == c.vertices() && b.opaque == opaque && b.refits < REFITS;
 				b.opaque = opaque;
 				scene.ensureIndices(quads);
 				fill(geom.get(0), b, quads);
@@ -425,10 +517,13 @@ public final class RtEntities {
 		}
 		record(cb, work, update, offsets);
 		live.addAll(work);
-		liveX = capX;
-		liveY = capY;
-		liveZ = capZ;
-		draws = work.size();
+		live.addAll(reused);
+		candidates = sigs;
+		java.util.Set<Long> st = new java.util.HashSet<>();
+		for (Blas b : reused) st.add(b.sig);
+		for (Blas b : work) if (b.sig != 0) st.add(b.sig);
+		staticSigs = st;
+		draws = work.size() + reused.size();
 		triangles = tris;
 		captured.clear();
 		retire();
@@ -438,9 +533,29 @@ public final class RtEntities {
 	private void retire() {
 		blas.values().removeIf(b -> {
 			if (frameNo - b.lastFrame <= 3) return false;
-			free(b);
+			if (b.sig != 0 && b.data != null && b.data.size >= SPARE_MIN_BYTES) {
+				b.retiredFrame = frameNo;
+				spare.addLast(b);
+				if (spare.size() > SPARES) free(spare.removeFirst());
+			} else free(b);
 			return true;
 		});
+		while (!spare.isEmpty() && frameNo - spare.peekFirst().retiredFrame > SPARE_FRAMES) free(spare.removeFirst());
+	}
+
+	/**
+	 * A retired static BLAS whose vertex buffer holds {@code bytes}, else a new one. Only once no frame in flight can still read
+	 * it: retired means unused for 3 frames, plus RING more since then.
+	 */
+	private Blas takeSpare(long bytes) {
+		for (var it = spare.iterator(); it.hasNext(); ) {
+			Blas b = it.next();
+			if (frameNo - b.retiredFrame > RING && b.data.size >= bytes) {
+				it.remove();
+				return b;
+			}
+		}
+		return new Blas();
 	}
 
 	/**
@@ -542,7 +657,7 @@ public final class RtEntities {
 	}
 
 	private void create(Blas b, long size) {
-		free(b);
+		freeAs(b);
 		b.size = size;
 		b.storage = new RawBuffer(ctx, size, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false, "rt entity blas");
 		try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -555,6 +670,12 @@ public final class RtEntities {
 	}
 
 	private void free(Blas b) {
+		if (b.data != null) b.data.destroyLater();
+		b.data = null;
+		freeAs(b);
+	}
+
+	private void freeAs(Blas b) {
 		if (b.as == 0) return;
 		long as = b.as;
 		ctx.destroyLater(() -> vkDestroyAccelerationStructureKHR(ctx.vk, as, null));
@@ -638,12 +759,12 @@ public final class RtEntities {
 	long instanceKey;
 
 	int writeInstances(long inst, long sec, int i, int capacity, int region, Vec3 cam) {
-		float tx = (float) (liveX - cam.x), ty = (float) (liveY - cam.y), tz = (float) (liveZ - cam.z);
 		// third person: the player model is drawn, so it is an entity like any other
 		int playerMask = Minecraft.getInstance().options.getCameraType().isFirstPerson() ? MASK_LOCAL_PLAYER : MASK;
 		instanceKey = 1;
 		for (Blas b : live) {
 			if (i == capacity) break;
+			float tx = (float) (b.ox - cam.x), ty = (float) (b.oy - cam.y), tz = (float) (b.oz - cam.z);
 			long a = inst + (long) i * VkAccelerationStructureInstanceKHR.SIZEOF;
 			MemoryUtil.memPutFloat(a, 1f); MemoryUtil.memPutFloat(a + 4, 0f); MemoryUtil.memPutFloat(a + 8, 0f); MemoryUtil.memPutFloat(a + 12, tx);
 			MemoryUtil.memPutFloat(a + 16, 0f); MemoryUtil.memPutFloat(a + 20, 1f); MemoryUtil.memPutFloat(a + 24, 0f); MemoryUtil.memPutFloat(a + 28, ty);

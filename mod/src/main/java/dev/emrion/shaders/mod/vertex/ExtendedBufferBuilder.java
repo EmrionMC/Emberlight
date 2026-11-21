@@ -15,6 +15,8 @@ import org.lwjgl.system.MemoryUtil;
 public final class ExtendedBufferBuilder extends BufferBuilder {
 	private final int stride, color, uv, uv1, uv2, normal, mid, tangent, extra;
 	private final VertexFormat format;
+	/** The staged draw this builder writes (RtEntities: static block-entity draws), null outside a feature frame's draws. */
+	public Object rtDraw;
 	/** GLYPH: MC's text code sets neither Normal nor UV1; we set them so the vertex is complete (Normal is replaced per quad). */
 	private final boolean glyph;
 	/** Vertices per polygon (4 quads, 3 triangles), 0 = other topologies (no per-polygon data). */

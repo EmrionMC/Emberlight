@@ -8,6 +8,7 @@ import dev.emrion.shaders.mod.vk.RawBuffer;
 import dev.emrion.shaders.mod.vk.UboRing;
 import dev.emrion.shaders.mod.vk.VulkanContext;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
+import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -102,6 +103,9 @@ public final class RtLights {
 	private long[] sortKeys = new long[0];
 	private boolean firstBuild = true;
 	private int changeFrames, bx0, by0, bz0, bx1, by1, bz1;
+	/** When each light position last changed (System.nanoTime): a light toggling again within {@link #FLICKER_NS} is a clock. */
+	private final Long2LongOpenHashMap lastChange = new Long2LongOpenHashMap();
+	private static final long FLICKER_NS = 2_000_000_000L;
 	private boolean overflowWarned, allOverflowWarned, indexOverflowWarned, blockOverflowWarned;
 	private final Long2IntOpenHashMap keyIndex = new Long2IntOpenHashMap();
 
@@ -249,17 +253,35 @@ public final class RtLights {
 	private static void diff(SectionPos section, int[] a, int[] b) {
 		int[] sorted = b.clone();
 		java.util.Arrays.sort(sorted);
+		boolean all = Boolean.getBoolean("emrion.rt.allLightChanges");
 		for (int packed : a)
-			if (java.util.Arrays.binarySearch(sorted, packed) < 0)
+			if (java.util.Arrays.binarySearch(sorted, packed) < 0 && (all || !weakSource(packed >>> 17)))
 				CHANGED.add(new int[] {section.minBlockX() + (packed & 15), section.minBlockY() + (packed >> 4 & 15), section.minBlockZ() + (packed >> 8 & 15), packed >> 12 & 15});
+	}
+
+	/**
+	 * Redstone wire, repeaters and comparators: their glow is too faint to matter for the GI, but item sorters and clocks
+	 * toggle them many times a second, and each toggle reset the GI history (extra rays) and bypassed the radiance cache in a
+	 * box around it: a storage room with a running sorter kept the GI at twice its cost or more.
+	 */
+	private static boolean weakSource(int type) {
+		LightColors.Kind k = LightColors.kind(type);
+		return k == LightColors.Kind.WIRE || k == LightColors.Kind.DIODE;
 	}
 
 	/** Grows the change box by the lights recompiles added or removed since the last frame (inside the grid only). */
 	private void collectChanges() {
+		long now = System.nanoTime();
+		if (lastChange.size() > 4096) lastChange.values().removeIf(t -> now - t > FLICKER_NS);
 		for (int[] c; (c = CHANGED.poll()) != null; ) {
 			int r = c[3] + CHANGE_REACH;
 			Lists f = front;
 			if (c[0] + r < f.ox || c[0] - r > f.ox + GX * CELL || c[1] + r < f.oy || c[1] - r > f.oy + GY * CELL || c[2] + r < f.oz || c[2] - r > f.oz + GZ * CELL) continue;
+			// a clock or a sorter's redstone torch: only its first toggle resets the GI around it (each reset costs extra rays
+			// and the radiance cache there, so a light blinking for minutes kept the GI at several times its cost); the old and
+			// new entry of one level change arrive in the same call (same now) and both count
+			long prev = lastChange.put(BlockPos.asLong(c[0], c[1], c[2]), now);
+			if (prev != 0 && prev != now && now - prev < FLICKER_NS && !Boolean.getBoolean("emrion.rt.allLightChanges")) continue;
 			if (changeFrames == 0) {
 				bx0 = by0 = bz0 = Integer.MAX_VALUE;
 				bx1 = by1 = bz1 = Integer.MIN_VALUE;

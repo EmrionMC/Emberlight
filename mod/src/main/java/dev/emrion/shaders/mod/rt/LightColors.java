@@ -55,7 +55,7 @@ public final class LightColors {
 	private static final float[] WARM_WHITE = {1.0f, 0.82f, 0.62f};
 
 	/**
-	 * Sources only the pack lights (Complementary r5.9.3 + Euphoria 1.10.5, lightVoxelization.glsl / blocklightColorsACT.glsl):
+	 * Sources only the pack lights (Complementary r5.10 + Euphoria 1.11.2, lightVoxelization.glsl / blocklightColorsACT.glsl):
 	 * block name fragment, the pack's colour (normalised to its brightest channel), its extra-light alpha, the option group.
 	 * Not listed: sculk (alpha 0.0005, practically no light, and thousands of blocks in the Deep Dark), emitters with vanilla
 	 * light (lava, magma, amethyst, ... are vanilla sources above).
@@ -72,11 +72,11 @@ public final class LightColors {
 			new Pack("lapis_ore", new float[]{0.25f, 0.25f, 1.0f}, 0.1f, Kind.ORE), new Pack("emerald_ore", new float[]{0.14f, 1.0f, 0.14f}, 0.1f, Kind.ORE),
 			new Pack("diamond_ore", new float[]{0.25f, 1.0f, 1.0f}, 0.15f, Kind.ORE), new Pack("nether_quartz_ore", new float[]{1.0f, 1.0f, 1.0f}, 0.05f, Kind.ORE),
 			new Pack("gilded_blackstone", new float[]{1.0f, 0.65f, 0.12f}, 0.05f, Kind.ORE), new Pack("ancient_debris", new float[]{1.0f, 0.44f, 0.22f}, 0.15f, Kind.ORE),
-			new Pack("crimson_stem", new float[]{1.0f, 0.17f, 0.11f}, 0.05f, Kind.NETHER_TREE), new Pack("crimson_hyphae", new float[]{1.0f, 0.17f, 0.11f}, 0.05f, Kind.NETHER_TREE),
-			new Pack("warped_stem", new float[]{0.16f, 1.0f, 0.79f}, 0.05f, Kind.NETHER_TREE), new Pack("warped_hyphae", new float[]{0.16f, 1.0f, 0.79f}, 0.05f, Kind.NETHER_TREE),
-			new Pack("command_block", new float[]{1.0f, 0.35f, 0.1f}, 0.0125f, Kind.IPBR), new Pack("structure_block", new float[]{1.0f, 1.0f, 1.0f}, 0.1f, Kind.IPBR),
-			new Pack("jigsaw", new float[]{1.0f, 1.0f, 1.0f}, 0.1f, Kind.IPBR), new Pack("test_block", new float[]{1.0f, 1.0f, 1.0f}, 0.1f, Kind.IPBR),
-			new Pack("test_instance_block", new float[]{1.0f, 1.0f, 1.0f}, 0.1f, Kind.IPBR), new Pack("spawner", new float[]{1.0f, 0.14f, 1.0f}, 0.05f, Kind.IPBR),
+			new Pack("crimson_stem", new float[]{1.0f, 0.17f, 0.11f}, 0.1f, Kind.NETHER_TREE), new Pack("crimson_hyphae", new float[]{1.0f, 0.17f, 0.11f}, 0.1f, Kind.NETHER_TREE),
+			new Pack("warped_stem", new float[]{0.16f, 1.0f, 0.79f}, 0.1f, Kind.NETHER_TREE), new Pack("warped_hyphae", new float[]{0.16f, 1.0f, 0.79f}, 0.1f, Kind.NETHER_TREE),
+			new Pack("command_block", new float[]{1.0f, 0.35f, 0.1f}, 0.1f, Kind.IPBR), new Pack("structure_block", new float[]{1.0f, 1.0f, 1.0f}, 0.15f, Kind.IPBR),
+			new Pack("jigsaw", new float[]{1.0f, 1.0f, 1.0f}, 0.15f, Kind.IPBR), new Pack("test_block", new float[]{1.0f, 1.0f, 1.0f}, 0.15f, Kind.IPBR),
+			new Pack("test_instance_block", new float[]{1.0f, 1.0f, 1.0f}, 0.15f, Kind.IPBR), new Pack("spawner", new float[]{1.0f, 0.14f, 1.0f}, 0.15f, Kind.IPBR),
 			new Pack("warped_fungus", new float[]{1.0f, 0.3f, 0.067f}, 0.0125f, Kind.IPBR), new Pack("crimson_fungus", new float[]{1.0f, 0.3f, 0.067f}, 0.0125f, Kind.IPBR),
 			new Pack("weeping_vines_plant", new float[]{1.0f, 0.3f, 0.067f}, 0.0125f, Kind.IPBR), new Pack("chorus_flower", new float[]{1.0f, 0.5f, 0.75f}, 0.1f, Kind.IPBR),
 			new Pack("redstone_block", new float[]{1.0f, 0.025f, 0.025f}, 0.15f, Kind.REDSTONE_BLOCK), new Pack("lapis_block", new float[]{0.25f, 0.25f, 1.0f}, 0.15f, Kind.LAPIS_BLOCK),

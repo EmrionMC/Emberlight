@@ -38,6 +38,13 @@ public class StagedVertexBufferMixin {
 		return format == EmrionVertexFormats.ENTITY || format == EmrionVertexFormats.GLYPH ? new ExtendedBufferBuilder(buffer, topology, format) : original.call(buffer, topology, format);
 	}
 
+	@com.llamalad7.mixinextras.injector.ModifyReturnValue(method = "getVertexBuilder", at = @At("RETURN"))
+	private com.mojang.blaze3d.vertex.VertexConsumer emrion$builderDraw(com.mojang.blaze3d.vertex.VertexConsumer builder,
+			@com.llamalad7.mixinextras.sugar.Local(argsOnly = true) StagedVertexBuffer.Draw draw) {
+		if (builder instanceof ExtendedBufferBuilder b) b.rtDraw = draw;
+		return builder;
+	}
+
 	/** RT entities: the draws' CPU vertex slices, just before they are copied to the GPU and freed. */
 	@Inject(method = "uploadDrawsToBuffers", at = @At("HEAD"))
 	private void emrion$rtEntities(com.mojang.renderpearl.api.device.GpuDevice device, java.util.List<StagedVertexBuffer.Draw> draws,

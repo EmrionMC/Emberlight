@@ -1428,3 +1428,72 @@ lid animation keeps its object motion. Codex image check: no block-entity differ
 Not cached: signs' text, skulls (mutable state), item frames (entities), decorated pots and conduits (model-part submits),
 anything with a crumbling overlay or outline. Remaining render thread in the room: item frames' item and frame models, the
 shadow receiver grid, object motion readback.
+
+## Storage GI swing and big storages (2026-11-21, `perf/storage-gi`)
+
+Complementary Unbound r5.10 + Euphoria 1.11.2, user RT settings (RTX, full shadows, reflections, GI high + cache, block light
+8 rays), DLSS Quality, Continuity, no PBR pack, frame generation off unless noted. Scenes: the storage room copy (snapshot
+2026-11-20_17-44-00 with the r5.10 pack) and a new test storage on the test server, room 12000-12063 / 200-212 /
+12000-12049 (copper floor and ceiling, deepslate walls, lit copper bulbs): 16 rows of 60x8 chests (every fourth row shulker
+boxes) with 2-block aisles, filled and cleared in-game between benches. View A 12062.5 202 12004 (90/8) looks down an aisle.
+Scripts, logs and shots: a local test folder (not in the repo).
+
+**Why GI swung between 3 and 12 ms.** Not the chests and not SHaRC: the room copy has an item sorter whose redstone wire
+(pack light level 3) and repeaters (level 5) ~40 blocks east toggle 35-90 times a second while items flow. Each toggle opened
+RtLights' light-change box (light level + 13 blocks around it, held 4 frames): GI history capped at 3 frames there, so
+`gi_trace` gives those pixels 2-4x the rays (young-history boost), and the radiance cache is skipped inside the box. The box
+was on in every frame. How much of the screen it covered depended on which part of the sorter was busy, so the cost differed
+per session and fell as the sorter drained. Fix: wire, repeaters and comparators no longer count as light changes (their glow
+is too faint for the GI), and a light that toggles again within 2 s only counts the first time (`-Demrion.rt.allLightChanges=true`
+for the old behaviour).
+
+| Scene (interleaved) | before | after |
+|---|---|---|
+| room copy, `prepare_a`, 3 pairs | 5.97 / 4.34 / 3.30 ms | 2.54 / 2.25 / 2.29 ms |
+| test storage with a repeater clock + 4 redstone lamps in view, 3 pairs | 3.05 ms | 1.46 ms (1.35 without the clock) |
+| room copy, all fixes of this section, 3 pairs | 52.4 FPS | 54.7 FPS |
+| same with DLSS frame generation, 2 pairs (rendered FPS) | 43.7 FPS, GI 4.7 ms | 48.2 FPS, GI 2.5 ms |
+
+**Scaling with storage size** (view A, interleaved, `old` = without the static block-entity BLAS below, both with the other
+fixes; render thread = frame minus blocked on GPU):
+
+| Rows (chests + shulker boxes) | GI `prepare_a` | gbuffers opaque | entity BLAS old / new | old FPS, render thread | new FPS, render thread |
+|---|---|---|---|---|---|
+| 0 | 1.1 ms | 1.25 ms | 0.05 / 0.05 ms | 106.7, 2.4 ms | 109.5, 2.3 ms |
+| 2 (960) | 1.07 | 3.8 | 0.22 / 0.05 | 82.6, 4.8 | 83.7, 3.6 |
+| 4 (1440 + 480) | 1.09 | 5.2 | 0.34 / 0.05 | 70.8, 7.7 | 73.1, 5.1 |
+| 8 (2880 + 960) | 1.07-1.25 | 5.3-5.5 | 0.71 / 0.06 | 61.1, 12.8 | 70.2, 8.0 |
+| 16 (5760 + 1920) | 1.07-1.3 | 5.4-5.8 | 1.15 / 0.05 | 39.4, 25.1 | 61.7, 11.5 |
+
+GI does not grow with the chest count at all (bounce rays use mask 0x03: entities are only in the GI primary ray). What grew
+linearly was the render thread: at 7680 chests ~60 % of it was RtEntities (JFR): every frame all block-entity vertices
+(26 MB) were copied out of MC's draws, their UVs remapped, copied again into the ring, and the BLAS refitted (rebuilt every
+9th frame, 1.1-1.7 ms GPU).
+
+| Change | Effect | Image |
+|---|---|---|
+| Static block entities keep their BLAS: a draw whose vertices all came from block-entity cache hits gets a signature (sum of the hits' entry generations, render type, texture); seen two frames in a row it gets its own vertex copy and BLAS, reused (no capture, remap, refit or rebuild) with a per-BLAS instance transform until the set changes. `-Demrion.rt.noStaticBlockEntities=true` | 7680 chests: 48.1 -> 64.0 FPS (view A, 3 pairs), render thread 20.5 -> 12.4 ms, entity BLAS 1.1 -> 0.05 ms; turning at 20°/s 79.7 -> 88.9 FPS; room copy within noise (GPU-bound), entity BLAS 0.30 -> 0.12 ms | at the noise floor (copy MAE 0.47 vs 0.56 noise, view A 0.26 vs 0.28); chest lid opening/closing identical |
+| Chest and shulker box draws (entity_cutout, chest/shulker atlases) opaque in the BLAS: their models only sample opaque texels. `-Demrion.rt.cutoutChests=true` | gbuffers opaque -1.1 ms over the storage, -0.3 ms down an aisle | at the noise floor |
+
+Codex image check (copy and big storage before/after): no visible difference. Known limits: a chest texture made transparent
+by a resource pack would now block rays; hits on chests no longer flag `emrRtShEntity`, so chest shadow edges skip the extra
+moving-entity refinement rays (no difference visible in the shots); an atlas reset drops a reused static draw for one frame.
+Still linear with the chest count: MC's own block-entity work (cache hits appended in both passes, ~1 ms per 1000 chests
+of render thread) and the raster of the chests in gbuffers opaque (saturates once rows hide each other). Baking closed chests
+into the section meshes (as Enhanced Block Entities does) would remove both; not done here.
+
+**Hitches walking through the storage** (16 rows, frame generation off, every frame traced, 2 runs each; old = `-Demrion.rt.noStaticBlockEntities=true`).
+While the camera moves, the chests in view change every few frames, so the static draw is rebuilt often; between rebuilds it is
+reused. Retired static BLAS are kept as spares (vertex buffer and AS reused, no new ~30 MB allocation that occasionally
+stalled 50-60 ms). p99 / max frame ms:
+
+| Segment | old | new |
+|---|---|---|
+| along an aisle, 5 blocks/s | 69-79 / 87-89 | 26-27 / 35-43 |
+| across the rows from above | 42-48 / 48-54 | 22-25 / 40-50 |
+| turning 72°/s | 31 / 48 | 24 / 33-76 (one first-time allocation) |
+| walk + turn | 45 / 72 | 28-29 / 39-63 |
+| view A standing | 34-45 / 43-47 (46-49 FPS) | 18 / 19-31 (64-65 FPS) |
+
+Chest open/close, pack reload, RT off/on and nether round trip: no extra spikes with the static BLAS. Scripts and logs:
+a local test folder (not in the repo).

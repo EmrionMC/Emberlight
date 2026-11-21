@@ -34,10 +34,12 @@ public final class BlockEntityGeometryCache {
 		final float[] pose = new float[12]; // 3x3 linear part, then the translation relative to the origin
 		ByteBuffer data;
 		int count, lastFrame, misses, volatileUntil;
+		long generation; // new for every write of data (RtEntities: static draws)
 	}
 
 	private static final Long2ObjectOpenHashMap<Entry> entries = new Long2ObjectOpenHashMap<>();
 	private static int frame;
+	private static long generations;
 	private static Object idTable;
 	private static int level; // identity hash: no reference to an unloaded world
 
@@ -82,6 +84,7 @@ public final class BlockEntityGeometryCache {
 				e.lastFrame = frame;
 				e.misses = 0;
 				hits++;
+				dev.emrion.shaders.mod.rt.RtEntities.noteCached(b.rtDraw, e.generation, e.count);
 				return true;
 			}
 			return false;
@@ -125,6 +128,7 @@ public final class BlockEntityGeometryCache {
 			MemoryUtil.memPutFloat(v + 8, MemoryUtil.memGetFloat(v + 8) - oz);
 		}
 		e.count = count;
+		e.generation = ++generations;
 		e.format = b.format();
 		e.renderType = s.renderType();
 		e.model = s.model();
