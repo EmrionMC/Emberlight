@@ -212,6 +212,7 @@ public final class FrameGen {
 		if (failure != null && mode == generatorMode) return false;
 		failure = null;
 		generatorMode = mode;
+		if (mode == FrameGenConfig.Mode.DLSS && !vramFree(ctx, dw, dh)) return false;
 		genRW = rw;
 		genRH = rh;
 		genDW = dw;
@@ -229,6 +230,20 @@ public final class FrameGen {
 		}
 		resetNext = true;
 		return true;
+	}
+
+	private static boolean vramWaiting;
+
+	/**
+	 * NGX crashes (SIGSEGV) instead of failing when VRAM runs out while it creates DLSS FG, e.g. right after a pack reload
+	 * while the old runtime is still queued for destruction: wait until there is room. Measured peak ~670 MiB at 2560x1386.
+	 */
+	private static boolean vramFree(VulkanContext ctx, int dw, int dh) {
+		long free = dev.emrion.shaders.mod.debug.VramReport.freeDeviceLocalMiB(ctx), need = 256 + (long) dw * dh * 200 / 1048576;
+		boolean ok = free < 0 || free >= need;
+		if (!ok && !vramWaiting) EmrionShadersClient.LOG.warn("Frame generation: waiting for GPU memory before creating DLSS FG ({} MiB free, needs {} MiB)", free, need);
+		vramWaiting = !ok;
+		return ok;
 	}
 
 	private static void fail(String why, Throwable t) {

@@ -24,7 +24,8 @@ public class VulkanFeatureSetsMixin {
 		}
 		if (dev.emrion.shaders.mod.debug.PipelineStats.ENABLED) cir.getReturnValue().add(dev.emrion.shaders.mod.debug.PipelineStats.FEATURE_SET);
 		cir.getReturnValue().add(dev.emrion.shaders.mod.hdr.Hdr.FEATURE_SET); // VK_EXT_hdr_metadata for HDR output, where the driver has it
-		cir.getReturnValue().add(dev.emrion.shaders.mod.framegen.Reflex.FEATURE_SET); // NVIDIA Reflex (VK_NV_low_latency2), where the driver has it
+		cir.getReturnValue().add(dev.emrion.shaders.mod.framegen.Reflex.FEATURE_SET);
+		cir.getReturnValue().add(dev.emrion.shaders.mod.debug.VramReport.FEATURE_SET); // free VRAM before DLSS FG creation // NVIDIA Reflex (VK_NV_low_latency2), where the driver has it
 		if (dev.emrion.shaders.mod.rt.RtCapability.REQUESTED) {
 			cir.getReturnValue().add(dev.emrion.shaders.mod.rt.RtCapability.FEATURE_SET);
 			// VK_EXT_opacity_micromap, where the driver has it (-Demrion.rt.ommDevice=false: a device without it, for tests)

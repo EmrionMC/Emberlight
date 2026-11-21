@@ -26,6 +26,7 @@ public class VulkanBackendRtMixin {
 		dev.emrion.shaders.mod.vk.Barriers.RAYGEN = dev.emrion.shaders.mod.rt.RtRaygen.supported ? org.lwjgl.vulkan.KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR : 0;
 		dev.emrion.shaders.mod.debug.PipelineStats.active = featureSet.contains(dev.emrion.shaders.mod.debug.PipelineStats.FEATURE_SET);
 		dev.emrion.shaders.mod.framegen.Reflex.supported = featureSet.contains(dev.emrion.shaders.mod.framegen.Reflex.FEATURE_SET);
+		dev.emrion.shaders.mod.debug.VramReport.budgetSupported = featureSet.contains(dev.emrion.shaders.mod.debug.VramReport.FEATURE_SET);
 		dev.emrion.shaders.mod.hdr.Hdr.metadataSupported = featureSet.contains(dev.emrion.shaders.mod.hdr.Hdr.FEATURE_SET);
 		dev.emrion.shaders.mod.upscale.Dlss.enabledOnDevice = featureSet.extensions().contains("VK_NVX_image_view_handle");
 		dev.emrion.shaders.mod.upscale.Xess.enabledOnDevice = featureSet.contains(dev.emrion.shaders.mod.upscale.Xess.FEATURE_SET);
