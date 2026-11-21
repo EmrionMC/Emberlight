@@ -19,7 +19,7 @@ class TargetPackR510RtTest {
 	static final Path PACK = ROOT.resolve("unbound-euphoria-r510");
 	static final Path SETTINGS = ROOT.resolve("ComplementaryUnbound_r5.10 + EuphoriaPatches_1.11.2.txt");
 	/** sha256 over the RT-off output, as TargetPackRtTest.RT_OFF_GOLDEN. */
-	static final String RT_OFF_GOLDEN = "31aaf5d287bf35c59bf3ee5bd875ebef06084bb2b879f5a97f3b26156dd35092";
+	static final String RT_OFF_GOLDEN = "a8fb9eb9ce523b7df61afcb9ba7db1b0ed72ae8b2dd8f68c70a3d8bedbbbc747";
 	/** What RtConfig.request() asks for with the user's settings (RTX style, full shadows, high GI, 8 block-light rays). */
 	static final Set<String> USER_RT = Set.of("shadows", "shadows:full", "shadows:rays=4", "shadows:entities", "shadows:rtx", "reflections",
 			"reflections:halfRate=1", "materials", "shafts", "refraction", "refraction:entities", "refraction:glass=0", "caustics", "ao",
@@ -54,6 +54,10 @@ class TargetPackR510RtTest {
 		// r5.10 tests only alpha > 0.00001 itself: the prepass applies the draw's own ref (carried above 2) before it returns
 		assertTrue(fsh.contains("if (emr_draw.emr_alphaTestRef > 1.5) { if (!(color.a > emr_draw.emr_alphaTestRef - 2.0)) discard;"), "r5.10 prepass");
 		assertFalse(fsh.contains("color.a <= 0.5"), "not the r5.9.3 body");
+		// the shading pass (ref -2 - draw ref) skips the converter's alpha test: it must repeat the prepass's test on the same value,
+		// at the same point, or mipmapped fringe texels the prepass dropped get shaded without depth (fogless outlines, grass overlay)
+		String anchor = fsh.lines().filter(l -> l.contains("emr_draw.emr_alphaTestRef > 1.5")).findFirst().orElseThrow();
+		assertTrue(anchor.contains("if (emr_draw.emr_alphaTestRef < -1.5 && !(color.a > -2.0 - emr_draw.emr_alphaTestRef)) discard;"), anchor);
 	}
 
 	@Test
