@@ -1,7 +1,7 @@
 # Emberlight — Optional hardware ray tracing (M7 design)
 
-Status: RT-1 (infrastructure) implemented and measured on `m7/rt1-infra` (2026-11-13, §9); RT-2 (variants, patch table, UI,
-toggle) and RT-3 (RT shadows, Hybrid and Full) on `m7/rt2-shadows` (§10); RT-4 reflections (§11); refraction and water
+Status: RT-1 (infrastructure) implemented and measured (2026-11-13, §9); RT-2 (variants, patch table, UI,
+toggle) and RT-3 (RT shadows, Hybrid and Full) (§10); RT-4 reflections (§11); refraction and water
 caustics (§12); RT AO (§13); entities in the TLAS (§14); block-light shadows (§15); global illumination (§16); RT style RTX (§18). All merged into
 master. This document answers *how* M7 plugs hardware ray tracing (RT) into
 the existing renderer without touching the Iris-equivalent path. Read [ARCHITECTURE.md](ARCHITECTURE.md) (§4.1 transpiler,
@@ -101,7 +101,7 @@ New package `dev.emrion.shaders.mod.rt`:
 - **Scratch:** one 64 MiB scratch buffer (aligned to `minAccelerationStructureScratchOffsetAlignment`) used as a ring inside a
   batch, with a barrier (`AS_BUILD write → AS_BUILD read/write`) when it wraps. Builds go out as batches of
   `vkCmdBuildAccelerationStructuresKHR` with many infos.
-- **Compaction (done 2026-11-19, `perf/native-amortize`):** after each build batch its compacted sizes go into a query pool
+- **Compaction (done 2026-11-19):** after each build batch its compacted sizes go into a query pool
   `ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR` (reset and written in the build's own command buffer), one region of 2048
   queries per frame ring slot. When the slot comes round again (`buildTlas`), every BLAS that is still the same build
   (`Entry.buildId`) and shrinks by 10 % or more is copied (`vkCmdCopyAccelerationStructureKHR`, `COMPACT`) into a buffer of
@@ -121,7 +121,7 @@ New package `dev.emrion.shaders.mod.rt`:
 - BLAS on NVIDIA: about 60–90 B/triangle uncompacted, about 30–45 B compacted, so **≈ 0.6–1.8 GB uncompacted and 0.3–0.9 GB
   compacted**. Plus scratch 64 MiB, the instance buffer (≤ 30 k instances × 64 B = 2 MB), the section table (≤ 30 k × 16 B)
   and the TLAS (a few MB).
-- Headroom: the measured peak with 256x+PBR is already 11.96 GB of 12 GB (PROGRESS risks; M5b is working on it). RT
+- Headroom: the measured peak with 256x+PBR is already 11.96 GB of 12 GB (a known risk; M5b is working on it). RT
   reflections pay for themselves when they let the converter drop WSR's `bufferObject.0` (**810 MB**, read only by
   `getFaceData`, `lib/voxelization/reflectionVoxelData.glsl:47`) plus `wsr_img`/`wsr_lod_img` (≈ 34 MB) (§4.2). Until then,
   RT shadows add memory, and `RtScene` logs its total in the F7 overlay. An RT-distance option (default = render distance)
@@ -129,7 +129,7 @@ New package `dev.emrion.shaders.mod.rt`:
 
 ### 2.5 Entities
 
-- **Implemented on `m7/rt-entities`** (see "RT entities" below). The design changed from "usage flags on MC's per-frame
+- **Implemented** (see "RT entities" below). The design changed from "usage flags on MC's per-frame
   buffers" to a CPU copy: the entity draws are captured from their CPU slices before `StagedVertexBuffer` uploads them, so MC's
   buffers stay untouched. One BLAS per draw (render type + texture), refit or rebuilt per frame, instance mask 0x04. Effects opt
   in per effect (`<effect>:entities`); RT shadows Full mode then has entity shadows.
@@ -228,7 +228,7 @@ is used (bias, colour, fog, TAA), which keeps the look close to Iris apart from 
   the same functions, so one table covers the target pack and its relatives. Other packs get "RT unavailable: no patch table"
   until someone writes one.
 
-### 3.4 Option interplay (Complementary / Euphoria, user settings: SHADOW_QUALITY=3, shadowDistance=256, TAA, WORLD_SPACE_REFLECTIONS=1, COLORED_LIGHTING=512, ENTITY_SHADOW default 1)
+### 3.4 Option interplay (Complementary / Euphoria, reference settings: SHADOW_QUALITY=3, shadowDistance=256, TAA, WORLD_SPACE_REFLECTIONS=1, COLORED_LIGHTING=512, ENTITY_SHADOW default 1)
 
 | Option / feature | Where | RT handling |
 |---|---|---|
@@ -385,7 +385,7 @@ Order rationale: RT-1 can be built and verified without touching the converter o
 verified without any visible RT effect (patch plumbing, toggling, bit-identity). Each later step adds one effect behind its
 own switch.
 
-## 9. RT-1 results (2026-11-13, `m7/rt1-infra`)
+## 9. RT-1 results (2026-11-13)
 
 ### 9.1 What is built
 
@@ -457,7 +457,7 @@ that loop), which also costs chunk-meshing time and vertex-heap memory.
   56.7* / 111.9) vs `-Demrion.rt.device=false` 137.6 / 139.6 / 135.5 (mean **137.6**, 1 % low 110.7 / 114.5 / 64.7*);
   *one hitch each. The difference is inside the ±2 FPS run-to-run spread, so the boot-time device setup stays on by default.
 
-## 10. RT-2 and RT-3 results (2026-11-13, `m7/rt2-shadows`)
+## 10. RT-2 and RT-3 results (2026-11-13)
 
 ### 10.1 What is built
 
@@ -487,7 +487,7 @@ itself (the pack's map lets leaves through with its leaves depth offset too).
   (world0 and world1: gbuffers_basic, line, textured, terrain, block, block_translucent, entities, entities_translucent,
   lightning, entities_glowing, hand, water, hand_water, composite); world-1 has no live patch point (no shadows) and stays
   unpatched. Unpatched stages stay `#version 450`.
-- RT off: the cache directory is byte-identical to master's for the user's pack (`diff -r` of both converters' output, and
+- RT off: the cache directory is byte-identical to master's for the target pack (`diff -r` of both converters' output, and
   the golden hash test `TargetPackRtTest.rtOffOutputMatchesGolden`). A deliberately broken table (an unknown `needs`
   symbol, or a function the pack does not have) returns the very same pack object and an `unavailable` reason
   (`brokenTableLeavesThePackUntouched`).
@@ -505,7 +505,7 @@ itself (the pack's map lets leaves through with its leaves depth offset too).
 - With every section of RD 16 forced: 15.0 k BLAS, 11.4 M triangles, 789 MiB BLAS (72 B/triangle); `RtScene` in total
   (BLAS, TLAS, rings, 64 MiB scratch) 844 MiB.
 - The forced shadow sections themselves (default path, also with RT off) cost FPS: overview 133–137 → 95, sunset 168.6 →
-  145.2, forest 218.2 → 188.5 (master vs. this branch); see PROGRESS (sh1 follows up).
+  145.2, forest 218.2 → 188.5 (master vs. this change); a later pass follows up (BENCHMARK.md, "Shadow coverage without the FPS loss").
 
 ### 10.4 Done criteria
 
@@ -524,12 +524,12 @@ itself (the pack's map lets leaves through with its leaves depth offset too).
 
 - RT-4 reflections: the `voxelRayTrace` patch with pack shading, then vertex-based face data so WSR's 810 MB SSBO can go.
   A second effect in the same stage must share `emrRtSkip` and the common library (marked `shortcut:` in `RtPatcher`).
-- RT-5: BLAS compaction (about −50 %), RTAO. (Entity BLAS per frame: done on `m7/rt-entities`, see "RT entities".)
+- RT-5: BLAS compaction (about −50 %), RTAO. (Entity BLAS per frame: done, see "RT entities".)
 - Waving leaves cast static RT shadows (the BLAS uses the unanimated vertices).
 - The RT distance only limits instances and forced compiles; BLAS outside it are still built when MC meshes them.
 
 
-## 11. RT-4 results (2026-11-13, `m7/rt4-reflections`; in-game part pending)
+## 11. RT-4 results (2026-11-13; in-game part pending)
 
 ### 11.1 What is built
 
@@ -557,14 +557,14 @@ clamped edge of the light volume.
 - In game: comparison images (RT off | reflections), FPS cost, VRAM drop, validation layer, 5 toggles.
 - Entity and player reflections: WSR's player reflection (`WORLD_SPACE_PLAYER_REF`) is untouched; entities are not in the
   TLAS until RT-5.
-## 12. RT refraction and water caustics (2026-11-13, `m7/rt-refraction`, in-game tuning open)
+## 12. RT refraction and water caustics (2026-11-13, in-game tuning open)
 
 Two more effects in `complementary-r5.json`, each behind its own switch (`rt.refraction`, `rt.caustics`, default off; "RT
 refraction" / "RT caustics" on the Emberlight RT page).
 
 | Effect | Patch point | What the body does |
 |---|---|---|
-| `refraction` | `main()` and `DoLighting` in gbuffers_water, `DoRefraction` in composite1 | Since `fix/refraction-selflit` (§33): gbuffers_water bends the view ray at each water fragment (apparent-depth image, IOR 1.333; glass a slab, 1.5), traces the hit and lights it with the pack's own `DoLighting` there, then writes the water over it as one opaque colour. composite1 only moves the depth behind the surface to the traced path. Before that (described below), composite1 shaded the hit from a ratio of screen taps. Motion vectors move refracted pixels with the virtual image. Total internal reflection is left to the pack's reflection. |
+| `refraction` | `main()` and `DoLighting` in gbuffers_water, `DoRefraction` in composite1 | Since §33: gbuffers_water bends the view ray at each water fragment (apparent-depth image, IOR 1.333; glass a slab, 1.5), traces the hit and lights it with the pack's own `DoLighting` there, then writes the water over it as one opaque colour. composite1 only moves the depth behind the surface to the traced path. Before that (described below), composite1 shaded the hit from a ratio of screen taps. Motion vectors move refracted pixels with the virtual image. Total internal reflection is left to the pack's reflection. |
 | `caustics` | `vec3 SampleShadow(vec3, float, float)` (every stage that includes `shadowSampling.glsl`, except composite1) | The pack's own body; only its translucent colour tap (`find`) is replaced. A receiver traces towards the light through mask 0x02 up to the water surface (block id 32000), which gives the real depth. The caustic is `1/|det dL/dx|` of the refraction map `L(x) = x + depth · r(x)` over the pack's own wave texture (`gaux4`, its four normal octaves lifted from its gbuffers_water; when the pack's water style has none, as Reimagined's default style 1, our own crossing sine swells stand in), so it focuses with depth, moves with the waves and needs no denoiser. The water's light colour is the mean of `shadowcolor0` on a ring of 1.5 blocks, which averages out the pack's baked pattern. It is computed once per receiver, cached across the filter's taps. Glass keeps the map's colour. |
 
 - Converter: all four effects together (`shadows`, `reflections`, `refraction`, `caustics`) convert to 276 stages with 0
@@ -575,7 +575,7 @@ refraction" / "RT caustics" on the Emberlight RT page).
   with our own lighting. It did not match the pack's exposure and showed as bright block-shaped patches, so it was removed.
   The run with both fixes, the `water` and `pool` scenes (the first run shot them before the RT chunk rebuild had finished;
   there is now a `warm` scene first), the FPS cost and the validation layer are still **open**. The game runs were paused.
-- Second in-game pass (`test/rt-all`, shore, grazing, pool, under-water and pit scenes, each effect on its own vs. RT off):
+- Second in-game pass (a build with every RT effect, shore, grazing, pool, under-water and pit scenes, each effect on its own vs. RT off):
   - Refraction showed bright streaks over distant water. composite1 reads the water's SSR reflection (`colortex8`) at the
     coordinate DoRefraction returns, subtracts it, and adds the combined reflection back. The pack's offset is a few pixels;
     ours can be far, so a pixel got the reflection of another point. Fix: the body swaps the hit pixel's `colortex8` for this
@@ -584,7 +584,7 @@ refraction" / "RT caustics" on the Emberlight RT page).
     colour now fades out between 0.4 and 0.6 × `far`. In the fade band the pack's depths stay, so there is no fog seam.
   - Caustics: soft, depth-dependent pattern on the sand and pit walls, from above and under water, no artefacts seen.
   - Remaining: thin light lines at some step/pit edges where the refracted hit is hidden (unrefracted fallback).
-- Shimmer band along foreground outlines (`fix/refraction-shimmer`). User report: standing on a white platform 20 blocks
+- Shimmer band along foreground outlines. Player report: standing on a white platform 20 blocks
   above shallow water, looking down, a band of smeared, warped underwater image along the platform's edge, much worse while
   walking. Cause: from above, the bent ray is steeper, so its hit projects towards the camera, i.e. under the platform on
   screen. Those lookups fail (`emrRtRfOk`: not water, nothing behind), and the 5-step bisection then squeezed every lookup
@@ -601,7 +601,7 @@ refraction" / "RT caustics" on the Emberlight RT page).
     4 × `wait 0.15; shot X-fN`, `motion 0 0 0.15 0 0;` 4 × `wait 0.15; shot X-bN; motion off`. Still shots with
     `-Demrion.autotest.frameTimeCounter=100`, motion shots unpinned.
   - Result: the streak band is gone in the still and every mid-motion frame, with refraction only and with every effect on.
-- Traced refraction (`fix/water-motion`, 2026-11-14). User video: looking down at a shallow riverbed, underwater blocks
+- Traced refraction (2026-11-14). Player video: looking down at a shallow riverbed, underwater blocks
   doubled or ghosted, smeared while turning, and still warped a little at screen edges and outlines; all of it gone with RT
   refraction off. Causes: the screen lookup at the hit's projection used the refracted copy at some pixels and the
   unrefracted one at their neighbours (whole offset or none), and DLSS moved the looked-up floor with the water surface's
@@ -620,18 +620,18 @@ refraction" / "RT caustics" on the Emberlight RT page).
   streaks under DLSS while moving). Rotation is depth independent; this only matters while moving.
   - Test: `turnshot` (docs/BENCHMARK.md) over the riverbed scene (`64.5 68 -260.5`, plank platform and pink glass added),
     pitch 45 (turn 2 and 6 degrees per frame), 60 (strafe 0.06), 30 (turn + strafe); camera under water (turn, strafe).
-    Error = mean |turn - still| at the same pose, DLSS Quality, 2560x1386, user config (RTX, GI high, Sodium).
+    Error = mean |turn - still| at the same pose, DLSS Quality, 2560x1386, reference config (RTX, GI high, Sodium).
   - Result (on / off / before): pitch 45 turn 2.66 / 1.85 / 3.29, fast turn 3.11 / 2.12 / 3.40, pitch 30 turn + strafe
     3.07 / 2.14 / 3.45, pitch 60 strafe 2.92 / 2.09. No doubled blocks or edge warp; what remains is on plant outlines and
     the sharper floor texture. Under water: 0.75-2.2, same as refraction off (0.83-2.0).
   - Cost (DLSS Quality + DLSS FG, 2560x1386, pitch 45 over the riverbed): 77 vs. 87 presented FPS, about 2 ms per frame.
-  - Follow-up, user video: squids and fish twice, ghost step edges. Cause: a guard meant for surfaces missing from the TLAS
+  - Follow-up, player video: squids and fish twice, ghost step edges. Cause: a guard meant for surfaces missing from the TLAS
     kept a pixel unrefracted when the refracted hit was farther than the straight one. That is normal wherever the bent
     ray passes a squid or step edge that the straight ray hits, so those pixels showed the unrefracted squid next to the
     traced one. Now the straight ray itself is traced to check the TLAS has the surface. The light ratio prefers taps facing
     like the hit (a ratio across an unrefracted step edge printed it faintly) and skips entity taps (glow around squids).
     Test: squids, cod, salmon (NoAI) on the riverbed, pitch 65 and 60: one copy each, no ghost edges.
-  - Follow-up, user screenshots: everything under water too shallow and too clear, the riverbed warped, magma glow a block
+  - Follow-up, player screenshots: everything under water too shallow and too clear, the riverbed warped, magma glow a block
     off its block. Test scene: a gold block 4.89 blocks under clear water in a black
     concrete pool (plus magma, sea lantern, glowstone and a NoAI squid), camera at incidence 45 and 70 degrees, against RT
     refraction off and Iris. The geometry was right: the gold block's image rows match a Snell's-law projection within 2 px
@@ -648,19 +648,19 @@ refraction" / "RT caustics" on the Emberlight RT page).
     taps, and a glowing hit takes the pack's own colour of that point from the straight view. The wave tilt is 5x weaker
     (0.02 x the pack's refraction intensity): it bent the floor by up to half a block. Remaining: a glowing block the
     straight view cannot see stays unlit; squids still look flat (entity atlas).
-  - Follow-up, user F9 snapshot (`fix/water-ghost`, shallow shore with sand and stone steps, 417 62.7 653 on the test
-    server): half-transparent, bent ghost blocks over the floor. Replayed one switch at a time: only RT refraction off
+  - Follow-up, reported F9 snapshot (shallow shore with sand and stone steps, 417 62.7 653 on the test
+    world): half-transparent, bent ghost blocks over the floor. Replayed one switch at a time: only RT refraction off
     removes them (reflections, caustics, DLSS and FG off do not). Cause: the light factor came from taps around this
     pixel, i.e. over the unrefracted floor, whose shading (step sides, AO, caustics) printed the unrefracted steps as a
     soft second set of blocks over the traced ones; the facing preference switching tap sets added blocky patches. Fix:
     the taps sit around the hit's own straight-view projection, weighted by their floor point's distance to the hit
-    (`exp(-4 d²)`, d < 1 block, 5 and 13 px rings since `fix/water-look`) and facing like it, so the light is the hit's own; only where the straight view does not
+    (`exp(-4 d²)`, d < 1 block, 5 and 13 px rings since the next follow-up) and facing like it, so the light is the hit's own; only where the straight view does not
     show the hit (hidden step faces) the old taps around the pixel are used.
     Result (snapshot replay, DLSS Quality + FG, 2560x1386): the steps show once, at their refracted place; the river
     scene at pitch 65 lost the dark ghost outlines of the steps, squids still single. Cost at the snapshot pose: 60.2 vs.
     61.8 rendered FPS (about 0.4 ms).
-  - Follow-up, user F9 snapshots (`fix/water-look`; shallow beach at 766 63 418 and a 6-deep cold ocean at 705 67 427,
-    test server): "distorted arcs in the water that move with my head" and "a magnifier / fisheye look"; the user accepts
+  - Follow-up, reported F9 snapshots (shallow beach at 766 63 418 and a 6-deep cold ocean at 705 67 427,
+    test world): "distorted arcs in the water that move with my head" and "a magnifier / fisheye look"; the report accepts
     that water magnifies, but not like this, and other RTX games do not look like a fisheye. Not a bug in the sense of a
     wrong space or origin: the refracted image is world-locked under pure rotation (yaw 6 degrees, frame warped by the
     rotation, water MAE 5.8 RT refraction vs. 6.0 refraction off at the beach, 2.5 vs. 2.8 deep), and earlier tests had
@@ -691,7 +691,7 @@ refraction" / "RT caustics" on the Emberlight RT page).
     Cost (rendered FPS, refraction on / off, 2 x 10 s each): beach 52.9 / 58.4 after vs. 54.8 / 60.2 before, deep 34.5 /
     43.1 vs. 34.3 / 44.1, i.e. unchanged within run noise (refraction itself costs 1.7 ms at the beach and 6 ms over
     the deep water, where nearly every pixel is refracted).
-## 13. RT AO (RT-5 part, 2026-11-13, `m7/rt-ao`)
+## 13. RT AO (RT-5 part, 2026-11-13)
 
 ### 13.1 What is built
 
@@ -710,7 +710,7 @@ the static blades, so a ray leaving a rasterized blade otherwise hit its own sta
 
 ### 13.2 Verified so far
 
-- Converter: `TargetPackRtTest.rtAoPatchesDeferred1` (deferred1 patched, strength 100 from the user's settings, builtin
+- Converter: `TargetPackRtTest.rtAoPatchesDeferred1` (deferred1 patched, strength 100 from the reference settings, builtin
   bound); RT-off golden hash unchanged; all RT tests green after merging RT-4's shared-library change.
 - In game (RT on with only `ao`, pinned scenes `mod/emrion-rtao-scenes.txt`, vs RT off): no errors; MAE aoyard 4.8,
   forest 2.9, forest_floor 2.8, overview 2.1, cave 0.7, all darkening only. The on/off ratio shows contact AO at wall
@@ -721,14 +721,14 @@ the static blades, so a ray leaving a rasterized blade otherwise hit its own sta
 
 - The 0.3-block cutout fix is confirmed in game: no black grass blade tips any more (near-black pixels in `aoyard` 12 850 → 7 037).
   The aoyard on/off pair from that session is not comparable (view moved by mouse input), so redo the pinned ratio there.
-- Caves with every RT effect on (test/rt-all, scenes cave, cave_dark, cave_tunnel): no round blotches seen in the RT AO
+- Caves with every RT effect on (all RT effects, scenes cave, cave_dark, cave_tunnel): no round blotches seen in the RT AO
   images; the comparison against all RT without AO and RT off was not run yet.
 - Cost: not measured yet (`overview`, interleaved RT off / `ao`, F7 marks "RT: AO trace" and "RT: AO filter").
 - Not done: GI, a mode that combines RT AO with the pack's SSAO, half-resolution tracing.
 
 ### 13.4 Cave fixes (2026-11-13)
 
-- **Black areas and wedges in lava caves came from RT AO only** (isolated on test/rt-all with block light off, one effect per
+- **Black areas and wedges in lava caves came from RT AO only** (isolated in a build with every RT effect, block light off, one effect per
   run: hybrid shadows, GI medium, reflections all match RT off). Lava is in the solid BLAS. (a) The pack waves the lava
   surface (`DoWave_Lava`, up to ±0.025 blocks) in its vertex shader, so rays from a lava pixel started below the static BLAS
   surface: black triangular wedges. (b) A lava top face 1/9 block below a ceiling above it lies inside the AO hemisphere of
@@ -745,15 +745,14 @@ the static blades, so a ray leaving a rasterized blade otherwise hit its own sta
 - Screen-edge fix (4fe3707) confirmed: the 4 edge columns change by the same ratio as the inner columns, with no tint.
 - Cost (overview, AO only): "RT: AO trace" 0.34 ms, "RT: AO filter" 0.14 ms.
 
-## 14. RT entities (2026-11-13, `m7/rt-entities`)
+## 14. RT entities (2026-11-13)
 
 Entities, block entities and the player in the TLAS. Effects that ask for them (`<effect>:entities`) trace them; RT shadows
 Full mode gets entity shadows with it.
-## 15. RT block-light shadows (2026-11-13, `m7/rt-blocklight`)
+## 15. RT block-light shadows (2026-11-13)
 
 Torches, lanterns, lava, glowstone and every other light block cast ray-traced shadows. Without it the pack lights blocks
-with the vanilla lightmap and its colored-light floodfill (`voxel_img` → shadowcomp → `GetLightVolume`,
-research/complementary-features.md §6.1). Both flow around corners and cast no shadows.
+with the vanilla lightmap and its colored-light floodfill (`voxel_img` → shadowcomp → `GetLightVolume`). Both flow around corners and cast no shadows.
 
 ### What is built
 
@@ -807,7 +806,7 @@ Other effects add entities the same way: an `entities` option in their table ent
 | Light grid, uploaded every frame at `levelStart` (cells recomputed only when the light set changed or the camera crossed a cell; header and camera-relative light positions every frame): 16 × 16 × 16 cells of 8 blocks (128 blocks on each axis around the camera). A light enters every cell its range (level blocks) reaches, at most 31 per cell (the strongest at the cell centre win), up to 4096 lights. Written into a host ring and copied into one device buffer (`EmrRtLights`, builtin `emrion_rt_lights`, 640 KiB), so one static descriptor serves every frame. A rebuild that took more than 4 ms (a lava sea: 16 k sources, ~1 M cell entries, 60-110 ms) makes the next one run on a worker (common pool) into a second set of lists that is swapped in when done; the frame keeps uploading the last complete lists meanwhile, so lights there appear a few frames late instead of every frame stalling. One rebuild at a time and none in the frame of a swap, so every list's remap maps the list uploaded before it; the GI change box does not count down while a rebuild is in flight. A recompile with the same lights does not trigger a rebuild | `RtLights.upload` from `RtScene.buildTlas` |
 | Patch: a new `after` patch kind in `RtPatcher` inserts a body after a statement inside a function (matched by tokens, exactly once, else "unavailable"). The `blocklight` effect patches the pack's `DoLighting` after `blockLighting = mix(specialLighting, blockLighting, blocklightDecider);` with `blockLighting *= emrRtBlockLight(playerPos, worldGeoNormal, lightmap.x);`. Before the held light, `XLIGHT_I` and the caustics, and covering both the floodfill and the vanilla term | `complementary-r5.json` effect `blocklight`, `rt/complementary/blocklight.glsl`, `blocklight_apply.glsl` |
 | Estimator: the pack's block light keeps its colours and falloff, and RT only removes light that a ray proves blocked. `P = (lightmap.x)³` is the weight of the pack's vanilla light level, `V = Σ wᵢ vᵢ` the visible and `B = Σ wᵢ (1 − vᵢ)` the blocked weight over the sources of the pixel's cell, with `wᵢ = ((level − max(L1 distance − 1, 0)) / 15)³` (the pack's steep lightmap curve; L1 because vanilla light falls one level per axis step, so `wᵢ` is on the same scale as `P`) and `vᵢ` = the visible share of the source, from alpha-tested shadow rays (mask 0x01, cutout alpha ≥ 0.1 at mip 0; lava blocks like any solid: it is in the solid BLAS, opaque geometry) to fixed points on a disk facing the pixel (radius 0.45 for full blocks/lava, 0.15 otherwise; see Sampling). The removed share is `min(max(P − V, 0), B) / P`: a source sealed in rock (lava behind a wall, glowstone under the floor) never lit the point in the pack, so it changes nothing, and light no known source explains (entities) stays. The ray stops where it enters the source's block, so the emitter's own model never shadows itself; a source behind the surface (geometric normal) counts as blocked. Result `1 − (1 − ambient) · removed`, faded to 1 between 32 and 56 blocks from the camera (§20); cells with no source or a full cell (31 sources, beside a lava lake: the sources that light the point may be missing) keep the pack's light | `blocklight.glsl` |
-| Sampling: the `rays` strongest sources at the pixel (by `wᵢ`) are traced; weaker ones, and any under 1/16 of `P`, are not traced and count as possibly visible (`removed = min(max(P − V − U, 0), B) / P`, U = untraced weight), so the choice is the same every frame. Tracing stops once `V ≥ P` (nothing can be removed). Each traced source is a disk facing the pixel with **16 fixed sample points** (12 on a ring at 0.77 radius, 4 at 0.3): the 4 ring points 90° apart first, the other 12 only where those 4 disagree (penumbra). An edge that misses all 4 cuts off at most 2 ring points (error ≤ 1/8). Lit and fully shadowed pixels cost 4 rays per source, penumbra pixels 16. Nothing varies per frame or pixel. History: the first version drew sources stochastically from the weight CDF (flicker 0.311 vs 0.142 without RT block light, room scene, static camera, unpinned time, mean absolute frame-to-frame luma difference); then one ray per source to a point jittered by interleaved gradient noise rotated by `frameCounter` (0.153): the pack's TAA did not hide it, and the user saw a grainy, cross-hatched band along every block-light shadow edge that changed every frame. Euclidean `wᵢ` broke pillar shadows in the middle: behind an occluder the vanilla flood takes a detour, `P` drops faster than the Euclidean weight of a farther visible source, and `V ≥ P` switched the shadow off part of the way out. | |
+| Sampling: the `rays` strongest sources at the pixel (by `wᵢ`) are traced; weaker ones, and any under 1/16 of `P`, are not traced and count as possibly visible (`removed = min(max(P − V − U, 0), B) / P`, U = untraced weight), so the choice is the same every frame. Tracing stops once `V ≥ P` (nothing can be removed). Each traced source is a disk facing the pixel with **16 fixed sample points** (12 on a ring at 0.77 radius, 4 at 0.3): the 4 ring points 90° apart first, the other 12 only where those 4 disagree (penumbra). An edge that misses all 4 cuts off at most 2 ring points (error ≤ 1/8). Lit and fully shadowed pixels cost 4 rays per source, penumbra pixels 16. Nothing varies per frame or pixel. History: the first version drew sources stochastically from the weight CDF (flicker 0.311 vs 0.142 without RT block light, room scene, static camera, unpinned time, mean absolute frame-to-frame luma difference); then one ray per source to a point jittered by interleaved gradient noise rotated by `frameCounter` (0.153): the pack's TAA did not hide it, and a player report showed a grainy, cross-hatched band along every block-light shadow edge that changed every frame. Euclidean `wᵢ` broke pillar shadows in the middle: behind an occluder the vanilla flood takes a detour, `P` drops faster than the Euclidean weight of a farther visible source, and `V ≥ P` switched the shadow off part of the way out. | |
 | Options: `rays` (default 4), `ambient` (0.15, the share of block light kept in full shadow: the floodfill's bounce stand-in). Config `rt.blockLightRays` (0 = off, default off), button "RT block light: OFF / 2 / 4 / 8 rays" and status line on the Emberlight RT page. Autotest `rt …+light` | `RtConfig`, `RtOptionsScreen`, `AutoTest` |
 | Scene `mod/emrion-blocklight-scenes.txt`: cave (as in the RT scenes) and `room`: a stone-brick room with two pillars and torches behind them, a hanging and a standing lantern, a wall torch, a lava pool, iron bars and a fence | |
 
@@ -816,8 +815,8 @@ a pixel cannot read its neighbours' reservoirs for this frame. Exact enumeration
 a clean image in the test scenes, and the estimator is bounded in [ambient, 1], so it cannot produce fireflies. Reuse would
 need history storage images and an extra pass; revisit if scenes with many sources in one cell look noisy.
 
-**Fixed samples (`fix/blocklight-noise`, 2026-11-13).** Isolated in a closed torch-lit room (scene `dark` in the session
-scratch folder: one torch, two cobblestone blocks): per-pixel frame-to-frame difference maps with RT block light vs GI vs AO,
+**Fixed samples (2026-11-13).** Isolated in a closed torch-lit room (scene `dark` in a local test
+folder: one torch, two cobblestone blocks): per-pixel frame-to-frame difference maps with RT block light vs GI vs AO,
 each alone and all RT on, against RT off. Only block light varied, and only along its penumbrae; GI and AO were clean, static and
 moving. After the change the block-light penumbra disappears from the difference map, and the flicker metric with block light
 on equals RT off (dark: 0.173 vs 0.188, room: 0.213 vs 0.211; the metric is dominated by the torch flame and TAA, so these
@@ -825,7 +824,7 @@ numbers barely separate the variants and the difference maps are the evidence). 
 gbuffers opaque 0.52 ms without, 1.51 ms jittered version, 3.25 ms fixed 16-point version (unfocused
 game windows need `inactivityFpsLimit:"minimized"` in `mod/run/options.txt`, else MC drops to 30 FPS after a
 while and the GPU clocks down).
-## 16. RT global illumination (`m7/rt-gi`, 2026-11-13)
+## 16. RT global illumination (2026-11-13)
 
 One bounce of indirect sun and sky light, traced from the gbuffer surfaces, replaces the pack's flat ambient term. Switch:
 "RT global illumination: Off / Low / Medium / High" on the Emberlight RT page (`rt.gi`), request entries `gi`, `gi:rays=N`,
@@ -852,7 +851,7 @@ The pack's direct light, shadows, block light, colours and fog are untouched; on
 (M8) can take the trace output directly: the raw A/B images are the noisy signal, G holds normal and distance, and motion
 is camera-only (terrain), so the temporal and à-trous passes are the parts RR would replace.
 
-## 17. RT on the Sodium path (`rt/sodium`, 2026-11-13)
+## 17. RT on the Sodium path (2026-11-13)
 
 Every RT effect now works with Sodium installed (SODIUM.md step 5). `RtConfig.SODIUM` and the "Sodium path not supported yet"
 messages are gone. MC's heaps are empty under Sodium, so the BLAS source is Sodium's region arenas:
@@ -883,9 +882,9 @@ Limits: the decoded positions are a copy per build (45 MiB scratch caps one batc
 a section whose pass changed format (pack turned off: Sodium remeshes in its compact format) is never read, `SodiumRt` warns
 once and builds nothing until the pack format is back.
 
-## 18. RT style RTX (`m10/rtx`, 2026-11-14)
+## 18. RT style RTX (2026-11-14)
 
-User feedback on the RT on/off video: reflections barely differ, and lights, shadows and light through coloured glass are
+Player feedback on the RT on/off video: reflections barely differ, and lights, shadows and light through coloured glass are
 missing ("a bit like Bedrock RTX"). Every RT effect so far only makes the pack's own effects more accurate. A second RT style
 now lets RT change the lighting itself, while Complementary's sky, water, fog, clouds and colour grading stay.
 
@@ -898,7 +897,7 @@ Tuning without a rebuild: `rt.extra` (or autotest `rtset extra=…`) appends req
 **Mechanism:** a table effect may list `variants`; a request option that names one (`shadows:rtx`) merges it into the effect
 (options, uniforms, needs and images added, helpers appended, patches and computes replaced; `RtPatchTable.Effect.with`).
 Without the option nothing of it is emitted, so Faithful output is byte-identical to before (checked with `diff -r` of the
-user's full request against master's converter: only `manifest.json`'s cache key differs, because the table fingerprint
+full reference request against master's converter: only `manifest.json`'s cache key differs, because the table fingerprint
 changed; `TargetPackRtTest.rtxStyleConvertsAndFaithfulHasNoRtxCode`). RTX code lives in `rt/complementary/rtx/`.
 
 | Feature | Where | What |
@@ -920,7 +919,7 @@ a sea lantern, a shroomlight, a redstone torch and a glowstone in a magenta glas
 street at dusk with lantern posts and lit windows behind coloured glass). Script: `rtset enabled=true,style=faithful|rtx`, then
 per scene `cmd time set …; cmd weather …; cmd tp @a …; wait 12; shot …`.
 
-**Measured** (RTX 4070 Ti, RD 16, the user's pack and settings, all other RT effects as in the user's config: hybrid shadows,
+**Measured** (RTX 4070 Ti, RD 16, the reference pack and settings, all other RT effects as in the reference config: hybrid shadows,
 reflections, refraction, caustics, AO, block light 4 rays, GI High; pinned `frameTimeCounter`; 12 s per bench). 2560×1440 with
 FSR Quality (render ≈ 1707×960):
 
@@ -948,7 +947,7 @@ points); the difference map is ×20 amplified ≤ 2 grey levels and shows no edg
 are only strengthened, not traced; wet-surface gloss in rain is the pack's own puddle code (`RAIN_PUDDLES`), unchanged; light
 colours come from a name table, not from the emission texture; translucent surfaces (glass, water) keep the pack's block light.
 
-### 18.1 Fixes after the first user test (`fix/user-round1`, 2026-11-14)
+### 18.1 Fixes after the first player test (2026-11-14)
 
 * **Dark band along the leading screen edge while turning** (RTX): the gbuffers read last frame's GI, so the strip that
   comes into view each frame had no history. The sky/sun part fell back to the pack's ambient, but the bounced block light
@@ -957,7 +956,7 @@ colours come from a name table, not from the emission texture; translucent surfa
   around the reprojected point clamped to the screen, distance within 50 cm + 25 %); only where nothing matches does the
   pack's ambient stay. With `gi:debug=1` a 240°/s turn showed a blue (no history) strip at the leading edge before and none
   after. Faithful GI is unchanged (it adds no block light, the ambient fallback is continuous).
-* **Mushy, blotchy strip along the leading edge while turning** (RTX, `fix/rt-disocclusion`): texels entering the screen
+* **Mushy, blotchy strip along the leading edge while turning** (RTX): texels entering the screen
   start a new GI history with 1–2 rays, and the à-trous filter (wider tolerance for young history) smears that into
   blotches until about 4 frames have accumulated. `rtx/gi_trace.csh` now looks up last frame's history length at the
   reprojected point (same test as the temporal pass) and traces `gi:boost` (4) times the rays where there is none, twice
@@ -965,7 +964,7 @@ colours come from a name table, not from the emission texture; translucent surfa
   Only the entering strip pays the extra rays. `gi:debug=3` shows history length (green = full, red = the ring fallback
   from §18.1). Glowstone room, 4°/frame turn, mean abs RGB error against the still frame at the end pose, rightmost 4 %
   of the screen: 4.39 → 3.07 (2°/frame: 3.92 → 2.18); the centre (4.4–4.8) is unchanged, the DLSS/TAA motion level.
-* **GI of this frame, before the gbuffers** (RTX, `feat/gi-current-frame`): the gbuffers still read last frame's GI, so
+* **GI of this frame, before the gbuffers** (RTX): the gbuffers still read last frame's GI, so
   every strip turning into view (left, right, up, down) borrowed a neighbour's history for a frame and showed faint seams. A
   deferred correction cannot fix it: the pack mixes the ambient non-linearly (`(sun + ambient)²` under a sqrt, vanilla AO
   from `dot(sceneLighting)`), so GI has to exist before `DoLighting`. The RTX GI passes now run in `prepare_a`…`prepare_e`
@@ -977,7 +976,7 @@ colours come from a name table, not from the emission texture; translucent surfa
   raster does (water surfaces, an entity over the BLAS budget, mip-dependent cutout edges). Faithful GI is unchanged
   (deferred, depth, last frame). A guard band beyond the screen edges (`gi:wide`, tried first) is no longer needed and was
   removed.
-  Measured (user's config, Sodium; glowstone room with a water pool and four mobs at night, and a daylight forest edge with
+  Measured (reference config, Sodium; glowstone room with a water pool and four mobs at night, and a daylight forest edge with
   six mobs; 15-frame turns ending at the pose of a still: yaw ±4°/frame, pitch ±3°/frame; `turnshot` takes `YAW:PITCH`).
   Low-frequency error (σ 6 px) of the leading 4 % strip against the still, at 2560×1386, current build → this:
   room right 1.17 → 1.34, left 1.13 → 0.98, down 1.72 → 1.15, up 2.10 → 0.69 (centre 2.0–3.5); forest right 1.12 → 1.02,
@@ -989,7 +988,7 @@ colours come from a name table, not from the emission texture; translucent surfa
   one pass (`*_glint` pipelines) with the glint's scrolling matrix as `TextureMat`, and packs apply `gl_TextureMatrix[0]`
   to the base texture. With a pack those draws now get the identity matrix and the glint is drawn again through
   `gbuffers_armor_glint` (`pipeline/GlintPass`, as Iris splits it), depth test EQUAL. They also cast RT entity shadows now.
-  Follow-up (`fix/glint-items`): enchanted items were invisible, because `ITEM_CUTOUT_GLINT(_SPECIAL)` are registered as
+  Follow-up: enchanted items were invisible, because `ITEM_CUTOUT_GLINT(_SPECIAL)` are registered as
   `pipeline/item_cutout`, so the name test missed them and their base drew with the glint matrix; fused pipelines are now
   found by the `GLINT` shader define. The less-or-equal test was a forward-Z op on MC's reverse-Z depth: the glint showed
   through walls and never on its own surface. EQUAL works once the converter declares `invariant gl_Position` (the pack's
@@ -1002,7 +1001,7 @@ colours come from a name table, not from the emission texture; translucent surfa
   `levelStart` as before.
 
 
-## 19. RT performance pass (`perf/rt`, 2026-11-14)
+## 19. RT performance pass (2026-11-14)
 
 Less work where it can't be seen, same image near the player. Each distance is an option in `rt/complementary-r5.json`
 (0 = off).
@@ -1036,7 +1035,7 @@ The biggest single drops (RTX overview): gbuffers opaque 13.3 → 8.5 ms, GI tra
 inside master's own run-to-run difference in every view; RTX overview differs only by zero-mean noise on terrain beyond
 32 blocks.
 
-## 20. RT block light: no pop-in at distance (`fix/rt-light-popin`, 2026-11-14)
+## 20. RT block light: no pop-in at distance (2026-11-14)
 
 Flying towards a lit building, its block lighting jumped twice in RTX style (facade luma 101 → 92 → 78 between two 1-block
 steps at 60 and 52 blocks). The light grid follows the camera in whole cells, and RT block light (both styles) and RTX GI block light
@@ -1055,9 +1054,9 @@ Faithful 1.5 %, RT off 1.9 % (the remaining steps are near the building, the sam
 from 75 to 101 over 32–56 blocks instead of jumping. FPS (10 s): far 59.2 → 58.8, near 71.7 → 73.9, overview 44.7 → 44.0,
 inside the run-to-run spread.
 
-## 21. RTX block light: area sampling, no stacked shadows (`fix/rtx-light-sampling`, 2026-11-14)
+## 21. RTX block light: area sampling, no stacked shadows (2026-11-14)
 
-Two user reports, RTX style, the user's config (block light 2 rays, DLSS Quality): a white room with one glowstone and a
+Two player reports, RTX style, the reference config (block light 2 rays, DLSS Quality): a white room with one glowstone and a
 fence showed 6–10 parallel sharp shadows of the fence on the wall instead of one soft one, and a torch-lit floor showed
 hard-edged arcs that flickered while moving.
 
@@ -1066,7 +1065,7 @@ hard-edged arcs that flickered while moving.
 | Every pixel traced the same 8 fixed disk points (radius 0.75 × 1.6 × source radius), so each point cast its own sharp shadow: 8 stacked copies of every occluder | The disk points are rotated and placed per pixel and frame (interleaved gradient noise stepped by the golden ratio per `frameCounter`, stratified by quadrant, radius uniform over the disk area). TAA / DLSS average them into one continuous area light whose penumbra widens with distance. Still 4 rays per source, 8 only where the first 4 disagree |
 | The traced set (the `rays` strongest sources) switched abruptly where two sources' weights crossed: a hard arc on the floor between torches, moving with the sub-pixel jitter | The (rays + 1)-th weight is a threshold; a traced source counts by `a = clamp((w − wK) / wK, 0, 1)` and its remaining share joins the untraced sources (mean visibility of the traced ones). A source fades out of the traced set instead of dropping out |
 
-Faithful block light (§15) keeps its fixed points: its estimator only removes light, and its user test was about noise.
+Faithful block light (§15) keeps its fixed points: its estimator only removes light, and its player test was about noise.
 
 Measured with the reference config at 2560×1386 (scratch scenes `rod`: white-concrete room, glowstone, oak fence and iron
 bars; `arcs`: smooth-stone floor, 16 torches 7 blocks apart, chest and wall stub; 10 still frames):
@@ -1079,9 +1078,9 @@ The lava source block in a cross of flowing lava looking darker and redder than 
 an RT bug: Iris + Sodium with the same pack and settings shows the same (centre vs arm, mean RGB: Iris 255/178/53 vs
 255/185/60, ours 255/188/62 vs 254/197/81).
 
-## 22. Sodium: rebuilt sections stay in the TLAS (`fix/rtx-light-arcs`, 2026-11-14)
+## 22. Sodium: rebuilt sections stay in the TLAS (2026-11-14)
 
-User report: with a redstone clock (crafter, observers, dust) running nearby, and while holding a light with
+Player report: with a redstone clock (crafter, observers, dust) running nearby, and while holding a light with
 LambDynamicLights, the lighting of the whole area pulsed. Both rebuild chunk sections every few ticks. On the Sodium path
 `SodiumRt.sync` put only already-built BLAS into the frame's instance list, so a section whose mesh had just changed was
 dropped and its new BLAS, built a few lines later in the same command buffer, joined only the next frame: every rebuild
@@ -1092,22 +1091,22 @@ nothing resets the GI history.
 Now a replaced section goes to the front of the build queue, and the instance list is filtered after this frame's builds,
 so the new BLAS is in the same frame's TLAS. The vanilla path already built uploads before `levelStart`.
 
-Measured (user's config, 2560×1386, DLSS Quality, closed stone-brick hall with 16 torches and an observer clock driving a
+Measured (reference config, 2560×1386, DLSS Quality, closed stone-brick hall with 16 torches and an observer clock driving a
 crafter and dust; mean luma of 20 consecutive frames, clock running vs. clock stopped): before day 69.17 vs 68.70, night
 67.40 vs 68.03; after day 68.37 vs 68.32, night 68.34 vs 68.35. The clock no longer changes the image. A dev-run test with
 LambDynamicLights (held torch, camera stepped per frame) showed no difference between torch and empty hand in either build:
 the autotest moves the camera, not the player, so LDL scheduled no rebuilds; that case goes through the same path and is
 covered by the same change but was not reproduced.
 
-## 23. RTX block light: every source sampled, hidden sources out of U (`fix/rtx-blocklight-arcs`, 2026-11-14)
+## 23. RTX block light: every source sampled, hidden sources out of U (2026-11-14)
 
-User report (long-standing, two earlier attempts could not reproduce it in self-built halls): in an underground torch hall,
+Player report (long-standing, two earlier attempts could not reproduce it in self-built halls): in an underground torch hall,
 RTX style, the floor showed big curved dark bands that no geometry could cast. GI off and AO off: still there; RTX block
-light "off" (which in RTX still means 4 rays, `RtConfig`): weaker; Faithful: none. The user exported the exact hall as a
+light "off" (which in RTX still means 4 rays, `RtConfig`): weaker; Faithful: none. The reporter exported the exact hall as a
 WorldEdit schematic (a two-level storage hall: 29 floor torches, under the floor a chest room with 36 lit copper bulbs and 76
 redstone wall torches, froglights in the walls and the floor edge; 387 light sources in all). Recreated in the scene world by
-the scratch tool `arcs2tools/gen.py` (Sponge v3 schematic → a stone shell plus run-length `fill … strict` commands, no
-block updates, so redstone keeps its state) and shot with the user's pack, settings and RT config (Sodium, block light 2
+a local helper script, not in the repo (Sponge v3 schematic → a stone shell plus run-length `fill … strict` commands, no
+block updates, so redstone keeps its state) and shot with the reference pack, settings and RT config (Sodium, block light 2
 rays, GI high).
 
 ### Cause
@@ -1126,7 +1125,7 @@ Debug options (RTX block light): `blocklight:ref=1` traces every source of the c
 region borders are where the old arcs were), `debug=2` is the old estimator (old U, traced mean visibility for the rest),
 `debug=3` the new U with the old rest estimate. `RtConfig` passes `gi:lightRays` when block light is not 4 rays.
 
-### Measured (user's config: Sodium, RTX, block light 2 rays, GI high; 1920×1080 dev window, FSR in the dev run)
+### Measured (reference config: Sodium, RTX, block light 2 rays, GI high; 1920×1080 dev window, FSR in the dev run)
 
 Mean absolute luma error against the reference (0–255), the hall scenes `hall_b` / `hall_c` / `hall_d`
 (scratch folder `arcs2/hall-scenes.txt`):
@@ -1134,7 +1133,7 @@ Mean absolute luma error against the reference (0–255), the hall scenes `hall_
 | | hall_b | hall_c | hall_d |
 |---|---|---|---|
 | before, 2 rays | 9.06 | 7.05 | 6.02 |
-| before, 4 rays (the user's "block light off") | 6.29 | 7.47 | 6.65 |
+| before, 4 rays (the reference config's "block light off") | 6.29 | 7.47 | 6.65 |
 | after | 1.54 | 1.16 | 0.82 |
 | same build, old rest estimate (`debug=3`, earlier wrap) vs its reference | 9.72 | 3.16 | 4.67 |
 
@@ -1149,9 +1148,9 @@ Limits: the untraced sources' visibility is one scalar for all their colours, an
 source is soft, a few texels of the GI image); the two strongest sources keep their exact per-pixel shadows. The U gate
 reads the vanilla lightmap, so light from entities (held lights) is not part of it. The Nether and End use it too since §24.
 
-## 24. The End and the Nether: no washed-out End, GI everywhere (`fix/end-nether`, 2026-11-15)
+## 24. The End and the Nether: no washed-out End, GI everywhere (2026-11-15)
 
-User report: in the End with Unbound + Euphoria Patches (RTX) "everything looks terrible", super bright; without Euphoria
+Player report: in the End with Unbound + Euphoria Patches (RTX) "everything looks terrible", super bright; without Euphoria
 fine. Compared against Iris 1.11.7 (Sodium 0.9.3-beta.1, same pack and settings) on the main island, a crimson forest, a
 fortress over the lava sea and a closed netherrack room with lava (scratch folder `endnether/bench.txt`, seed 2026).
 
@@ -1175,16 +1174,16 @@ lightmap), and the Nether skips the sun shadow ray (its lightColor is 0). Sun bo
 glowstone, shroomlight), multiple bounces and the RTX rest-visibility for untraced block lights (§23) work as in the
 overworld, so RTX block light has its full path there now. Same for Faithful GI. The overworld path is unchanged.
 
-Result (RTX, user config, 1920×1080 DLSS Quality): the Nether changes little and looks natural (mean abs difference
+Result (RTX, reference config, 1920×1080 DLSS Quality): the Nether changes little and looks natural (mean abs difference
 0.6–0.8 of 255, mostly animated lava; slightly darker contact corners, a little lava bounce on nearby walls), because its
 fog and block light dominate the pack's small ambient. Frame time (15 s, exclusive GPU) before → after: End 4.79 → 5.56 ms
 (209 → 180 FPS), crimson forest 5.63 → 7.14 (178 → 140), fortress 5.56 → 6.89 (180 → 145), lava room 4.35 → 5.56
 (230 → 180). The GI computes cost 0.6 ms (End) to 1.2 ms (crimson) at GI High; GI Low roughly halves that.
 
 
-## 25. RTX GI: placing or removing a light no longer ghosts (`fix/small-items`, 2026-11-15)
+## 25. RTX GI: placing or removing a light no longer ghosts (2026-11-15)
 
-Motion check of §23 in the user's hall (`hall_d`, user's config: Sodium, RTX, block light 2 rays, GI high, DLSS Quality, FG
+Motion check of §23 in the reported hall (`hall_d`, reference config: Sodium, RTX, block light 2 rays, GI high, DLSS Quality, FG
 off): `turnshot` of 30 frames at ±1°/frame and a 2.4-block move against a settled shot of the same pose, and a torch set on
 and off 4 blocks in front of the camera, shot 1/5/15/45/105 frames later against the settled result.
 
@@ -1204,9 +1203,9 @@ After: removal 3.3 / 1.3 / 0.8 / 0.4, placement 1.1 / 0.9 / 0.8 (the rest is the
 vanilla too). Limits: one box per frame around all changes; overworld GI rays reach 64 blocks, so a far bounce of the old
 light still fades over the full history.
 
-## 26. RTX block light: no lines on the walls around a glowstone (`fix/glowstone-seam`, 2026-11-15)
+## 26. RTX block light: no lines on the walls around a glowstone (2026-11-15)
 
-User report (RTX, Sodium): in a narrow white-concrete shaft with a glowstone and a fence post on the floor, a thin dark line
+Player report (RTX, Sodium): in a narrow white-concrete shaft with a glowstone and a fence post on the floor, a thin dark line
 ran across the back and both side walls about a block above the floor, with a hard-edged brighter band below it and a
 brightness step at the floor/wall junction; in a second room the shapes were straight frames that changed with the face
 direction. GI off: still there. Reproduced in scratch scenes `shaft`, `shaft3` and `roomr` (`seam/scenes5.txt`).
@@ -1225,11 +1224,11 @@ wall stay blocked by that wall, as before. Clamping the points into the block wa
 the box faces and stacks sharp shadow copies (§21). Faithful (disk 0.35) and the GI bounce light (inside ±0.45) always hit
 the box and are unchanged.
 
-Not reproduced: streaks on the underside of an overhang in daylight (scene `overhang`, static, user config): clean.
+Not reproduced: streaks on the underside of an overhang in daylight (scene `overhang`, static, reference config): clean.
 
-## 27. RT block light: no hard-edged band where a light cell overflows (`fix/orange-ring`, 2026-11-15)
+## 27. RT block light: no hard-edged band where a light cell overflows (2026-11-15)
 
-User report (RTX, GI high, snapshot in the torch hall at 323 -39 325): a tall dark band with a hard vertical edge on the
+Player report (RTX, GI high, snapshot in the torch hall at 323 -39 325): a tall dark band with a hard vertical edge on the
 hall wall and a dark wedge on the floor in front of it, "hard shadows with weird shapes". Block light rays 0: gone; GI, AO,
 sun shadows, entity shadows off and spectator mode: still there, so RT block light, not an entity. The hard edge was the
 light grid's cell border at x = 320.
@@ -1248,9 +1247,9 @@ Not fixed: with GI off, a hidden source in the traced set (lava or a froglight b
 still drags the untraced lights' estimate down to a soft star on open floor; with GI on, its visibility sampling replaces
 that estimate.
 
-## 28. RTX sun shadows: no untinted rim around mob and player shadows under water (`fix/water-aura`, 2026-11-15)
+## 28. RTX sun shadows: no untinted rim around mob and player shadows under water (2026-11-15)
 
-User F9 snapshots (river on the test server, RTX, GI high, refraction, DLSS Quality + DLSS FG): a dark squid-shaped blob
+Reported F9 snapshots (river on the test world, RTX, GI high, refraction, DLSS Quality + DLSS FG): a dark squid-shaped blob
 with a brown rim beside each squid, brown streaks around the first-person hand over the water ("a second ghost hand with
 an aura"). Replayed with one switch at a time: FG off, DLSS off (pack TAA), RT refraction off, reflections off, GI off
 all keep it, so none of those layers. It is the sun shadow term.
@@ -1271,9 +1270,9 @@ floor, the brown bands left and right of the hand are gone. FPS before / after a
 70 / 68 rendered). Not changed: the noisy, grainy look of the refracted floor (also with DLSS off, gone with refraction
 off), see the refraction notes.
 
-## 29. RT AO: redstone torches and repeaters glow again (`fix/redstone-dark`, 2026-11-15)
+## 29. RT AO: redstone torches and repeaters glow again (2026-11-15)
 
-User report (RTX, GI high, Sodium; snapshots in the test world at 326 -39 320 and 330 -44 309): the heads of lit redstone
+Player report (RTX, GI high, Sodium; snapshots in the test world at 326 -39 320 and 330 -44 309): the heads of lit redstone
 torches and of powered repeaters were dark red-black; RT off they glow. Faithful: the same. Ablation (one RT effect off at a
 time): only `rt.ao=false` brings the glow back.
 
@@ -1291,16 +1290,16 @@ limiting the rule to blocks with light emission (repeaters and comparators emit 
 Measured (both snapshots, RTX and Faithful): heads as with RT off; everything else within the run-to-run noise (MAE 6.15
 before/after against 6.13 between two runs of the same build, 2560x1386).
 
-## 30. Redstone torch heads and repeater torches as bright as with RT off (`fix/redstone-top`, 2026-11-15)
+## 30. Redstone torch heads and repeater torches as bright as with RT off (2026-11-15)
 
-User report after §29 (RTX, GI high, AO, block light 2 rays, full shadows, DLSS + FG; snapshots at the wall redstone torches in
+Player report after §29 (RTX, GI high, AO, block light 2 rays, full shadows, DLSS + FG; snapshots at the wall redstone torches in
 the Deep Dark corridor 334.5 -46.9 315.7 and at the repeater rows 330.6 -44 309.8): the heads were better but still dark red;
 the repeaters and comparators too. Ablation, one effect off at a time, tight crops of the heads:
 
 - **Wall redstone torches:** only `rt.ao=false` brings back the RT-off look. With the glow shell no longer occluding (§29) the
   AO rays from the head still hit the wall the torch hangs on, a quarter block away: the faces towards it went dark.
 - **Repeater and comparator torches:** only `rt.blockLightRays=0` brings it back (AO barely matters since §29). With the
-  user's `RP_MODE=3` (labPBR, no labPBR pack) the pack gives these texels no emission at all, RT off they are bright because
+  reference settings' `RP_MODE=3` (labPBR, no labPBR pack) the pack gives these texels no emission at all, RT off they are bright because
   the pack's floodfill light treats lit repeaters as red light sources. RT does not know them as sources (no vanilla light
   emission), so the RTX factor S / U took that light away.
 
@@ -1316,12 +1315,12 @@ the repeaters and comparators too. Ablation, one effect off at a time, tight cro
 Tried first and dropped: lifting AO and keeping the pack's light where the pack's emission is high (`colortex6.a` ≥ 0.99, the
 DoLighting `emission`): in labPBR mode these texels have no emission, so nothing changed.
 
-Measured (both snapshots replayed, the user's config): heads as with RT off in RTX and Faithful; the difference images
+Measured (both snapshots replayed, the reference config): heads as with RT off in RTX and Faithful; the difference images
 before/after show only the torches, the repeater heads and the lit dust on the repeaters (plus particles); whole-frame MAE
 before → after 4.5 (torches) and 4.65 (repeaters) against 4.0–4.6 run-to-run with DLSS FG. Not done: the red glow the pack
 casts from lit repeaters onto the floor stays missing in RTX (same cause, a source RT does not know).
 
-## 31. RTX: the red glow of lit repeaters on the floor; RT AO on lights checked and made cheaper (`fix/repeater-glow`, 2026-11-15)
+## 31. RTX: the red glow of lit repeaters on the floor; RT AO on lights checked and made cheaper (2026-11-15)
 
 **Floor glow.** RT off, Complementary's floodfill light (`COLORED_LIGHTING`, with `DO_IPBR_LIGHTS`) treats powered repeaters
 and comparators (`mat` 10644, voxel id 67, `redstoneSpecialLightColor * 0.125`) as red sources: the floor and blocks around
@@ -1341,7 +1340,7 @@ Not done: the pack's other floodfill-only sources (lit redstone wire and the unl
 glowing ores with `GLOWING_ORE_MASTER=2`; crimson/warped stems; redstone and lapis blocks when their options are on; command,
 structure blocks, spawners) stay unknown to RT. Ores in particular would add many sources in caves.
 
-Measured (snapshot 330.6 -44 309.8 replayed, user's config, red channel 0-255, mean of each patch, RT off → RTX before → after):
+Measured (snapshot 330.6 -44 309.8 replayed, reference config, red channel 0-255, mean of each patch, RT off → RTX before → after):
 
 | Patch | RT off | RTX before | RTX after | Faithful after |
 |---|---|---|---|---|
@@ -1357,7 +1356,7 @@ glowstone in a floor corner, glowstone against a wall at head height, standing l
 hanging lanterns at the ceiling against a wall. RT off against RTX: the glowstone and the lanterns glow as RT off, keep the
 pack's face shading (no flat look), and show no halo; the walls and the floor right next to them keep their AO.
 
-**Cost of the ray back to the block.** Exclusive runs, user's config (RTX, AO, GI high, DLSS Quality + FG, 2560x1386),
+**Cost of the ray back to the block.** Exclusive runs, reference config (RTX, AO, GI high, DLSS Quality + FG, 2560x1386),
 redstone hall (the snapshot pose) and outdoors (`overhang`, noon), 20 s each, GPU time of the AO trace pass:
 
 | | hall | outdoor | rendered FPS hall / outdoor |
@@ -1370,7 +1369,7 @@ The extra ray cost 0.15 ms per frame (45 % of the AO pass, about 1 % of the outd
 run-to-run noise). The test now runs after the AO rays and only where they found occlusion (`open < 1`), which leaves
 0.0–0.05 ms. Same images as before (MAE 0.4–1.2 against the §30 order at every test pose, run-to-run noise).
 
-## 32. RTX block light: ReSTIR over every source in reach; ores and redstone as lights (`feat/restir`, 2026-11-15)
+## 32. RTX block light: ReSTIR over every source in reach; ores and redstone as lights (2026-11-15)
 
 **Why.** The light grid kept at most 31 sources per 8³ cell and RTX traced the `rays` strongest per pixel; everything
 else got an estimated visibility (§21, §23, §27 patched the consequences: arcs, bands, crowded-out torches). Sources only
@@ -1416,7 +1415,7 @@ Boiling (2026-11-21): with `mcap` 20 and the pixel radius alone, far and grazing
 light, and the history passed it on for 20 frames. `reach` 1 + `mcap` 4: blotch std on the far farm-hall floor 2.3-4.6 -> 0.2
 (reference `ref=1`: 0.15), mean unchanged.
 
-**Measured** (user's config: Sodium, RTX, block light 2, GI high, DLSS Quality + FG, 2560×1386; snapshots replayed; mean
+**Measured** (reference config: Sodium, RTX, block light 2, GI high, DLSS Quality + FG, 2560×1386; snapshots replayed; mean
 luma of the frame, RT off / RTX before / RTX now):
 
 | View | RT off | before | now | now vs `ref=1` |
@@ -1453,7 +1452,7 @@ probably the lookup's fallback (no surface match → full unshadowed loop over t
 the sources); pack-only range/power are a first fit (±30 % per block type). Motion and light-change ghosting were not
 re-measured for the new denoiser (scripts ready: scratch folder `rs/motion.s`).
 
-**Follow-up (2026-11-15, same branch).** *Cost.* GI's bounce hit finds the light block it landed in with one probe of a
+**Follow-up (2026-11-15, same change).** *Cost.* GI's bounce hit finds the light block it landed in with one probe of a
 hash table by block position (`emrBlBlock`, built with the full list in `RtLights`, `RtLights.blockSlot` = `emrBlHash`)
 instead of scanning the cell. The gbuffers skip the unshadowed fallback loop for fragments the view ray found a surface in
 front of (overdraw: the corridor's 2.8 ms; `blocklight:debug=2` shows them blue). Same config and views, exclusive GPU, base
@@ -1487,13 +1486,13 @@ shadowed neighbours' M, and the darkened result went into next frame's history, 
 target and is visible from that neighbour (one shadow ray per used neighbour, none for the neighbour the sample came from:
 RTXDI's ray-traced bias correction). Temporal reuse in `bl_restir_a` drops a history whose occluded sample is visible now
 (one ray, only where the history has W = 0): a revealed light came back over ~20 frames. Sky test room (white concrete, one
-torch, a 1x5 stone pillar; scratch folder `cxr/pillar.s`), floor beside the pillar's shadow, luma against `ref=1` (50.3):
+torch, a 1x5 stone pillar; scratch script `pillar.s`), floor beside the pillar's shadow, luma against `ref=1` (50.3):
 before −6.9 (−14 %), now −1.0; after breaking the pillar, the formerly shadowed floor against `ref=1`: 0.1 / 0.25 / 0.5 / 1 s
 −16.8 / −7.7 / −3.2 / −0.7 before, −5.0 / −2.7 / −1.1 / −0.5 now. The §32 views (frame mean, bias 0 → 1, `ref=1`):
 torch hall 13-28-25 64.65 → 64.84 (64.73), 14-38-35 38.50 → 38.75 (38.58), corridor 16-32-24 33.68 → 33.83 (34.11), repeater
 rows 14-38-57 35.10 → 35.51 (35.61), 12-19-57 63.19 → 63.87 (63.98), ore cave 43.37 → 43.90 (44.11): +0.3 to +1.2 %, the MAE
 against `ref=1` drops in five of six views (12-19-57 1.05 → 0.55); the calibration (fitted to ±5 %) stays as it is. Cost
-(torch hall, user config, exclusive GPU, 2 × 10 s each, interleaved): `prepare_g` 0.24 → 0.50 ms, `prepare_f` unchanged,
+(torch hall, reference config, exclusive GPU, 2 × 10 s each, interleaved): `prepare_g` 0.24 → 0.50 ms, `prepare_f` unchanged,
 69.4 → 68.4 FPS rendered.
 
 Also fixed: source centres were rounded to float before the grid origin was subtracted (`x + 0.5f - ox`; half a block lost
@@ -1502,13 +1501,13 @@ section that becomes all air (its last block broken) or unloads is never compile
 stayed in the list (phantom light, GI and U): `ClientChunkCacheStorageMixin` drops them (box test: the ratio view stayed lit
 after the only glowstone was broken, now black); the block hash table's insertion is limited to the 64 probes
 `emrBlSourceIn` makes (longest probe seen in tests at the list cap: 21; a source past it is left out with a warning, not
-silently missed). Not done (below the FPS noise, or off the user's path): uploading the capped grid only on rebuild (512 KiB, ~12 µs CPU per
+silently missed). Not done (below the FPS noise, or off the reference setup's path): uploading the capped grid only on rebuild (512 KiB, ~12 µs CPU per
 frame), a shared-memory tile cache for `bl_restir_d` (with DLSS Ray Reconstruction the filter is off), fusing the fallback's
 two source loops (fallback fragments only), caching targets for refraction hits (refraction hits only).
 
-## 33. RT refraction lights its hits itself (`fix/refraction-selflit`, 2026-11-15)
+## 33. RT refraction lights its hits itself (2026-11-15)
 
-User F9 snapshots (test server, RTX, GI high, DLSS Quality + FG): an aura beside the first-person hand over water
+Reported F9 snapshots (test world, RTX, GI high, DLSS Quality + FG): an aura beside the first-person hand over water
 (16-27-51, 14-42-28), shimmer along block edges under water (16-28-52), the same shimmer seen through orange glass
 (16-31-01), and earlier the half-transparent bent ghost blocks (13-27-35) and the grainy look. All of them were gone with
 refraction off.
@@ -1553,8 +1552,8 @@ the steps show once and look like refraction off (raised by the refraction), the
 (12 AO rays: 51.0 / 23.9 ms; none: 43.6 / 21.7 ms.) The rest is the hit's full lighting per water pixel: RTX sun rays,
 block-light rays and GI lookup, the same work terrain does once per pixel.
 
-**Cost cut** (`fix/refraction-selflit`, later the same day). Measured with `-Demrion.autotest.profile=true` (GPU time of
-the `gbuffers translucent` pass, which runs gbuffers_water), deep pose 14-41-55, user's config, 2 × 6 s each, one option
+**Cost cut** (later the same day). Measured with `-Demrion.autotest.profile=true` (GPU time of
+the `gbuffers translucent` pass, which runs gbuffers_water), deep pose 14-41-55, reference config, 2 × 6 s each, one option
 changed at a time (it is a compile-time constant):
 
 | What the hit lighting does | translucent pass | vs. all of it |
@@ -1585,9 +1584,9 @@ Kept:
 - `refraction:blockLight` (1): RTX block light at hits. 0 gives the hits the pack's floodfill light (as RTX far away) and
   saves 2 ms (deep) / 1.5 ms (steps), but the torch-lit cave pool came out clearly brighter and warmer than refraction
   off (MAE against off 12.6 vs 7.3 at 1.0), so it stays on. With ReSTIR (§32) the hit body is `emrRtxBlockLightHit`
-  (4 `emrBlLightAt` samples): deep 14-41-55, mean of 2 × 6 s, same session: test/all-current 14.4 ms (`blockLight=0`
-  11.5), feat/restir 11.3 ms (`blockLight=0` 10.6), so block light at hits now costs 0.7 ms instead of 2.9. The torch-lit
-  pool (glowstone on the floor, two torches, night): refraction on vs off MAE 3.4 (test/all-current 3.6–4.1), mean
+  (4 `emrBlLightAt` samples): deep 14-41-55, mean of 2 × 6 s, same session: the build before ReSTIR 14.4 ms (`blockLight=0`
+  11.5), with ReSTIR 11.3 ms (`blockLight=0` 10.6), so block light at hits now costs 0.7 ms instead of 2.9. The torch-lit
+  pool (glowstone on the floor, two torches, night): refraction on vs off MAE 3.4 (before ReSTIR 3.6–4.1), mean
   colour of the pool within 2–3 levels of off in both builds.
 
 Result (rendered frame time, mean of 2 × 6 s, refraction cost = on − off; DLSS Quality + FG, 2560x1386):
@@ -1600,7 +1599,7 @@ Result (rendered frame time, mean of 2 × 6 s, refraction cost = on − off; DLS
 Run-to-run spread about ±0.5 ms. The goal of 1.3× the old cost (≈ 9 / 3.5 ms) is not reached with block light on; the
 rest is the pack's DoLighting at the hit (≈ 5 ms deep) and the trace (≈ 2.5 ms).
 
-Images: the 8 user snapshots against the build before the cut look the same (MAE 0.9–2.2 outside chat and HUD
+Images: the 8 reported snapshots against the build before the cut look the same (MAE 0.9–2.2 outside chat and HUD
 differences, squid and caustic animation; crops looked at: hand areas 16-27-51 and 14-42-28, step edges 16-28-52 and
 13-27-35, glass 16-31-01, kelp 14-41-55, 14-41-06, 14-43-05). Motion (`turnshot` turn and strafe, `fgturn`, beach /
 deep / hand poses): turn and strafe frames against the still frame as before the cut (MAE 2.2–4.0 both builds), FG
@@ -1611,14 +1610,14 @@ the torch-lit cave pool (singleplayer scene, `local3.s`): refraction on matches 
 the pack's light) now sets `isLightSource` for such a hit too; nothing else in the water program's DoLighting reads it
 for a non-plant. Not checked in an image (no repeater under water in the test scenes).
 
-**Squid outline (user report, 9547046):** thin dark/light lines beside a squid's tentacles and along its head. A debug
+**Squid outline (player report, 9547046):** thin dark/light lines beside a squid's tentacles and along its head. A debug
 view of the pixels where the straight-ray TLAS check failed (they keep the pack's unrefracted image, so the rasterised
 squid shows there, displaced against the refracted one) showed exactly those lines; confirming entity candidates
 without the alpha test in that check removed them (a wider depth window did not). `emrRtRfAny` now takes an entity's
 triangles as coverage. Why the entity alpha test fails along edges the rasteriser drew is not known (entity atlas UVs
 look right).
 
-**Squid outline, again (user F9 snapshots 2026-11-16 18-26-02, 18-27-16, 18-28-02):** broken tentacles (thin dark
+**Squid outline, again (reported F9 snapshots 2026-11-16 18-26-02, 18-27-16, 18-28-02):** broken tentacles (thin dark
 slivers beside them) and a "frame seen through the body" (an L-shaped edge inside the squid's top face), same on fish.
 A debug view of the straight-check failures (red) showed bands about one render pixel wide along every mob's raster
 silhouette, with ticks frozen (so not a stale BLAS: the logged BLAS bounds matched the summon positions). Cause: the check
@@ -1630,7 +1629,7 @@ the unexplained "alpha test fails along edges" above. The check now traces throu
 (`emrRtRfBehind()`: `depthtex1` unprojected with the jittered `gbufferProjectionInverse`). Test: pool with NoAI squid,
 glow squid, axolotl, cod, salmon and tropical fish, DLSS Quality, frozen and live: no lines, no inner frame.
 
-**Cheaper without changing the image? (`perf/refraction`, 2026-11-16).** Deep pose 14-41-55, user's config, translucent pass
+**Cheaper without changing the image? (2026-11-16).** Deep pose 14-41-55, reference config, translucent pass
 GPU time (`-Demrion.autotest.profile=true`), mean of 2 × 6 s, every variant in the same session; register counts from
 `-Demrion.debug.pipelineStats=true` (BENCHMARK.md). Refraction on: 12.6 ms, off: 1.8–3.0 ms.
 
@@ -1656,7 +1655,7 @@ GPU time (`-Demrion.autotest.profile=true`), mean of 2 × 6 s, every variant in 
 surface is there); End pool not checked (the scene's fill did not land); why entity alpha fails at edges.
 
 
-## 34. Opacity micromaps for cutout terrain (`feat/omm`, 2026-11-15)
+## 34. Opacity micromaps for cutout terrain (2026-11-15)
 
 Every RT ray loop alpha-tests cutout candidates itself (leaves, grass, flowers, panes, webs, vines: block atlas at mip 0,
 cutoff 0.1). With `VK_EXT_opacity_micromap` (optional device set "Emberlight opacity micromaps", next to the RT set) the
@@ -1680,7 +1679,7 @@ Bug on the way: LWJGL does not write `usageCountsCount` when `pUsageCounts` is s
 `VkAccelerationStructureTrianglesOpacityMicromapEXT` (the count is shared with `ppUsageCounts`); with 0 the BLAS referenced
 micromap triangles that did not exist and the GPU hung a few frames later. Both now set it explicitly.
 
-**Image** (test server, 7 views of a built forest / props / pool area, RTX all on, DLSS Q + FG; on, off, on again): on vs
+**Image** (test world, 7 views of a built forest / props / pool area, RTX all on, DLSS Q + FG; on, off, on again): on vs
 off differs no more than on vs on (MAE 0.4-4.4 vs 0.4-4.3, the pool's water noise the largest) — unchanged.
 
 **Cost** (GPU done per frame, Reflex driver reports, 2 x 8 s each): forest interior 22.5 / 21.6 ms on vs 21.7 / 22.1 off;
@@ -1689,7 +1688,7 @@ the time goes (the pack's shading and the RTX lighting dominate). Memory: 28 MiB
 (about 14 MiB at render distance 16). Kept because it costs nothing measurable either and helps GPUs where any-hit
 handling is expensive; `rt.omm=false` turns it off.
 
-**Re-measured on top of `test/all-current` (2026-11-16, after ReSTIR block light, refraction self-lighting, RR):** test
+**Re-measured on top of the current development build (2026-11-16, after ReSTIR block light, refraction self-lighting, RR):** test
 server, RTX all on (rtx style, full shadows, GI high, reflections, refraction, AO, caustics), DLSS Q + FG, Reflex on,
 frameTimeCounter 100, 2560x1440, profiler on; 10 s per view, rounds on/off/off/on interleaved. New views on a floating
 46x80 platform at y 150 (x 900-945, z 700-779: 88 mixed trees over short grass, torches) and a 29x39 kelp/seagrass
@@ -1712,7 +1711,7 @@ same near-hit rule in its new single-pass form (trace on behind a near committed
 
 **Open:** entity BLAS (no micromaps), translucent layers (glass alpha 0 areas).
 
-## 35. Final review fixes (`fix/final-rt`, 2026-11-16)
+## 35. Final review fixes (2026-11-16)
 
 - **BLAS scratch base alignment:** terrain and entity BLAS scratch addresses are aligned from the buffer's real device
   address (`minAccelerationStructureScratchOffsetAlignment`, with that much padding), not only their offsets, as the TLAS path did.
@@ -1720,7 +1719,7 @@ same near-hit rule in its new single-pass form (trace on behind a near committed
   uniform buffer with one slot per frame in flight (binding 7). With RR the AO filter copies the raw AO before loading its tile.
 - **Entity atlas:** every texture the frame's entity draws use gets its rect before any draw takes its UVs; an atlas reset
   halfway used to hand rects of earlier draws to later textures. Frames without an entity capture still free old entity BLAS.
-- **RR:** GI passes D and E return at once with `gi:filter=0` (C already wrote the result to F). Forest, user config + RR:
+- **RR:** GI passes D and E return at once with `gi:filter=0` (C already wrote the result to F). Forest, reference config + RR:
   0.20 -> 0.02 ms; AO filter 0.05 -> 0.02 ms.
 - **OMM:** the micromap data/triangle buffers and every section's OMM index buffer are freed once their build is recorded
   (build inputs only): indices 11.9 MiB -> 0 at the torch hall.
@@ -1730,7 +1729,7 @@ same near-hit rule in its new single-pass form (trace on behind a near committed
 - Not done: skipping the terrain-only TLAS build before the shadow pass's entity refresh (0.20 ms) needs the plan to prove
   no pass reads the TLAS in between.
 
-## 36. RTX block light: emitters set flush into a surface (`fix/lava-light`, 2026-11-16)
+## 36. RTX block light: emitters set flush into a surface (2026-11-16)
 
 **Bug.** A cave lit only by a lava pool in its floor was much darker with RTX than RT off (frame luma 20.1 vs 31.5). The
 pool's top (8/9 of a block) lies just below the floor, so every lava centre sat half a block behind the floor plane: U
@@ -1738,7 +1737,7 @@ pool's top (8/9 of a block) lies just below the floor, so every lava centre sat 
 the floor. Same for any full-block vanilla emitter flush with a surface: glowstone in a wall, sea lanterns or magma in a floor.
 Not the cause: lava's colour/power (vanilla, power 1), cell caps (the full list has none), lava in shadow rays (lava is opaque solid-BLAS geometry, so it does block them,
 but the ray ends where it enters the source's block, so a pool's own lava never shadows its light; the `id == lava` skips in
-the ray loops never ran and were removed in `fix/codex-rt`).
+the ray loops never ran and were removed in a later review fix).
 
 **Fix** (`rtx/bl_common.glsl emrBlSourceAt`, `emrBlOpen`, `rtx/bl_restir_a.csh`). A full vanilla emitter whose centre is
 0.05-0.7 behind the receiving surface lights it like a pack-only ore does: from the air half a block in front of its block's
@@ -1747,7 +1746,7 @@ by the sources in front (§23 rule), not added in full: a flush emitter in the n
 torch hall's floor by up to 15 % (frame -3 %). It does explain the lightmap for sources further behind: the test pool's lava
 falls on below the floor, and those blocks, gated in, dimmed the floor again (lava frame 29.6 -> 25.6).
 
-**Measured** (test server, user config: RTX, GI high, full shadows, AO, block light 4, DLSS Q; frame mean luma, RT off /
+**Measured** (test world, reference config: RTX, GI high, full shadows, AO, block light 4, DLSS Q; frame mean luma, RT off /
 before / after with RR / after without RR; scratch folder `lavalight/`):
 
 | View | RT off | before | after (RR) | after (no RR) |
@@ -1764,7 +1763,7 @@ The wall around the glowstone went from 32 to 50 (RT off 55). The glowstone room
 (+31 %): with RTX GI's block bounce off (`gi=off` or `gi:blockStrength=0`) it is 21.5 (+11 %), so the excess is GI's bounce
 and glow from a 45-block emitter wall (`gi:blockStrength` 2.5 was fitted on halls with point lights); not changed here.
 
-## 37. RTX GI: emitter walls and floors no longer over-light the room (`fix/gi-emitter-walls`, 2026-11-16)
+## 37. RTX GI: emitter walls and floors no longer over-light the room (2026-11-16)
 
 **Bug.** The glowstone-wall room (45 glowstone blocks in a brick wall) was +96 % brighter than RT off (frame 37.1 vs
 18.9); with GI's block bounce off it is +11 %. Ablations on the bounce hit (`rtx/gi_common.glsl emrGiBlockLight`), glowstone
@@ -1786,7 +1785,7 @@ scaled by max / sum when it is one of them, which keeps the estimator unbiased f
 pack-only sources are summed as before (`gi:blockStrength` 2.5 was fitted on that; pack-only floodfills do add up in the pack).
 No new constant; `gi:blockStrength` 3 was tried (torch hall 0 %, but hall, stems, ore cave 2–4 points further off).
 
-**Measured** (test server, user config: RTX, GI high, block light 4, 2560x1440; the dev runs upscale with FSR 3 from 1706x960,
+**Measured** (test world, reference config: RTX, GI high, block light 4, 2560x1440; the dev runs upscale with FSR 3 from 1706x960,
 not DLSS; frame mean luma vs RT off, and
 the mean absolute error against RT off on an 8x8-downsampled frame; scratch folder `giwall/`, run `g`):
 
@@ -1809,7 +1808,7 @@ floor deficit is direct light, not GI: a floor point sees a source flush in the 
 about 0.4), where the pack's light has no direction. Open: that floor deficit (frame −20 % in the lava cave); the repeater
 rows lose 3 points (their full-block lamps now count as one).
 
-*Flush floors (2026-11-16, same branch).* The floor deficit around flush emitters is fixed in direct light: a floor or
+*Flush floors (2026-11-16, same change).* The floor deficit around flush emitters is fixed in direct light: a floor or
 ceiling receiver of a flush emitter (`emrBlSourceAt`'s shrunk disk) takes N.L at least `EMR_BL_FLUSH_NDL` 0.6
 (`rtx/bl_common.glsl emrBlWeight`, so ReSTIR, the gbuffers' fallback and GI's bounce hits agree). It saw the source at a grazing
 angle (wrapped N.L about 0.4), where the pack's light has no direction. Walls are left out: the glowstone wall's own surface
@@ -1841,7 +1840,7 @@ off, and N.L does not move it): not flush geometry, probably the pack's extra la
 floodfill) against RTX's plain vanilla lava. The repeater rows' −14 % comes from the touching full-block emitters counting as
 one at GI bounce hits (−8 % before); their pixel error is unchanged (7.6 / 7.8).
 
-*Lava (2026-11-16, same branch).* After the flush fix the lava cave was still −13 % (key 1), its walls and ceiling −21 to
+*Lava (2026-11-16, same change).* After the flush fix the lava cave was still −13 % (key 1), its walls and ceiling −21 to
 −27 %, losing the orange glow on the pool's far walls, the pillar fronts and the chest (surfaces facing away from the pool or
 in its shadow; RT off lights them through the pack's floodfill, RTX only through GI's bounce). Two causes:
 - *The cluster rule took lava's bounce away.* It is right for emitters the pack lights like vanilla (the max over sources), but
@@ -1856,7 +1855,7 @@ in its shadow; RT off lights them through the pack's floodfill, RTX only through
 The pack's colour and strength for lava need nothing: RTX multiplies the pack's own light (floodfill included) by S / U, in which
 a source's colour and power cancel.
 
-Final table, DLSS Quality with Ray Reconstruction (the scratchpad `rr/dlss` libraries via `-Demrion.upscale.dlssDir`; the runs
+Final table, DLSS Quality with Ray Reconstruction (the local `rr/dlss` libraries via `-Demrion.upscale.dlssDir`; the runs
 above were FSR 3), frame mean and top third (walls, ceiling) against RT off, pixel error (scratch folder `giwall/`, run `n`):
 
 | View | RT off | now | top third RT off / now | error |
@@ -1879,9 +1878,9 @@ Against the flush-floor state under DLSS + RR (same views): glowstone, sea, torc
 0.2 points; the lava cell +3.2 (the surface lift). The hall, stems room and ore cave are as they were before §37 or better
 (+22, +25, +15 %).
 
-## 38. Snapshot fixes: caustics on walls, block-entity torch shadows, ice, portal reflections (`fix/snap-world`, 2026-11-16)
+## 38. Snapshot fixes: caustics on walls, block-entity torch shadows, ice, portal reflections (2026-11-16)
 
-From the user's F9 snapshots of 2026-11-16, replayed with the `snapshot` step on the test server.
+From reported F9 snapshots of 2026-11-16, replayed with the `snapshot` step on the test world.
 
 - **Caustics striped across riverbed walls** (18-10-20, "von der Seite komisch abgeschnitten"). The RT caustic
   (`caustics.glsl`) is the light pattern on the receiver; on a face the sun grazes it is that pattern smeared along the
@@ -1905,12 +1904,12 @@ From the user's F9 snapshots of 2026-11-16, replayed with the `snapshot` step on
   translucent hits, only the portal (block id 30020), which `refl_trace.glsl` shades as its own glow (the pack's
   `netherPortal.glsl` colour curve, emission set to sit a little below the portal seen directly).
 
-Measured (test server, 2560x1386, the user's snapshot config: RTX, DLSS Quality + frame generation, block light 8 rays): a closed
+Measured (test world, 2560x1386, the snapshots' config: RTX, DLSS Quality + frame generation, block light 8 rays): a closed
 stone room with 190 chests and 15 torches, rendered FPS 84.3 with *Entity shadows* (torch shadows of the chests) and 84.5
 without (20 s each, same run). The calibration snapshots (torch hall 13-28-25, hall 14-38-35, cold ocean 14-41-55) differ
 from the unpatched build by chat overlay, torch flicker and kelp sway only (MAE 0.5-1.6).
 
-## 39. RTX GI radiance cache (`feat/sharc`, 2026-11-17)
+## 39. RTX GI radiance cache (2026-11-17)
 
 A world-space radiance cache for the RTX GI after NVIDIA's SHaRC ("Spatially Hashed Radiance Cache", RTXGI SDK). The algorithm
 is reimplemented in our GLSL; no SDK code is used. Option *GI radiance cache* on the RT page (`rt.giCache`, request
@@ -2013,7 +2012,7 @@ Low; no ray query: RT stays off). If no upscaler was ever chosen, it also turns 
 preset's upscaling level. Then it saves everything, so this runs only once. Autotests skip it unless `-Demrion.rt.autoPreset=true`.
 Script step: `rtset preset=high[,key=value...]`.
 
-Calibration: RTX 4070 Ti, 2560×1386, DLSS Quality, frame generation off, Unbound + Euphoria with the test instance settings,
+Calibration: RTX 4070 Ti, 2560×1386, DLSS Quality, frame generation off, Unbound + Euphoria with the reference settings,
 15 s per bench (avg FPS / 1% low):
 
 | Scene | Ultra | High (with refraction, r1) | Medium | Low | RT off |

@@ -1,8 +1,7 @@
 # Emberlight — Architecture
 
 Status: M0 (design). Research notes this design relies on are in `docs/research/`:
-`mojang-render-api.md` (MC 26.3 "renderpearl"), `iris-spec.md` (Iris semantics) and
-`complementary-features.md` (what the target pack uses with the user's settings).
+`mojang-render-api.md` (MC 26.3 "renderpearl") and `iris-spec.md` (Iris semantics).
 The new on-disk format is specified in [FORMAT.md](FORMAT.md).
 
 ## 1. Goals and target
@@ -18,7 +17,7 @@ The new on-disk format is specified in [FORMAT.md](FORMAT.md).
 
 | Item | Choice | Why |
 |---|---|---|
-| Minecraft | **26.3** (stable, 2026-10) | Newest *stable* release that has the Vulkan backend (`com.mojang.renderpearl.backend.vulkan`, opt-in via *Graphics API: Prefer Vulkan*). 26.4 is still at snapshot-8. The user's instance is 26.3. |
+| Minecraft | **26.3** (stable, 2026-10) | Newest *stable* release that has the Vulkan backend (`com.mojang.renderpearl.backend.vulkan`, opt-in via *Graphics API: Prefer Vulkan*). 26.4 is still at snapshot-8. The reference test instance is 26.3. |
 | Fabric Loader | 0.20.1 | latest from meta.fabricmc.net |
 | Fabric API | 0.166.2+26.3 | latest for 26.3 on Modrinth |
 | Loom | 1.19-SNAPSHOT, plugin `net.fabricmc.fabric-loom` | Fabric example mod for 26.3. MC 26.x ships unobfuscated, so there are **no mappings** and we use `implementation` instead of `modImplementation`. |
@@ -264,8 +263,8 @@ Planned set; each mixin class carries a comment explaining why it is needed.
 
 - converter: JUnit with many small GLSL in→out golden tests, plus an integration test that converts the real target pack from
   `testpacks/` (skipped when absent) and asserts **every stage compiles** (M1 metric) and the report has 0 errors.
-- mod: the frame planner and uniform layout are tested in converter. In-game checks use a visual checklist in PROGRESS.md
-  with Iris comparison screenshots, plus the benchmark (M5).
+- mod: the frame planner and uniform layout are tested in converter. In-game checks use autotest screenshots compared
+  with Iris and earlier builds, plus the benchmark (M5).
 
 ## 9. Licensing
 

@@ -14,7 +14,7 @@ import static dev.emrion.shaders.converter.plan.PlannerTestSupport.plan;
 import static dev.emrion.shaders.converter.plan.PlannerTestSupport.props;
 import static org.junit.jupiter.api.Assertions.*;
 
-/** Complementary Unbound r5.9.3 + EP 1.10.5, world0, target settings: inputs from docs/research/complementary-features.md. */
+/** Complementary Unbound r5.9.3 + EP 1.10.5, world0, target settings. */
 class ComplementaryWorld0PlanTest {
 
 	/** lib/pipelineSettings.glsl + lib/common.glsl consts, included by every program. */

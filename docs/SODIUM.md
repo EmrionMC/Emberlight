@@ -1,8 +1,7 @@
 # Emberlight on Sodium
 
-**Decision (user, 2026-11-21): Sodium is required.** `fabric.mod.json` depends on Sodium `>=0.9.3-beta.5` (and breaks newer
-betas), terrain always goes through Sodium's chunk renderer (as under Iris), and the vanilla chunk path was deleted (branch
-`refactor/sodium-required`: the SectionCompiler/Indigo/fluid meshing hooks, EMRION_BLOCK, the vanilla RT and shadow section
+**Decision (2026-11-21): Sodium is required.** `fabric.mod.json` depends on Sodium `>=0.9.3-beta.5` (and breaks newer
+betas), terrain always goes through Sodium's chunk renderer (as under Iris), and the vanilla chunk path was deleted (removed: the SectionCompiler/Indigo/fluid meshing hooks, EMRION_BLOCK, the vanilla RT and shadow section
 paths, ForcedSections, HorizonCull, the converter's terrain_mdi/terrain_ubo variants and its `sodium` request flag).
 `runClient` always loads the Sodium jar from `-PirisModsDir`; `-Psodium` is gone.
 The earlier decision (2026-11-13: both chunk paths supported) is history; the sections below that compare or mention the
@@ -43,7 +42,7 @@ Sodium takes about 30 % less CPU per frame and rebuilds faster. \*The remesh tim
 `hasRenderedAllSections()` is true again. Sodium overwrites that method with "build queue empty", which is not the same test,
 so treat the remesh column as rough. Logs (scratch folder): `sod-bench/{v1,v2,v3,s1,s2,s3}/latest.log`.
 
-## 2. Our mod + Sodium + the user's pack: what breaks
+## 2. Our mod + Sodium + the target pack: what breaks
 
 Run `ps1` (pack + `-Psodium`): **the game crashes on the first world frame.**
 
@@ -112,7 +111,7 @@ There is **no chunk-rendering API**. Like Iris, we would need mixins into intern
 Step 1 cannot be hacked together inside the spike. It needs a new converter vertex variant, a second bind group in our
 set layout and push-constant relocation (see §3, about 2–3 days). So (b) is an estimate:
 
-- Today: 136.5 FPS (run p1 on this branch; master reference 137), 7.3 ms/frame, **GPU-bound** with about 5 ms CPU slack.
+- Today: 136.5 FPS (run p1 on this build; master reference 137), 7.3 ms/frame, **GPU-bound** with about 5 ms CPU slack.
   Opaque pass 2.44 ms GPU, shadow 0.47 ms GPU + 1.46 ms CPU.
 - Sodium changes only the vertex side of terrain: block-face culling drops whole back-facing facing slices per section in the main
   view (not in shadow, where Iris disables it), vertices are 36 B (or less) instead of 56 B, and there are fewer draw calls.
@@ -151,7 +150,7 @@ Total **≈ 12–18 days**. Steps 1–3 (about a week) give a full visual switch
 - **animate_only_visible_textures**: sprites seen only by the shadow pass or by pack effects may not animate (Iris has the same setting).
 - Performance is estimated only (above). Step 1's gate decides.
 
-## 6. Step 1 status (branch `sodium/s1-terrain`)
+## 6. Step 1 status
 
 Done:
 
@@ -181,7 +180,7 @@ Done:
   **main-view** render lists. Terrain outside the camera frustum therefore casts no shadow, and block-face culling follows the
   camera. Step 3 replaces this.
 
-Result: the overview with the user's pack renders, and terrain is drawn by Sodium through our gbuffers pipelines. MAE against
+Result: the overview with the target pack renders, and terrain is drawn by Sodium through our gbuffers pipelines. MAE against
 Iris is 5.97 / SSIM 0.859 (today: 0.50 / 0.995). Visible causes are the default normal (every face lit as "up"), no
 mc_Entity ids (no waving foliage or water id), and the incomplete shadow map. All of these are steps 2–3.
 Gate (BENCHMARK.md M8-S1): Sodium measures 140–143 FPS against vanilla at 98 FPS, but the comparison is not like-for-like.
@@ -189,7 +188,7 @@ The gap is the step-1 shadow pass, which covers less terrain. The comparable mai
 Sodium (opaque +0.36, translucent −0.18). The vanilla path itself dropped from 137 to 98 FPS on master (shadow_opaque 3.35 ms).
 That is a separate regression. Decide go/no-go after step 3.
 
-## 7. Steps 2–4 status (branch `sodium/s1-terrain`)
+## 7. Steps 2–4 status
 
 **Step 2, vertex format and ids.** While a pack is active, `ChunkMeshFormatsMixin` makes Sodium mesh in
 `EmrionChunkVertex` (`EmrionVertexFormats.SODIUM_TERRAIN`, 40 B). It is Sodium's compact 20 B vertex plus the canonical extras,
@@ -237,7 +236,7 @@ its intrinsics. `ExtendedBufferBuilderMixin` makes our builder report `canUseInt
 one WARN per class, and our extended formats get no fast path. A direct serializer (Iris's ModelToEntityVertexSerializer) is only
 worth it if entity-heavy scenes show CPU cost.
 
-**RT (step 5, done on `rt/sodium`):** every RT effect works on the Sodium path, with the BLAS built from Sodium's region
+**RT (step 5, done):** every RT effect works on the Sodium path, with the BLAS built from Sodium's region
 arenas (RAYTRACING.md §17).
 
 ## 8. The two paths compared
@@ -269,7 +268,7 @@ hacked in.
 
 ## 10. Sodium versions
 
-The Sodium integration targets **0.9.3-beta.5+mc26.3** exactly (branch `sodium/beta5`; before that, beta.1).
+The Sodium integration targets **0.9.3-beta.5+mc26.3** exactly (before that, beta.1).
 `fabric.mod.json` declares `recommends: sodium 0.9.3-beta.5` and `breaks: sodium <0.9.3-beta.5 || >0.9.3-beta.5`. With any
 other Sodium, Fabric refuses to start and names the conflict ("Replace mod 'Emberlight' … compatible with sodium
 0.9.3-beta.1", checked in game), instead of crashing in a mixin or at the first frame. Without Sodium nothing changes.

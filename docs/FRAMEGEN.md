@@ -202,7 +202,7 @@ Not yet measured: VSync on (FIFO) — the first attempt, before the 1 s presente
 frames and paced unevenly (presented ≈ 88/s at 120 Hz with ≈ 49 rendered); the re-run was cancelled for GPU time. Latency
 (no tool here). XWayland was not used.
 
-## 11. Fixes after the first user test (`fix/user-round1`, 2026-11-14)
+## 11. Fixes after the first player test (2026-11-14)
 
 * **DLSS FG flickered massively: every interpolated frame was black.** The GUI composition pass (§9) read MC's back buffer
   as a storage image, which it is not created for; the reads returned 0, so every pixel "differed" from the HUD-less copy
@@ -217,23 +217,23 @@ frames and paced unevenly (presented ≈ 88/s at 120 Hz with ≈ 49 rendered); t
   and swapchain stay, no restart); it resumes below 90 % of the refresh rate. The overlay says `frame generation paused`.
   `-Demberlight.framegen.autoBypass=false` turns this off (benchmarks).
   Pause and resume are logged (`Frame generation paused: 177 rendered FPS reach the 144 Hz refresh rate ...`), and the
-  autotest `bench` line counts the interpolated presents and says when FG was paused: the Windows test (docs/WINDOWS-TEST-FINDINGS.md
-  R6) read "FG interpolates nothing with present mode 0" because its uncapped benches ran above the monitor's refresh and
+  autotest `bench` line counts the interpolated presents and says when FG was paused: an early Windows test
+  read "FG interpolates nothing with present mode 0" because its uncapped benches ran above the monitor's refresh and
   were paused, silently. `fgshots` does not count a history reset's output (FSR returns the current frame unchanged
   then, e.g. the first frame after a pause or a mode switch) as an interpolated frame.
 * **Cost per rendered frame** (2560×1386, DLSS Quality, RT off, overview, 6 s each): FG off 100.2 FPS (9.98 ms); FSR FG
   85.3 rendered / 170.5 shown (11.72 ms, +1.74 ms); DLSS FG 79.8 / 159.7 (12.52 ms, +2.54 ms). The pack passes' GPU time
   stays (10.37 vs 9.87 ms incl. the HUD-less copy); the rest is the interpolation itself, recorded after the level and so
-  outside the profiler's pass list. No extra stall was found: the user's 190 → 140 FPS in the Nether (+1.9 ms) is this
+  outside the profiler's pass list. No extra stall was found: the reported 190 → 140 FPS in the Nether (+1.9 ms) is this
   cost, which is why the auto pause exists.
 * The presenter logs the swapchain's present mode when FG starts (`present mode 0 (immediate)` on the dev machine with
   VSync off; MAILBOX/FIFO with VSync). With FIFO at refresh R the screen gets at most R frames (§4).
 
 
-## 12. The Nether re-measured (`fix/small-items`, 2026-11-15)
+## 12. The Nether re-measured (2026-11-15)
 
-The user once saw 140 FPS with FG against 190 without in the Nether. Re-measured after the swapchain image count fix, the
-presenter priority and the auto pause: fortress over the lava sea (`endnether/bench.txt` `fort`), the user's config (Sodium,
+A player report once showed 140 FPS with FG against 190 without in the Nether. Re-measured after the swapchain image count fix, the
+presenter priority and the auto pause: fortress over the lava sea (`endnether/bench.txt` `fort`), the reference config (Sodium,
 RTX with GI High, block light 2 rays, DLSS Quality), 2560×1440 in the gamescope test display (120 Hz), exclusive GPU, VSync
 off, 10–12 s per row, two interleaved rounds (FG off: rendered FPS of round 1, round 2; FG: rendered / presented per round):
 
@@ -244,7 +244,7 @@ off, 10–12 s per row, two interleaved rounds (FG off: rendered FPS of round 1,
 | RT off, auto pause on | 166, 165 | 186 / 186, 193 / 193 (paused) | 191 / 191, 193 / 193 (paused) |
 
 * Running FG costs 0.9 ms (FSR) and 1.9 ms (DLSS) per rendered frame here (1920×1080: 0.1 / 0.6 ms) and doubles the shown
-  frames, so it no longer loses presented frames. The user's 190 → 140 was the rendered rate above the refresh rate, which is
+  frames, so it no longer loses presented frames. The reported 190 → 140 was the rendered rate above the refresh rate, which is
   what the auto pause now covers: with it on, every FG row above refresh runs paused.
 * Paused FG renders **faster** than FG off (+10 % with RTX, +15 % with RT off) and with far better 1 % lows (FG off 52–95,
   paused 110–177): paused, our presenter thread presents the real frames on its own queue, while with FG off MC presents on
@@ -252,9 +252,9 @@ off, 10–12 s per row, two interleaved rounds (FG off: rendered FPS of round 1,
   rate with the presenter, just at the 120 Hz threshold).
 * Limit: the pause test is "rendered rate ≥ refresh" while FG runs. On a display faster than the FG-on rate but slower than
   the FG-off rate (e.g. 144 Hz with 117 FPS with DLSS FG and 150 without), FG keeps running and shows 144 mostly generated
-  frames instead of 150 real ones. Not seen at the user's 120 Hz.
+  frames instead of 150 real ones. Not seen at the reported 120 Hz.
 
-## 13. NVIDIA Reflex (`feat/reflex`, 2026-11-15)
+## 13. NVIDIA Reflex (2026-11-15)
 
 Reflex runs through the plain Vulkan extension **VK_NV_low_latency2** (plus `VK_KHR_present_id`), called through LWJGL's
 bindings (`framegen/Reflex.java`). No NVIDIA SDK, library or file is used or shipped and the NGX shim is unchanged, so the

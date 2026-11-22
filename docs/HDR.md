@@ -1,6 +1,6 @@
 # HDR output
 
-Status: implemented (`feat/hdr`, 2026-11-16), default **Off**. Off is MC's path: the swapchain is created with MC's
+Status: implemented (2026-11-16), default **Off**. Off is MC's path: the swapchain is created with MC's
 format and colour space, no extra pass, no extra copy, MC's blit reads its own main target. The converter request does
 not change (HDR adds no converter effect), so `TargetPackRtTest.rtOffOutputMatchesGolden` is untouched.
 
@@ -62,7 +62,7 @@ the presenter blits it like the SDR slot. Cost while HDR is on: one 1 ms-class c
 
 | Where | What the surface offers (RTX 4070 Ti, driver 615.78) | Result |
 |---|---|---|
-| KDE Plasma 6, native Wayland (SDL3 Wayland surface) | `vulkaninfo`: HDR10_ST2084 on A2B10G10R10, scRGB on RGBA16F, also on the user's SDR monitor | HDR10 swapchain; KWin shows it as HDR when the output has HDR enabled in the display settings, else tone-maps it to SDR. The page cannot tell an SDR monitor from an HDR one there: leave HDR off on SDR monitors. |
+| KDE Plasma 6, native Wayland (SDL3 Wayland surface) | `vulkaninfo`: HDR10_ST2084 on A2B10G10R10, scRGB on RGBA16F, also on an SDR monitor | HDR10 swapchain; KWin shows it as HDR when the output has HDR enabled in the display settings, else tone-maps it to SDR. The page cannot tell an SDR monitor from an HDR one there: leave HDR off on SDR monitors. |
 | X11 / Xwayland on a desktop | SDR formats only | Toggle disabled: "the display (or compositor) offers no HDR colour space" |
 | gamescope `--hdr-enabled` (Xwayland inside, `ENABLE_GAMESCOPE_WSI=1`) | HDR10 through the gamescope WSI layer | HDR10 swapchain, verified below |
 

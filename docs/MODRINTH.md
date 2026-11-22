@@ -265,7 +265,7 @@ Both get the same features. Pick the jar that matches your loader and Sodium's b
 
 ## Downloads
 
-<!-- TODO(owner): decide how Emberlight RTX and Emberlight PBR are distributed before publishing. Today neither is in the
+<!-- TODO: decide how Emberlight RTX and Emberlight PBR are distributed before publishing. Today neither is in the
 mod jar: Emberlight RTX is the folder packs/emberlight-rtx (zip it), Emberlight PBR is built by
 packs/emberlight-pbr/tools/generate.py. Options: GitHub release assets, separate Modrinth projects (shader + resource
 pack; Modrinth "shader" projects are for Iris/OptiFine loaders, so check how a native Emberlight pack would be tagged),
@@ -282,7 +282,7 @@ or bundled in the mod jar. Replace the paragraph below with the real links. -->
 ## Credits
 
 - **Complementary Shaders** by EminGT: the ray tracing is built around Complementary Reimagined and Unbound.
-  <!-- TODO(owner): EminGT's answer about the RT integration is still pending. Confirm the permission and adjust this
+  <!-- TODO: EminGT's answer about the RT integration is still pending. Confirm the permission and adjust this
   line (e.g. "with EminGT's permission") before publishing, or remove the RT claim for Complementary if he declines. -->
 - **Euphoria Patches** by SpacEagle17: RT integration with his approval.
 - **Iris**, used as the specification for the shader pack format. No Iris code is included apart from Iris's public API
@@ -297,7 +297,7 @@ I started Emberlight and I'm the one behind it. I use AI coding assistants (Clau
 and I'm open about that. I read and understand what goes in, decide how things are built, and test every change in game
 myself before it ships. If something is broken, that's on me: tell me on Discord or GitHub.
 
-<!-- TODO(owner): read this in your own voice and adjust; README's "Development" section says the same in one line. -->
+<!-- TODO: read this in your own voice and adjust; README's "Development" section says the same in one line. -->
 
 ---
 

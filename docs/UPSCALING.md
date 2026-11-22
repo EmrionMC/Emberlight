@@ -244,7 +244,7 @@ the two (below).
 | rain | 1.68 / 0.960 | — |
 | entities | 2.42 / 0.966 | — |
 
-(The DLSS all-scene run was interrupted by a GPU hand-over to the user; forest and overview are from a separate run.)
+(The DLSS all-scene run was interrupted because the GPU was needed elsewhere; forest and overview are from a separate run.)
 The reference is our native path with the pack's TAA, so part of the difference is the pack's TAA versus the upscaler's.
 Visually (side-by-side crops): foliage edges and block textures stay crisp at Quality with both; FSR is slightly softer on
 distant leaves, DLSS closest to native; clouds are indistinguishable. Under water (refracted kelp) FSR is visibly softer:
@@ -264,7 +264,7 @@ rendering without upscaler (tested before the arena fix: "DLSS unavailable: NGX 
 Off: the converter request is the empty set as before (golden test `rtOffOutputMatchesGolden` green), no jitter, no extra
 pass; the only runtime difference is the window-size check against `displayWidth` (equal to the render size when off).
 
-## 10. Without a shader pack (`feat/vanilla-upscale`, 2026-11-16)
+## 10. Without a shader pack (2026-11-16)
 
 Upscaling and frame generation also run when no pack is selected (or the pack is toggled off). `upscale/VanillaUpscale`,
 all no-ops unless this frame has no pack and an upscaler or FG is on:
@@ -315,7 +315,7 @@ anti-aliasing. Image (still camera after settling, vs native): forest MAE 2.1 / 
 3.6 / 3.2; hand, chat and hotbar are pixel-sharp at display size; glowing outlines, bob, nausea, spyglass, F1, resize and
 fullscreen checked by screenshot; FG interpolated frames of a scripted turn look right.
 
-## 11. DLSS Ray Reconstruction (`feat/ray-reconstruction`, 2026-11-16)
+## 11. DLSS Ray Reconstruction (2026-11-16)
 
 DLSS Ray Reconstruction (RR, NGX feature `NVSDK_NGX_Feature_RayReconstruction`, "DLSS-D", model
 `libnvidia-ngx-dlssd.so.310.9.16` / `nvngx_dlssd.dll`) is DLSS SR with a denoiser trained into it: it takes the *noisy*
@@ -397,9 +397,9 @@ or `lib/Windows_x86_64/rel/nvngx_dlssd.dll` (48 343 664 B, `b49435ae…46cee`) f
 tile again (only the missing file is fetched). Like the other models it is never bundled; LICENSE-DLSS.txt, NOTICE and
 README name it.
 
-### 11.4 Results (2026-11-16, RTX 4070 Ti, driver 615.78.08, 2560×1386, user config: RTX, GI high, shadows full, 4 shadow rays, AO, block light 2 rays, refraction/caustics, DLSS Quality + DLSS FG + Reflex on, Sodium beta.5, Complementary Unbound r5.9.3 + EP 1.10.5)
+### 11.4 Results (2026-11-16, RTX 4070 Ti, driver 615.78.08, 2560×1386, reference config: RTX, GI high, shadows full, 4 shadow rays, AO, block light 2 rays, refraction/caustics, DLSS Quality + DLSS FG + Reflex on, Sodium beta.5, Complementary Unbound r5.9.3 + EP 1.10.5)
 
-Images: the user's snapshots replayed on the test server (snapshot step, then two consecutive real frames with `fgshots`),
+Images: reported snapshots replayed on the test world (snapshot step, then two consecutive real frames with `fgshots`),
 one run with SR and one with `-Demrion.upscale.rr=true`; forest (noon) and cave (night) in the scene world. Crops were
 looked at one by one. "Flicker" = mean |luma difference| (0–255) between two consecutive real frames of a still camera
 (boiling, shimmer); "mean" = mean luma, to see brightness shifts.
@@ -446,7 +446,7 @@ RR costs about 10 % (≈ 1.5 ms per frame at 1706×924 → 2560×1386) more than
 Not checked: the End snapshot (the snapshot replay hung on the dimension change, a harness problem), Faithful style with
 RR (the options exist there, not looked at), FSR frame generation with RR, Windows.
 
-### 11.5 Native packs (`feat/native-rr`, 2026-11-17)
+### 11.5 Native packs (2026-11-17)
 
 Native packs provide their own guides ([NATIVE_FORMAT.md §14.4](NATIVE_FORMAT.md)): with `settings.rayReconstruction`
 and RR on, the pack is compiled with `EL_RR_ACTIVE` and writes `el_rrDiffuse`, `el_rrSpecular`, `el_rrNormal` (render-size
@@ -479,7 +479,7 @@ RR tonemapped and clipped (the LDR cut, §11.1); RR softens the floor texture un
 volumetric haze is composited over it); the sun's penumbrae are a little softer. Not checked: FSR frame generation with
 RR, the Nether/End, Windows.
 
-## 12. Intel XeSS Super Resolution (`feat/xess`, 2026-11-16)
+## 12. Intel XeSS Super Resolution (2026-11-16)
 
 **Windows only, not run yet.** Intel ships XeSS for Windows only: the SDK release (`intel/xess` on GitHub, latest
 **v3.0.2**, 2026-07-24) contains `libxess.dll` (DX12 + Vulkan), `libxess_dx11.dll`, `libxess_fg.dll` and `libxell.dll`, and
@@ -545,5 +545,5 @@ when cycling, and a config that says `xess` runs FSR (status "Windows x86_64 onl
 * `final`'s `texelFetch` of other render-size targets (Complementary only behind options that are off in the target
   settings) would read the wrong texels.
 * DLSS needs the user-built shim and one restart after installing it; only tested on this RTX 4070 Ti / 615.78.08.
-* The DLSS all-scene image comparison and FSR/DLSS Performance image runs were cut short (GPU handed to the user).
+* The DLSS all-scene image comparison and FSR/DLSS Performance image runs were cut short (the GPU was needed elsewhere).
 * XeSS (§12) is untested: Windows only, the list there has to be run on Windows; no responsive mask for XeSS.
