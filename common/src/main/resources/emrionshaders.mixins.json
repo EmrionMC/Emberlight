@@ -83,7 +83,8 @@
     "FrameGenQueueIdleMixin",
     "FrameGenQueueFamilyMixin",
     "DebugScreenEntriesAccessor",
-    "DebugScreenOverlayMixin"
+    "DebugScreenOverlayMixin",
+    "DebugEntryFpsMixin"
   ],
   "injectors": {
     "defaultRequire": 1

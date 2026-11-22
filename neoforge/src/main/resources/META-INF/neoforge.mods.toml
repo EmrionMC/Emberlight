@@ -25,6 +25,9 @@ config = "emrionshaders.iris.mixins.json"
 config = "emrionshaders.bbe.mixins.json"
 
 [[mixins]]
+config = "emrionshaders.betterf3.mixins.json"
+
+[[mixins]]
 config = "emrionshaders.sodium.mixins.json"
 
 [[dependencies.emberlight]]

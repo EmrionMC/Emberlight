@@ -84,7 +84,9 @@ public final class Presenter {
 	public static volatile long presents, interpolatedPresents, skipped;
 	/** Presents in the last full second (0 while stopped): what the screen gets, as opposed to MC's rendered FPS. */
 	public static volatile int presentedFps;
-	private static long fpsStart, fpsPresents;
+	/** Interpolated presents per second, over the same window as {@link #presentedFps}. */
+	private static volatile int generatedFps;
+	private static long fpsStart, fpsPresents, fpsInterpolated;
 
 	public static boolean running() {
 		return thread != null;
@@ -235,7 +237,7 @@ public final class Presenter {
 			Thread.currentThread().interrupt();
 		}
 		thread = null;
-		presentedFps = 0;
+		presentedFps = generatedFps = 0;
 		fpsStart = 0;
 		if (!drained || t.isAlive()) {
 			abandon("thread did not exit");
@@ -363,9 +365,13 @@ public final class Presenter {
 		presents++;
 		PRESENTS.frame();
 		if (lastPresent - fpsStart >= 1_000_000_000L) {
-			if (fpsStart != 0) presentedFps = (int) Math.round((presents - fpsPresents) * 1e9 / (lastPresent - fpsStart));
+			if (fpsStart != 0) {
+				presentedFps = (int) Math.round((presents - fpsPresents) * 1e9 / (lastPresent - fpsStart));
+				generatedFps = (int) Math.round((interpolatedPresents - fpsInterpolated) * 1e9 / (lastPresent - fpsStart));
+			}
 			fpsStart = lastPresent;
 			fpsPresents = presents;
+			fpsInterpolated = interpolatedPresents;
 		}
 	}
 
@@ -374,6 +380,24 @@ public final class Presenter {
 		int shown = thread != null ? presentedFps : 0;
 		if (FrameGen.bypassed()) return rendered + " FPS (frame generation paused: at refresh rate)";
 		return shown > 0 ? shown + " FPS (" + rendered + " rendered)" : rendered + " FPS";
+	}
+
+	/**
+	 * F3's FPS line ("60 fps T: ...", BetterF3 "60 fps / ...") while frame generation presents: the shown rate first and the
+	 * generated frames after its unit ("120 fps (60 generated) T: ..."). Unchanged without frame generation, while paused, or
+	 * while no frame was interpolated in the last sample (generator failed or stopping).
+	 */
+	public static String withGenerated(String line) {
+		return thread == null || FrameGen.bypassed() || FrameGenConfig.effective() == FrameGenConfig.Mode.OFF ? line
+				: withGenerated(line, net.minecraft.client.Minecraft.getInstance().getFps(), presentedFps, generatedFps);
+	}
+
+	static String withGenerated(String line, int rendered, int shown, int generated) {
+		String prefix = rendered + " ";
+		if (shown <= 0 || generated <= 0 || !line.startsWith(prefix)) return line;
+		int unit = line.indexOf(' ', prefix.length());
+		if (unit < 0) unit = line.length();
+		return shown + line.substring(prefix.length() - 1, unit) + " (" + generated + " generated)" + line.substring(unit);
 	}
 
 	/** Keeps the most severe result (OUT_OF_DATE over SUBOPTIMAL over SUCCESS) until {@link #takeResult}. */
