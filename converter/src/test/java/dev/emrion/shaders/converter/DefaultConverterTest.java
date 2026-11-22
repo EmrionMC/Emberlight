@@ -110,7 +110,7 @@ class DefaultConverterTest {
 		public ProgramAnalysis analyze(List<PreprocessedStage> stages) {
 			var first = stages.getFirst();
 			return new ProgramAnalysis(first.program(), first.group(), stages, List.of(), List.of(), List.of(), List.of(),
-					List.of(), List.of(), List.of(), List.of());
+					List.of(), List.of());
 		}
 
 		public EmitResult emit(ProgramAnalysis analysis, EmitContext context, String vertexVariant) {
@@ -180,7 +180,7 @@ class DefaultConverterTest {
 		assertNull(programs.get("gbuffers_basic").stages().geometry());
 
 		Path dir = r.outputDir();
-		assertEquals(out.resolve("cache").resolve(r.manifest().cacheKey()), dir);
+		assertEquals(CacheDir.current(out.resolve("cache"), r.manifest().cacheKey()), dir);
 		assertTrue(Files.isRegularFile(dir.resolve("manifest.json")));
 		assertTrue(Files.readString(dir.resolve("report.json")).contains("\"ok\": true"));
 		assertTrue(Files.isRegularFile(dir.resolve("src/world0/gbuffers_basic.vsh.position.glsl")));

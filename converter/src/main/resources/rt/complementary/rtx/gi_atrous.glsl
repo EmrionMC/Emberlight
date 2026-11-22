@@ -12,7 +12,7 @@ shared vec3 emrGiShP[144];
 
 float emrGiTapWeight(int x, int y, vec4 g, vec3 pos, float tol, vec4 gq, vec3 pq) {
 	const float k[3] = float[](0.375, 0.25, 0.0625);
-	return k[abs(x)] * k[abs(y)] * pow(max(dot(gq.xyz, g.xyz), 0.0), 32.0) * exp(-abs(dot(g.xyz, pq - pos)) / tol);
+	return k[abs(x)] * k[abs(y)] * emrPow32(max(dot(gq.xyz, g.xyz), 0.0)) * exp(-abs(dot(g.xyz, pq - pos)) / tol);
 }
 
 float emrGiTol(vec4 g, int step, vec4 b) {
@@ -25,7 +25,8 @@ void emrGiAtrousDirect(ivec2 p, ivec2 size, int step, out vec4 a, out vec4 b, ou
 	b = emrGiSrcB(p);
 	c = emrGiSrcC(p);
 	if (g.w <= 0.0) return;
-	vec3 pos = emrGiPos(p, g.w);
+	EmrGiRays rays = emrGiRays();
+	vec3 pos = emrGiTapPos(rays, p, g.w);
 	float tol = emrGiTol(g, step, b);
 	vec4 sa = vec4(0.0), sb = vec4(0.0), sc = vec4(0.0);
 	float ws = 0.0;
@@ -35,7 +36,7 @@ void emrGiAtrousDirect(ivec2 p, ivec2 size, int step, out vec4 a, out vec4 b, ou
 			if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, size))) continue;
 			vec4 gq = imageLoad(emrGiGcur, q);
 			if (gq.w <= 0.0) continue;
-			vec3 pq = emrGiPos(q, gq.w);
+			vec3 pq = emrGiTapPos(rays, q, gq.w);
 			float w = emrGiTapWeight(x, y, g, pos, tol, gq, pq);
 			sa += w * emrGiSrcA(q);
 			sb += w * emrGiSrcB(q);
@@ -68,6 +69,7 @@ void emrGiAtrous(ivec2 size, int step, out ivec2 p, out bool inside, out vec4 a,
 		if (inside) emrGiAtrousDirect(p, size, step, a, b, c);
 		return;
 	}
+	EmrGiRays rays = emrGiRays();
 	for (int i = int(gl_LocalInvocationIndex); i < 144; i += 64) {
 		ivec2 q = origin + ivec2(i % 12, i / 12) - 2;
 		vec4 gq = vec4(0.0), aq = vec4(0.0), bq = vec4(0.0), cq = vec4(0.0);
@@ -77,7 +79,7 @@ void emrGiAtrous(ivec2 size, int step, out ivec2 p, out bool inside, out vec4 a,
 			aq = emrGiSrcA(q);
 			bq = emrGiSrcB(q);
 			cq = emrGiSrcC(q);
-			if (gq.w > 0.0) pq = emrGiPos(q, gq.w);
+			if (gq.w > 0.0) pq = emrGiTapPos(rays, q, gq.w);
 		}
 		emrGiShG[i] = gq;
 		emrGiShA[i] = aq;

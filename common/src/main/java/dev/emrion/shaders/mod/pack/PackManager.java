@@ -28,7 +28,6 @@ import dev.emrion.shaders.mod.rt.RtScene;
 import dev.emrion.shaders.mod.runtime.FrameExecutor;
 import dev.emrion.shaders.mod.runtime.PackPipelines;
 import dev.emrion.shaders.mod.runtime.PackRuntime;
-import dev.emrion.shaders.mod.uniforms.StubUniformSystem;
 import dev.emrion.shaders.mod.uniforms.IrisUniformSystem;
 import dev.emrion.shaders.mod.uniforms.UniformSystem;
 import dev.emrion.shaders.mod.vertex.BlockIdTable;
@@ -552,7 +551,9 @@ public final class PackManager {
 	/** The executor while it renders a level (between LevelRenderer.render HEAD and the end of the plan), else null. */
 	public static @Nullable FrameExecutor levelExecutor() {
 		FrameExecutor e = executor;
-		return e != null && e.inLevel() && selected != null ? e : null; // a failure clears selected: vanilla from the next hook on
+		// not cleared by a failure (selected = null): the open phase keeps the pack's pipelines (MC would set vanilla ones
+		// in our MRT pass), the aborted executor opens no more; fail()'s teardown runs before the next frame
+		return e != null && e.inLevel() ? e : null;
 	}
 
 	/** True while a pack is installed and renders the world. */
@@ -604,7 +605,7 @@ public final class PackManager {
 		return s != 0 && selected != null && enabled && System.nanoTime() - s < HOLD_NS;
 	}
 
-	/** A geometry hook failed in the middle of a frame: disable the pack; the rest of the frame renders vanilla. */
+	/** A hook failed in the middle of a frame: disable the pack (once); vanilla from the next frame. */
 	public static void frameFailed(Throwable t) {
 		if (selected != null) fail("Shader pack " + selected + " failed", t);
 	}
@@ -670,7 +671,7 @@ public final class PackManager {
 		try {
 			e.finish();
 		} catch (Throwable t) {
-			fail("Shader pack " + selected + " failed", t);
+			frameFailed(t); // not twice if a hook already failed in this frame
 		}
 	}
 
@@ -879,10 +880,7 @@ public final class PackManager {
 	}
 
 	private static void resizeTimed(Loaded l, int width, int height) {
-		if (runtime != null) {
-			executor.close();
-			runtime.destroyLater();
-		}
+		if (runtime != null) runtime.destroyLater();
 		runtime = null;
 		executor = null;
 		var dim = l.manifest().dimensions().get(current.folder());
@@ -982,8 +980,8 @@ public final class PackManager {
 	}
 
 	private static void deactivateKeepingFormats() {
-		if (executor != null) executor.close();
 		if (runtime != null) runtime.destroyLater();
+		PackRuntime.releaseShared();
 		if (current != null) current.pipelines().destroyLater();
 		executor = null;
 		runtime = null;
@@ -994,6 +992,8 @@ public final class PackManager {
 	/** Disables the pack (until selected again), reports in chat, logs the stack trace; MC renders vanilla from the next frame. */
 	private static void fail(String what, Throwable t) {
 		EmrionShadersClient.LOG.error(what, t);
+		FrameExecutor running = executor;
+		if (running != null) running.abort(); // the rest of this frame: only the open phase, no more plan passes
 		String pack = selected;
 		generation++;
 		switchStart = 0;
@@ -1008,7 +1008,9 @@ public final class PackManager {
 			errors.add(String.valueOf(t));
 		}
 		dev.emrion.shaders.mod.gui.LoadingHud.failed(pack != null ? pack : "Emberlight", what + ": " + t.getMessage() + ", back to vanilla rendering");
-		Minecraft.getInstance().execute(() -> {
+		// queued, never inline: on the render thread mid-frame execute() would run it now and pull the executor and vertex
+		// formats from under the open pass; the queue runs at the start of the next tick, before its frame
+		Minecraft.getInstance().schedule(() -> {
 			try {
 				if (stale != null) stale.pipelines().destroyLater();
 				deactivate();

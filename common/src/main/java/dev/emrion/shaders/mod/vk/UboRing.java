@@ -36,6 +36,11 @@ public final class UboRing {
 		return region * regionSize + offset;
 	}
 
+	/** Descriptor range for a binding at {@code offset}: the rest of its region (whole-buffer ranges can pass maxUniformBufferRange). */
+	public long range(long offset) {
+		return regionSize - offset % regionSize;
+	}
+
 	public long address(long offset) {
 		return buffer.mapped + offset;
 	}

@@ -173,9 +173,11 @@ public final class EmrionShadersClient {
 		dev.emrion.shaders.mod.framegen.Reflex.shutdown(); // after the presenter: no more markers or presents
 		dev.emrion.shaders.mod.upscale.VanillaUpscale.shutdown();
 		dev.emrion.shaders.mod.hdr.Hdr.shutdown();
+		dev.emrion.shaders.mod.vk.FfxPass.shutdown(VulkanContext.get()); // after every FSR user above
 		dev.emrion.shaders.mod.upscale.Dlss.shutdown(VulkanContext.get()); // before MC destroys the device
 		dev.emrion.shaders.mod.runtime.HorizonBox.close();
 		dev.emrion.shaders.mod.debug.HitchLog.shutdown();
+		dev.emrion.shaders.mod.debug.Profiler.shutdown();
 		dev.emrion.shaders.mod.debug.TerrainStats.shutdown();
 		dev.emrion.shaders.mod.pipeline.TerrainPrepass.shutdown();
 		dev.emrion.shaders.mod.rt.RtDebugView.shutdown();

@@ -135,6 +135,12 @@ public final class Profiler {
 		resetAcc();
 	}
 
+	/** Client stopping: the query pool goes before MC destroys the device. */
+	public static void shutdown() {
+		frameActive = false;
+		if (pool != null) close();
+	}
+
 	private static void close() {
 		pool.close();
 		pool = null;

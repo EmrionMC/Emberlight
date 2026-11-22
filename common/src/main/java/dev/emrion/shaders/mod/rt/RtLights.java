@@ -9,6 +9,7 @@ import dev.emrion.shaders.mod.vk.UboRing;
 import dev.emrion.shaders.mod.vk.VulkanContext;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -57,8 +58,8 @@ public final class RtLights {
 	private static final Map<Long, int[]> SECTIONS = new ConcurrentHashMap<>();
 	private static final AtomicInteger VERSION = new AtomicInteger();
 	/** Set while an RtScene exists: compile workers collect lights only then. */
-	static volatile boolean collecting;
-	/** Lights a recompile added or removed (world x, y, z, level), for the GI history reset; drained at upload. */
+	public static volatile boolean collecting;
+	/** Lights a recompile added or removed (world x, y, z, level, world generation), for the GI history reset; drained at upload. */
 	private static final java.util.concurrent.ConcurrentLinkedQueue<int[]> CHANGED = new java.util.concurrent.ConcurrentLinkedQueue<>();
 	/** Frames the change box stays (the light list can change a frame before or after the mesh), and the history cap inside it. */
 	private static final int CHANGE_FRAMES = 4, CHANGE_CAP = 3;
@@ -68,9 +69,11 @@ public final class RtLights {
 	static final int DIODE_LEVEL = 7;
 	private static final ThreadLocal<int[]> FOUND = ThreadLocal.withInitial(() -> new int[17]); // [0] = count
 	/** When this worker's compile began (System.nanoTime), and when each section was last emptied or everything cleared: a compile older than either is stale. */
-	private static final ThreadLocal<long[]> STARTED = ThreadLocal.withInitial(() -> new long[1]);
+	private static final ThreadLocal<long[]> STARTED = ThreadLocal.withInitial(() -> new long[2]); // [1] = worldGeneration then
 	private static final Map<Long, Long> EMPTIED = new ConcurrentHashMap<>();
 	private static volatile long clearedAt = Long.MIN_VALUE;
+	/** Bumped last in {@link #clear}: a change queued by a compile that passed its checks just before is dropped at the drain. */
+	private static volatile int worldGeneration;
 	/** How long emptied marks are kept: far longer than any compile runs. */
 	private static final long EMPTIED_KEEP_NS = 60_000_000_000L;
 	private static int pruneAt = 4096; // client thread (emptied)
@@ -84,7 +87,7 @@ public final class RtLights {
 	private final RawBuffer staging;
 	private final float[] cellWeight = new float[CELL_WORDS];
 	private static final float REDUNDANT = 8f;
-	private final java.util.HashSet<Long> positions = new java.util.HashSet<>(); // rebuild: every listed light's block
+	private final LongOpenHashSet positions = new LongOpenHashSet(); // rebuild: every listed light's block
 	/** Uploaded every frame; {@code back} is rebuilt (on the render thread or a worker, see {@link #upload}) and then swapped in. */
 	private Lists front = new Lists(), back = new Lists();
 	private @Nullable CompletableFuture<Void> building;
@@ -111,7 +114,12 @@ public final class RtLights {
 
 	RtLights() {
 		buffer = new RawBuffer(ctx, SIZE, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false, "rt lights");
-		staging = new RawBuffer(ctx, SIZE * UboRing.REGIONS, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true, "rt lights staging");
+		try {
+			staging = new RawBuffer(ctx, SIZE * UboRing.REGIONS, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true, "rt lights staging");
+		} catch (RuntimeException e) {
+			buffer.destroyLater();
+			throw e;
+		}
 		keyIndex.defaultReturnValue(-1);
 	}
 
@@ -124,7 +132,10 @@ public final class RtLights {
 		clearedAt = System.nanoTime();
 		SECTIONS.clear();
 		EMPTIED.clear();
+		CHANGED.clear(); // the old world's unload changes must not reset GI in the next scene
 		VERSION.incrementAndGet();
+		worldGeneration++; // render thread only (RtScene.shutdown)
+
 	}
 
 	private static boolean[] defaults() {
@@ -172,7 +183,9 @@ public final class RtLights {
 
 	public static void begin() {
 		FOUND.get()[0] = 0;
-		STARTED.get()[0] = System.nanoTime();
+		long[] st = STARTED.get();
+		st[1] = worldGeneration; // before the start time: a clear() after either makes the compile stale (gen or clearedAt)
+		st[0] = System.nanoTime();
 	}
 
 	/**
@@ -203,6 +216,7 @@ public final class RtLights {
 	public static void end(SectionPos section) {
 		if (!collecting) return;
 		long start = STARTED.get()[0];
+		int gen = (int) STARTED.get()[1]; // taken when the compile began: a clear() since has bumped it
 		Long gone = EMPTIED.get(section.asLong());
 		// shortcut: the snapshot a compile reads is taken before it begins; a section emptied in between still publishes (rare: queue latency)
 		if (start <= clearedAt || gone != null && gone >= start) return; // began before the world was cleared or the section emptied: its lights are gone
@@ -227,8 +241,8 @@ public final class RtLights {
 		if ((prev != null || f[0] > 0) && !(prev != null && java.util.Arrays.equals(prev, 0, prev.length, f, 1, f[0] + 1))) {
 			VERSION.incrementAndGet();
 			int[] now = java.util.Arrays.copyOfRange(f, 1, f[0] + 1);
-			diff(section, prev == null ? new int[0] : prev, now);
-			diff(section, now, prev == null ? new int[0] : prev);
+			diff(section, prev == null ? new int[0] : prev, now, gen);
+			diff(section, now, prev == null ? new int[0] : prev, gen);
 		}
 	}
 
@@ -246,17 +260,17 @@ public final class RtLights {
 		int[] prev = SECTIONS.remove(section);
 		if (prev == null) return;
 		VERSION.incrementAndGet();
-		diff(SectionPos.of(section), prev, new int[0]);
+		diff(SectionPos.of(section), prev, new int[0], worldGeneration);
 	}
 
 	/** Queues every light of {@code a} that {@code b} does not hold. */
-	private static void diff(SectionPos section, int[] a, int[] b) {
+	private static void diff(SectionPos section, int[] a, int[] b, int gen) {
 		int[] sorted = b.clone();
 		java.util.Arrays.sort(sorted);
 		boolean all = Boolean.getBoolean("emrion.rt.allLightChanges");
 		for (int packed : a)
 			if (java.util.Arrays.binarySearch(sorted, packed) < 0 && (all || !weakSource(packed >>> 17)))
-				CHANGED.add(new int[] {section.minBlockX() + (packed & 15), section.minBlockY() + (packed >> 4 & 15), section.minBlockZ() + (packed >> 8 & 15), packed >> 12 & 15});
+				CHANGED.add(new int[] {section.minBlockX() + (packed & 15), section.minBlockY() + (packed >> 4 & 15), section.minBlockZ() + (packed >> 8 & 15), packed >> 12 & 15, gen});
 	}
 
 	/**
@@ -273,7 +287,9 @@ public final class RtLights {
 	private void collectChanges() {
 		long now = System.nanoTime();
 		if (lastChange.size() > 4096) lastChange.values().removeIf(t -> now - t > FLICKER_NS);
+		int gen = worldGeneration;
 		for (int[] c; (c = CHANGED.poll()) != null; ) {
+			if (c[4] != gen) continue; // queued for the previous world
 			int r = c[3] + CHANGE_REACH;
 			Lists f = front;
 			if (c[0] + r < f.ox || c[0] - r > f.ox + GX * CELL || c[1] + r < f.oy || c[1] - r > f.oy + GY * CELL || c[2] + r < f.oz || c[2] - r > f.oz + GZ * CELL) continue;
@@ -439,10 +455,13 @@ public final class RtLights {
 			int sz0 = (oz - r) >> 4, sz1 = (oz + GZ * CELL + r) >> 4;
 			boolean[] on = enabled;
 			positions.clear();
+			// each section looked up once (boxed key): both passes then also see the same lists while workers publish
+			int[][] lists = new int[(sx1 - sx0 + 1) * (sy1 - sy0 + 1) * (sz1 - sz0 + 1)][];
+			int n = 0;
 			for (int sx = sx0; sx <= sx1; sx++)
 				for (int sy = sy0; sy <= sy1; sy++)
 					for (int sz = sz0; sz <= sz1; sz++) {
-						int[] list = SECTIONS.get(SectionPos.asLong(sx, sy, sz));
+						int[] list = lists[n++] = SECTIONS.get(SectionPos.asLong(sx, sy, sz));
 						if (list != null) for (int packed : list) if (capped(packed) > 0)
 							positions.add(BlockPos.asLong(sx * 16 + (packed & 15), sy * 16 + (packed >> 4 & 15), sz * 16 + (packed >> 8 & 15)));
 					}
@@ -451,10 +470,11 @@ public final class RtLights {
 			allCount = 0;
 			keyIndex.clear();
 			int pairs = 0;
+			n = 0;
 			for (int sx = sx0; sx <= sx1; sx++)
 				for (int sy = sy0; sy <= sy1; sy++)
 					for (int sz = sz0; sz <= sz1; sz++) {
-						int[] list = SECTIONS.get(SectionPos.asLong(sx, sy, sz));
+						int[] list = lists[n++];
 						if (list == null) continue;
 						for (int packed : list) {
 							int x = sx * 16 + (packed & 15), y = sy * 16 + (packed >> 4 & 15), z = sz * 16 + (packed >> 8 & 15);

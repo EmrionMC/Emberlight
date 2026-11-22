@@ -36,6 +36,22 @@ vec3 emrBlPixelPos(ivec2 p, ivec2 size, float dist) {
 	return e + d * (sqrt(max(b * b - dot(e, e) + dist * dist, 0.0)) - b); // |e + d t| = dist
 }
 
+// emrBlDir before its normalize, as o + p.x * dx + p.y * dy: a perspective projection's inverse gives every (x, y, -1, 1)
+// the same w (jitter included), so the ray is affine in the pixel. Filter taps use it (emrBlTapPos) instead of two matrix products.
+struct EmrBlRays { vec3 o, dx, dy; };
+EmrBlRays emrBlRays(ivec2 size) {
+	vec2 s = 2.0 / vec2(size);
+	vec4 v = gbufferProjectionInverse * vec4(s * 0.5 - 1.0, -1.0, 1.0); // pixel (0, 0)
+	mat3 m = mat3(gbufferModelViewInverse);
+	return EmrBlRays(m * (v.xyz / v.w), m * (gbufferProjectionInverse[0].xyz * (s.x / v.w)), m * (gbufferProjectionInverse[1].xyz * (s.y / v.w)));
+}
+
+vec3 emrBlTapPos(EmrBlRays r, ivec2 p, float dist) { // = emrBlPixelPos(p, size, dist)
+	vec3 e = gbufferModelViewInverse[3].xyz, d = normalize(r.o + r.dx * float(p.x) + r.dy * float(p.y));
+	float b = dot(e, d);
+	return e + d * (sqrt(max(b * b - dot(e, e) + dist * dist, 0.0)) - b);
+}
+
 // The pixel (texel units) where playerPos-space point x was last frame.
 bool emrBlPrevTexel(vec3 x, ivec2 size, out vec2 t) {
 	vec4 c = gbufferPreviousProjection * (gbufferPreviousModelView * vec4(x + cameraPosition - previousCameraPosition, 1.0));

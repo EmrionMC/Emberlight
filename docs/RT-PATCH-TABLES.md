@@ -107,6 +107,7 @@ code that is live with the current settings.
 | `body` | snippet file. By default it **replaces the function body**, and it can use the parameters by name |
 | `after` | a statement in the function (GLSL tokens, whitespace ignored, must occur exactly once). The body is inserted after it |
 | `find` | a token sequence in the function (exactly once). It is replaced by the body |
+| `statements` | with `find`: replace this many whole statements starting at `find` (counted as for lifts), so `find` can be a short anchor instead of a quote of the pack's code |
 | `programs` | only patch these programs. A stage that matches some of a program's patches must match all of them |
 | `needs` | pack symbols only this body uses, which must be declared before this function |
 | `optional` | `true`: a stage of one of `programs` need not match this patch. For two patches on code a pack setting switches between, where either one is enough |
@@ -136,7 +137,7 @@ Complementary table uses this so that Emberlight ships only its own glue, never 
 | `text` | instead of `at`: take nothing from the pack, the marker becomes this text when the program has `function`, else `otherwise`. For a call or argument list that must follow a signature that differs between pack versions |
 
 Every name the statements use must be declared in front of the marker (by the snippet, the patched function or the stage's
-globals) or be a GLSL built-in, so a lift never inserts code that would not compile. A snippet can declare locals with the
+globals, or an earlier marker's statements in the same snippet) or be a GLSL built-in, so a lift never inserts code that would not compile. A snippet can declare locals with the
 pack's names in a nested `{ }` scope to feed its own values into the lifted statements.
 
 ## The helper API (`rt/emrion_rt.glsl`)

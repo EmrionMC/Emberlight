@@ -71,7 +71,6 @@ final class P {
 	ResolvedPack.ProgramSource source() { return new ResolvedPack.ProgramSource(name, true, stages()); }
 
 	Transpiler.ProgramAnalysis analysis() {
-		return new Transpiler.ProgramAnalysis(name, group, stages(), uniforms, samplers, images, buffers, List.of(), List.of(),
-				List.of(), List.of());
+		return new Transpiler.ProgramAnalysis(name, group, stages(), uniforms, samplers, images, buffers, List.of(), List.of());
 	}
 }

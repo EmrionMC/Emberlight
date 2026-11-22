@@ -3,7 +3,7 @@
 // sampling over the cell's whole list: an exact draw, M = 1), its visibility (an occluded sample is dropped, so reuse spreads
 // visible ones), then temporal reuse of last frame's final reservoir at the reprojected point.
 layout(local_size_x = 8, local_size_y = 8) in;
-const vec2 workGroupsRender = vec2(1.0, 1.0);
+const vec2 workGroupsRender = vec2($res, $res);
 layout(rgba32ui) uniform writeonly uimage2D emrBlRes;
 layout(rgba32ui) uniform readonly uimage2D emrBlResH;
 layout(rgba16f) uniform writeonly image2D emrBlG;
@@ -49,9 +49,17 @@ void emrBlCandidate(uint i, vec4 bp, vec4 bc, vec3 q, vec3 qa, vec3 n, inout vec
 // The cell's list staged through shared memory, 64 records at a time, when every pixel of the 8x8 group with a surface reads
 // the same cell (most groups): one coalesced load per record instead of a dependent index -> position -> colour chain per
 // pixel and source. Groups that straddle cells walk the list directly. Same candidates in the same order either way.
-shared uint emrBlSFirst, emrBlSEnd, emrBlSMixed;
+// Staging also drops the sources that reach no pixel of the group (blocklight:groupCull): a source past its range from the
+// group's box (plus the up to ~1.3 blocks emrBlCandidate may move it) has window 0 at every pixel, so the result is the same,
+// only the order of the kept candidates changes. A cell list holds every source reaching any of its 8x8x8 blocks; a pixel
+// group usually reaches only part of them.
+shared uint emrBlSFirst, emrBlSEnd, emrBlSMixed, emrBlSN;
 shared uint emrBlSIdx[64];
 shared vec4 emrBlSPos[64], emrBlSCol[64];
+shared uint emrBlSBox[6]; // the group's q box: min xyz, max xyz as order-preserving uints
+
+uint emrBlOrd(float f) { uint u = floatBitsToUint(f); return (u & 0x80000000u) != 0u ? ~u : u | 0x80000000u; }
+float emrBlUnord(uint u) { return uintBitsToFloat((u & 0x80000000u) != 0u ? u & 0x7FFFFFFFu : ~u); }
 
 void main() {
 	ivec2 p = ivec2(gl_GlobalInvocationID.xy), size = imageSize(emrBlG);
@@ -82,11 +90,17 @@ void main() {
 		emrBlSFirst = ~0u;
 		emrBlSEnd = 0u;
 		emrBlSMixed = 0u;
+		emrBlSBox[0] = emrBlSBox[1] = emrBlSBox[2] = ~0u;
+		emrBlSBox[3] = emrBlSBox[4] = emrBlSBox[5] = 0u;
 	}
 	barrier();
 	if (go) {
 		atomicMin(emrBlSFirst, first);
 		atomicMax(emrBlSEnd, end);
+		if (emrRt_blocklight_groupCull != 0) for (int c = 0; c < 3; c++) {
+			atomicMin(emrBlSBox[c], emrBlOrd(q[c]));
+			atomicMax(emrBlSBox[c + 3], emrBlOrd(q[c]));
+		}
 	}
 	barrier();
 	if (go && (first != emrBlSFirst || end != emrBlSEnd)) atomicOr(emrBlSMixed, 1u);
@@ -98,9 +112,30 @@ void main() {
 	float best = -99.0, bestFlush = -99.0, sum = 0.0, chosen = 0.0;
 	uint li = ~0u, h = emrBlHash(uvec3(p, uint(frameCounter)));
 	if (staged) {
+		// short lists (a lava pool's cells) lose more to the extra barrier than the cull saves
+		bool cull = emrRt_blocklight_groupCull != 0 && sEnd - sFirst > 64u;
+		vec3 bmin = vec3(0.0), bmax = vec3(0.0);
+		if (cull) {
+			bmin = vec3(emrBlUnord(emrBlSBox[0]), emrBlUnord(emrBlSBox[1]), emrBlUnord(emrBlSBox[2]));
+			bmax = vec3(emrBlUnord(emrBlSBox[3]), emrBlUnord(emrBlSBox[4]), emrBlUnord(emrBlSBox[5]));
+		}
 		for (uint b0 = sFirst; b0 < sEnd; b0 += 64u) {
 			barrier(); // the previous chunk is read by everyone
-			if (b0 + lid < sEnd) {
+			if (cull) {
+				if (lid == 0u) emrBlSN = 0u;
+				barrier();
+				if (b0 + lid < sEnd) {
+					uint i = emrBlIndex[b0 + lid];
+					vec4 bp = emrBlPos[i];
+					vec3 l = bp.xyz + emrRtLightOrigin.xyz;
+					if (distance(clamp(l, bmin, bmax), l) < max(floor(bp.w), 1.0) + 1.5) {
+						uint k = atomicAdd(emrBlSN, 1u);
+						emrBlSIdx[k] = i;
+						emrBlSPos[k] = bp;
+						emrBlSCol[k] = emrBlCol[i];
+					}
+				}
+			} else if (b0 + lid < sEnd) {
 				uint i = emrBlIndex[b0 + lid];
 				emrBlSIdx[lid] = i;
 				emrBlSPos[lid] = emrBlPos[i];
@@ -108,7 +143,7 @@ void main() {
 			}
 			barrier();
 			if (go) {
-				uint cnt = min(64u, sEnd - b0);
+				uint cnt = cull ? emrBlSN : min(64u, sEnd - b0);
 				for (uint j = 0u; j < cnt; j++)
 					emrBlCandidate(emrBlSIdx[j], emrBlSPos[j], emrBlSCol[j], q, qa, n, front, flush, back, best, bestFlush, sum, chosen, li, h);
 			}

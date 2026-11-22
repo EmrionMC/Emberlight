@@ -135,13 +135,13 @@ public final class FrameExecutor {
 
 	/** Before MC's main pass (Iris renderShadows): the shadow geometry phases, if the plan has them. */
 	public void renderShadows(net.minecraft.client.renderer.LevelRenderer level) {
-		if (cursor < 0) return;
+		if (cursor < 0 || aborted) return;
 		FaultInjection.maybeThrow("shadow");
 		long t = Profiler.cpuStart(), raw = Profiler.rawSoFar();
 		ShadowPass.render(this, level);
 		Profiler.shadowEnd(t, raw);
 		var rtScene = dev.emrion.shaders.mod.rt.RtScene.get();
-		if (rtScene != null) {
+		if (rtScene != null && rtScene.refreshPending()) { // else an empty submit with MC's global barrier
 			VkCommandBuffer cb = begin();
 			rtScene.refreshEntities(cb);
 			RawCommands.submit(rt.ctx, cb);
@@ -210,6 +210,16 @@ public final class FrameExecutor {
 		Profiler.cpuEnd(Profiler.RAW, t);
 	}
 
+	/**
+	 * The pack failed in this frame (PackManager.fail; torn down before the next one): no further plan commands or phases,
+	 * MC draws the rest vanilla. Its RT passes could read a TLAS this frame never finished building.
+	 */
+	private volatile boolean aborted;
+
+	public void abort() {
+		aborted = true;
+	}
+
 	/** True between {@link #levelStart} and {@link #finish}. */
 	public boolean inLevel() {
 		return cursor >= 0;
@@ -220,7 +230,7 @@ public final class FrameExecutor {
 	 * plan has no such phase. Phases whose hook did not fire this frame (e.g. no sky in the Nether) are passed over.
 	 */
 	public Manifest.@Nullable Command advanceTo(String phaseName) {
-		if (cursor < 0) return null;
+		if (cursor < 0 || aborted) return null;
 		int j = cursor;
 		while (j < dim.frame().size() && !(dim.frame().get(j).cmd().equals("geometry") && dim.frame().get(j).phase().equals(phaseName))) j++;
 		if (j == dim.frame().size()) return null;
@@ -232,6 +242,7 @@ public final class FrameExecutor {
 
 	/** After the level's frame graph: composites, final (into MC's main colour target) and the end-of-frame copies. */
 	public void finish() {
+		if (cursor >= 0 && aborted) cursor = -1; // no composites: one unspecified frame before the teardown
 		if (cursor < 0) return;
 		FaultInjection.maybeThrow("finish");
 		RenderTarget main = Minecraft.getInstance().gameRenderer.mainRenderTarget();
@@ -284,18 +295,26 @@ public final class FrameExecutor {
 		boolean shadow = ctx == GbufferPipelines.Context.SHADOW;
 		for (String t : pp.gbuffers.targets(ctx)) d.withColorAttachment((shadow ? rt.image(t, "main") : rt.read(t, flip)).attachView);
 		d.withDepthAttachment(rt.image(shadow ? "shadowtex0" : "depthtex0", "main").attachView);
+		phaseOffset(phase, stage); // the UBO allocation can throw: before MC's pass is open (cached for setStage below)
 		RenderPass pass = RenderSystem.getDevice().createCommandEncoder().createRenderPass(d.build());
-		groupFlip = flip;
-		group = 0;
-		GeometryHooks.attachmentGroups = !shadow && pp.gbuffers.groups.size() > 1;
-		GeometryPipelines.set = rt.sets[g.flipState()];
-		this.context = ctx;
-		this.phase = phase;
-		this.stage = -1;
-		setStage(stage);
-		phaseLabel = frameLabels[dim.frame().indexOf(g)];
-		dev.emrion.shaders.mod.debug.TerrainStats.phase = phaseLabel;
-		return pass;
+		try {
+			groupFlip = flip;
+			group = 0;
+			GeometryHooks.attachmentGroups = !shadow && pp.gbuffers.groups.size() > 1;
+			GeometryPipelines.set = rt.sets[g.flipState()];
+			this.context = ctx;
+			this.phase = phase;
+			this.stage = -1;
+			setStage(stage);
+			phaseLabel = frameLabels[dim.frame().indexOf(g)];
+			dev.emrion.shaders.mod.debug.TerrainStats.phase = phaseLabel;
+			return pass;
+		} catch (RuntimeException e) { // the caller opens MC's own pass instead: ours must be closed and no phase left open
+			pass.close();
+			endPhase();
+			GeometryHooks.attachmentGroups = false;
+			throw e;
+		}
 	}
 
 	private Manifest.FlipState groupFlip;
@@ -540,7 +559,7 @@ public final class FrameExecutor {
 	private void fullscreen(VkCommandBuffer cb, Manifest.Command c) {
 		var p = dim.programs().get(c.program());
 		declareSet1(p, c.flipState(), SHADER_STAGES);
-		long[] views = new long[c.writes().size()];
+		long[] views = viewScratch(c.writes().size());
 		PackRuntime.Img first = null;
 		int areaW = Integer.MAX_VALUE, areaH = Integer.MAX_VALUE;
 		for (var w : c.writes()) {
@@ -553,6 +572,17 @@ public final class FrameExecutor {
 		}
 		hazards.flush(cb);
 		draw(cb, p, c.program(), c.flipState(), first.width, first.height, areaW, areaH, views);
+	}
+
+	/** Attachment views per attachment count, reused every pass (RawPass.begin reads them at once); zeroed like a new array. */
+	private long[][] viewArrays = new long[9][];
+
+	private long[] viewScratch(int n) {
+		if (n >= viewArrays.length) viewArrays = java.util.Arrays.copyOf(viewArrays, n + 1);
+		long[] v = viewArrays[n];
+		if (v == null) return viewArrays[n] = new long[n];
+		java.util.Arrays.fill(v, 0);
+		return v;
 	}
 
 	private void finalPass(VkCommandBuffer cb, Manifest.Command c) {
@@ -772,6 +802,4 @@ public final class FrameExecutor {
 	}
 
 	private String phaseLabel;
-
-	public void close() {}
 }

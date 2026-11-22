@@ -78,7 +78,7 @@ class ManifestJsonTest {
 
 	@Test
 	void reportWritesLowerCaseSeverity(@TempDir Path dir) throws Exception {
-		var report = new Report(false, 1, 1, 1, List.of(new Diagnostic(Diagnostic.Severity.ERROR, "shaders/x.fsh", 3, "composite", "fragment", "boom")));
+		var report = new Report(false, 1, 1, 1, List.of(new Diagnostic(Diagnostic.Severity.ERROR, "shaders/x.fsh", 3, "composite", "fragment", "boom")), false);
 		ManifestJson.write(dir.resolve("report.json"), report);
 		JsonObject o = JsonParser.parseString(java.nio.file.Files.readString(dir.resolve("report.json"))).getAsJsonObject();
 		assertEquals("error", o.getAsJsonArray("diagnostics").get(0).getAsJsonObject().get("severity").getAsString());

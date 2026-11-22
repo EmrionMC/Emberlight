@@ -16,6 +16,8 @@ import org.spongepowered.asm.mixin.Unique;
 public class VKMultiDrawBatchMixin implements BandedBatch {
 	@Shadow @Final private long pCommands;
 	@Unique private int @Nullable [] emrion$bands;
+	/** A view of the command array, kept: MC reads only its address (position) and takes the count from the call. */
+	@Unique private java.nio.@Nullable IntBuffer emrion$commands;
 
 	@Override
 	public int @Nullable [] emrion$bands() {
@@ -29,7 +31,9 @@ public class VKMultiDrawBatchMixin implements BandedBatch {
 
 	@Override
 	public void emrion$draw(DrawContext context, int from, int to) {
-		int stride = VkMultiDrawIndexedInfoEXT.SIZEOF;
-		context.getPass().multiDrawIndexed(MemoryUtil.memIntBuffer(pCommands + (long) from * stride, (to - from) * stride / 4), 1, 0, to - from);
+		int ints = VkMultiDrawIndexedInfoEXT.SIZEOF / 4;
+		var b = emrion$commands;
+		if (b == null || b.capacity() < to * ints) emrion$commands = b = MemoryUtil.memIntBuffer(pCommands, to * ints);
+		context.getPass().multiDrawIndexed(b.position(from * ints), 1, 0, to - from);
 	}
 }

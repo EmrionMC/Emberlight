@@ -5,7 +5,7 @@
 // with plain 1/M, a lit pixel next to a shadow divided its light by the shadowed neighbours' M, and through the temporal
 // history that compounded into a dark band along every shadow edge (blocklight:bias=0 for the old weights).
 layout(local_size_x = 8, local_size_y = 8) in;
-const vec2 workGroupsRender = vec2(1.0, 1.0);
+const vec2 workGroupsRender = vec2($res, $res);
 layout(rgba32ui) uniform readonly uimage2D emrBlRes;
 layout(rgba32ui) uniform writeonly uimage2D emrBlResH;
 layout(rgba16f) uniform readonly image2D emrBlG;
@@ -51,13 +51,18 @@ void main() {
 	float wsum = target * uintBitsToFloat(r.z) * m;
 	// spatial reuse: neighbours on a disk (radius emrRt_blocklight_radius px), rotated per pixel and frame
 	const int K = emrRt_blocklight_rays >= 8 ? 6 : emrRt_blocklight_rays >= 4 ? 4 : 2;
+	// a full temporal history (M = 1 + mcap after pass A) needs few neighbours: blocklight:spatialMin of them (0 = always K),
+	// each a bias ray less (RTXDI does the same); young history and the light-change box keep all K
+	vec4 ch = emrRt_blocklight_spatialMin > 0 ? emrRtLightChange[0] : vec4(0.0);
+	bool changed = ch.w > 0.0 && all(greaterThanEqual(pos, ch.xyz)) && all(lessThanEqual(pos, emrRtLightChange[1].xyz));
+	int kn = emrRt_blocklight_spatialMin > 0 && m > float(emrRt_blocklight_mcap) && !changed ? min(K, emrRt_blocklight_spatialMin) : K;
 	vec3 nq[K], qq[K]; // the used neighbours' surfaces, for the bias correction
 	float mqs[K];
 	int sel = -1; // which neighbour the sample came from (-1: this pixel)
 	float a0 = 6.2831853 * emrBlRand(seed);
-	for (int j = 0; j < K; j++) {
-		mqs[j] = 0.0;
-		float a = a0 + 2.39996323 * float(j), rad = emrRt_blocklight_radius * sqrt((float(j) + emrBlRand(seed)) / float(K));
+	for (int j = 0; j < K; j++) mqs[j] = 0.0;
+	for (int j = 0; j < kn; j++) {
+		float a = a0 + 2.39996323 * float(j), rad = emrRt_blocklight_radius * sqrt((float(j) + emrBlRand(seed)) / float(kn));
 		ivec2 qp = p + ivec2(round(rad * vec2(cos(a), sin(a))));
 		if (any(lessThan(qp, ivec2(0))) || any(greaterThanEqual(qp, size)) || qp == p) continue;
 		vec4 gq = imageLoad(emrBlG, qp);
@@ -87,7 +92,7 @@ void main() {
 		// came from saw it: its W > 0)
 		z = m;
 		vec2 dk = emrBlDiskOf(r);
-		for (int j = 0; j < K; j++) {
+		for (int j = 0; j < kn; j++) {
 			if (mqs[j] <= 0.0 || j == sel) continue;
 			vec4 lj = emrBlSourceAt(r.x, qq[j], nq[j]);
 			if (emrBlWeight(lj, qq[j], nq[j]) <= 0.0 || emrBlLum(emrBlRay(qq[j], nq[j], emrBlSource(r.x), emrBlDiskPoint(lj, qq[j], dk))) <= 0.0) z -= mqs[j];

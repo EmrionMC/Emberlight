@@ -4,7 +4,6 @@ import static dev.emrion.shaders.mod.vk.Barriers.*;
 import static org.lwjgl.vulkan.VK10.*;
 
 import com.mojang.blaze3d.pipeline.RenderTarget;
-import com.mojang.blaze3d.pipeline.TextureTarget;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.renderpearl.api.GpuFormat;
 import com.mojang.renderpearl.api.textures.FilterMode;
@@ -25,7 +24,6 @@ import dev.emrion.shaders.mod.vk.Descriptors;
 import dev.emrion.shaders.mod.vk.RawBuffer;
 import dev.emrion.shaders.mod.vk.RawCommands;
 import dev.emrion.shaders.mod.vk.RawImage;
-import dev.emrion.shaders.mod.vk.ShaderModules;
 import dev.emrion.shaders.mod.vk.VulkanContext;
 import net.minecraft.client.Minecraft;
 import org.joml.Matrix4f;
@@ -53,9 +51,9 @@ public final class VanillaUpscale {
 
 	/** This frame renders vanilla with upscaling or frame generation; with an upscaler (render target swapped in). */
 	private static boolean frame, upscaling, swapped;
-	private static @Nullable TextureTarget target;
+	private static @Nullable RenderTarget target;
 	private static @Nullable Upscaler upscaler;
-	private static int generation = -1, failedGeneration = -1;
+	private static int generation = -1, failedGeneration = -1, failedW, failedH;
 	private static volatile @Nullable String failure;
 
 	private static @Nullable RawImage depth, dummyMotion;
@@ -132,17 +130,33 @@ public final class VanillaUpscale {
 			VulkanCommandEncoder.memoryBarrier(cb, stack);
 		}
 		Upscaler u = upscaler;
-		boolean upscaled = swapped && u != null;
+		boolean upscaled = swapped && u != null, failed = false;
 		// paused frame generation does not read the forward depth (bypass only changes at the blit, after FrameGen.beforeGui)
 		if (upscaled || !FrameGen.bypassed()) depthPass(cb, view(main.getDepthTextureView()), rw, rh, 0, dummyMotion.view);
 		if (upscaled) {
 			long colorImage = ((VulkanGpuTexture) main.getColorTexture()).vkImage();
-			u.dispatch(cb, colorImage, view(main.getColorTextureView()), VK_FORMAT_R8G8B8A8_UNORM, depth.image, depth.view, depth.view, 0, modelView, null, null); // no Ray Reconstruction without a pack (no RT)
+			try {
+				u.dispatch(cb, colorImage, view(main.getColorTextureView()), VK_FORMAT_R8G8B8A8_UNORM, depth.image, depth.view, depth.view, 0, modelView, null, null); // no Ray Reconstruction without a pack (no RT)
+			} catch (RuntimeException e) {
+				// not through renderLevel: the begun command buffer still goes out, and ensure() drops the upscaler next frame
+				EmrionShadersClient.LOG.error("Upscaler without a pack: {} failed", UpscaleConfig.effective().label, e);
+				failure = UpscaleConfig.effective().label + ": " + e.getMessage();
+				failedGeneration = Upscaling.generation();
+				failedW = u.displayW;
+				failedH = u.displayH;
+				generation = -1;
+				upscaled = upscaling = false; // afterHand: no motion from the failed upscaler
+				failed = true;
+			}
 			swapBack();
-			blit(cb, u.output, ((VulkanGpuTexture) main.getColorTexture()).vkImage(), main.width, main.height);
-			Profiler.mark(cb, "vanilla upscale");
+			long dst = ((VulkanGpuTexture) main.getColorTexture()).vkImage();
+			if (upscaled) {
+				blit(cb, u.output.image, u.output.width, u.output.height, dst, main.width, main.height);
+				Profiler.mark(cb, "vanilla upscale");
+			} else blit(cb, ((VulkanGpuTexture) target.getColorTexture()).vkImage(), target.width, target.height, dst, main.width, main.height); // the reduced scene
 		}
 		RawCommands.submit(ctx, cb);
+		if (failed) return; // no frame generation inputs: this frame's depth and motion are render size, not usable
 		FrameGen.capture(rw, rh, depth.image, depth.view, VK_FORMAT_D32_SFLOAT, upscaled ? u.mv : null, modelView);
 	}
 
@@ -187,14 +201,14 @@ public final class VanillaUpscale {
 		}
 	}
 
-	private static void blit(VkCommandBuffer cb, RawImage src, long dst, int w, int h) {
+	private static void blit(VkCommandBuffer cb, long src, int sw, int sh, long dst, int w, int h) {
 		try (MemoryStack stack = MemoryStack.stackPush()) {
 			var region = VkImageBlit.calloc(1, stack);
 			region.srcSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
 			region.dstSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
-			region.srcOffsets(1).set(src.width, src.height, 1);
+			region.srcOffsets(1).set(sw, sh, 1);
 			region.dstOffsets(1).set(w, h, 1);
-			vkCmdBlitImage(cb, src.image, VK_IMAGE_LAYOUT_GENERAL, dst, VK_IMAGE_LAYOUT_GENERAL, region, VK_FILTER_NEAREST);
+			vkCmdBlitImage(cb, src, VK_IMAGE_LAYOUT_GENERAL, dst, VK_IMAGE_LAYOUT_GENERAL, region, VK_FILTER_NEAREST);
 		}
 	}
 
@@ -204,7 +218,7 @@ public final class VanillaUpscale {
 		int gen = Upscaling.generation();
 		if (u != null && generation == gen && u.displayW == dw && u.displayH == dh) return true;
 		releaseUpscaler();
-		if (failedGeneration == gen) return false;
+		if (failedGeneration == gen && failedW == dw && failedH == dh) return false; // a target too big for VRAM may fit at another size
 		int[] r = Upscaling.renderSize(dw, dh);
 		VulkanContext ctx = VulkanContext.get();
 		for (int attempt = 0; attempt < 2 && upscaler == null; attempt++) {
@@ -216,14 +230,29 @@ public final class VanillaUpscale {
 				if (UpscaleConfig.effective() == mode) { // DLSS that just failed falls back to FSR: one more try
 					failure = mode.label + ": " + e.getMessage();
 					failedGeneration = gen;
+					failedW = dw;
+					failedH = dh;
 					return false;
 				}
 			}
 		}
 		if (upscaler == null) return false;
+		RenderTarget t = new RenderTarget("Emberlight render size", GpuFormat.RGBA8_UNORM, GpuFormat.D32_FLOAT) {}; // allocates nothing yet
+		try {
+			t.resize(r[0], r[1]);
+		} catch (RuntimeException e) { // e.g. VRAM full: depth is allocated before colour, free it and drop the upscaler too
+			t.destroyBuffers();
+			releaseUpscaler();
+			EmrionShadersClient.LOG.error("Upscaler without a pack: render target failed", e);
+			failure = "render target: " + e.getMessage();
+			failedGeneration = gen;
+			failedW = dw;
+			failedH = dh;
+			return false;
+		}
+		target = t;
 		failure = null;
-		generation = gen;
-		target = new TextureTarget("Emberlight render size", r[0], r[1], GpuFormat.RGBA8_UNORM, GpuFormat.D32_FLOAT);
+		generation = gen; // only once the target exists
 		EmrionShadersClient.LOG.info("Upscaling without a pack: {} {}x{} -> {}x{}", UpscaleConfig.effective().label, r[0], r[1], dw, dh);
 		return true;
 	}
@@ -234,9 +263,7 @@ public final class VanillaUpscale {
 			setLayout = new Descriptors.LayoutBuilder().add(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, cs).add(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, cs)
 					.add(2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, cs).build(ctx, true);
 			layout = Descriptors.pipelineLayout(ctx, 12, setLayout);
-			long module = ShaderModules.create(ctx, ShaderModules.resource("/assets/emberlight/spv/vanilla_depth.comp.spv"));
-			pipeline = ComputePipelines.create(ctx, module, layout, ctx.pipelineCache().handle);
-			ShaderModules.destroy(ctx, module);
+			pipeline = ComputePipelines.create(ctx, "/assets/emberlight/spv/vanilla_depth.comp.spv", layout);
 			dummyMotion = new RawImage(ctx, VK_FORMAT_R16G16_SFLOAT, 1, 1, 1, 1, VK_IMAGE_USAGE_STORAGE_BIT, "vanilla dummy motion");
 		}
 		if (depth != null && depth.width == w && depth.height == h) return;

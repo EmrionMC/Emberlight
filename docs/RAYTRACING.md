@@ -909,7 +909,7 @@ changed; `TargetPackRtTest.rtxStyleConvertsAndFaithfulHasNoRtxCode`). RTX code l
 | Light shafts | effect `shafts` (composite1) | `GetVolumetricLight` × `strength` 2.5. The pack's shafts already follow the shadow map and take the glass colour from `shadowcolor1`, and the map is exact at this range, so an RT ray per volume step (20+ per pixel) would cost several ms for no visible gain. Not RT-traced. |
 | No glass refraction | request `refraction:glass=0` | RT refraction bent the view through stained glass by its normal map: jagged spikes over whatever is behind. Water still refracts. |
 
-**Quality presets:** the existing switches. GI Low/Medium/High (half res 1 ray / half res 2 rays / full res 2 rays) and RT
+**Quality presets:** the existing switches. GI Low/Medium/High (half res 1 ray / half res 2 rays / full res 2 rays, 1 with the RTX radiance cache) and RT
 block light 2/4/8 rays. "RTX balanced" = GI Low + block light 2 (the last column below).
 
 **Scenes:** `mod/emrion-rtx-scenes.txt` (built in the sky of the scene world): `glass` / `glass_win` (white room, eight
@@ -1123,7 +1123,14 @@ the estimator, `arcs2tools/sim.py`, gives 41 % of U fully occluded on the hall f
 Debug options (RTX block light): `blocklight:ref=1` traces every source of the cell with all disk points (the reference),
 `blocklight:debug=1` colours each pixel by its strongest traced source (brightness = traced share of the weight: the
 region borders are where the old arcs were), `debug=2` is the old estimator (old U, traced mean visibility for the rest),
-`debug=3` the new U with the old rest estimate. `RtConfig` passes `gi:lightRays` when block light is not 4 rays.
+`debug=3` the new U with the old rest estimate.
+`blocklight:groupCull=0` turns off pass A's per-group source cull (same result, hall prepare_f 1.43 -> 1.15 ms with it);
+`blocklight:spatialMin=0` makes pass B use all spatial neighbours everywhere (default 2 where the temporal history is full: hall
+prepare_g 1.46 -> 0.62 ms, lava 0.69 -> 0.30). `RtConfig` passes `gi:lightRays` when block light is not 4 rays.
+`blocklight:res=0.5` (with `gi:blres=0.5`, which sizes GI's copy of `emrBlG` the same) runs the four ReSTIR passes at half
+resolution per axis; the gbuffers look up the nearest half-res texel. Opt-in only: hall ReSTIR 2.11 -> 0.57 ms, lava 1.35 ->
+0.37, and edges and pans look the same, but one of two hall stills showed a speckled 15-pixel patch of block-light noise on
+the floor (a noisy reservoir now covers 2x2 pixels).
 
 ### Measured (reference config: Sodium, RTX, block light 2 rays, GI high; 1920×1080 dev window, FSR in the dev run)
 

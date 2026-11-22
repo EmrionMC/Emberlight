@@ -85,11 +85,38 @@ class CacheTest {
 		assertTrue(Files.exists(a), "starting b left a alone");
 		Path out = CacheDir.commit(a, dir, "k");
 		assertEquals("a", Files.readString(out.resolve("from")));
-		// b replaces a's finished entry; nothing else stays in the cache root
-		assertEquals(out, CacheDir.commit(b, dir, "k"));
-		assertEquals("b", Files.readString(out.resolve("from")));
+		assertEquals(out, CacheDir.current(dir, "k"));
+		// b becomes the current generation; a reader that resolved a keeps all of a's files
+		Path second = CacheDir.commit(b, dir, "k");
+		assertNotEquals(out, second);
+		assertEquals(second, CacheDir.current(dir, "k"));
+		assertEquals("b", Files.readString(second.resolve("from")));
+		assertEquals("a", Files.readString(out.resolve("from")));
+		assertNotNull(CacheDir.readValid(out, "k"));
+		// a day after it was replaced, the next conversion of the key removes a, never the current generation
+		Files.setLastModifiedTime(out, java.nio.file.attribute.FileTime.fromMillis(System.currentTimeMillis() - 2 * 86_400_000L));
+		Files.setLastModifiedTime(second, java.nio.file.attribute.FileTime.fromMillis(System.currentTimeMillis() - 2 * 86_400_000L));
+		Path c = CacheDir.begin(dir, "k");
+		assertFalse(Files.exists(out));
+		assertTrue(Files.exists(second));
+		CacheDir.deleteRecursively(c);
 		try (var s = Files.list(dir)) {
-			assertEquals(List.of(out), s.toList());
+			assertEquals(java.util.Set.of(second, dir.resolve("k.current")), java.util.Set.copyOf(s.toList()));
 		}
+	}
+
+	@Test
+	void beginRemovesDayOldLegacyKeyDirs() throws Exception {
+		var old = java.nio.file.attribute.FileTime.fromMillis(System.currentTimeMillis() - 2 * 86_400_000L);
+		Path stale = Files.createDirectories(dir.resolve("0123456789abcdef01234567")), fresh = Files.createDirectories(dir.resolve("89abcdef0123456789abcdef"));
+		Files.writeString(stale.resolve(CacheDir.MANIFEST), "{}");
+		Files.setLastModifiedTime(stale, old);
+		Path other = Files.createDirectories(dir.resolve("notakey"));
+		Files.setLastModifiedTime(other, old);
+		Path tmp = CacheDir.begin(dir, "0123456789abcdef0123ffff");
+		assertFalse(Files.exists(stale), "day-old legacy dir of another key goes");
+		assertTrue(Files.exists(fresh), "a recent legacy dir stays (old code may be using it)");
+		assertTrue(Files.exists(other), "only key-shaped names are touched");
+		assertTrue(Files.exists(tmp));
 	}
 }

@@ -2,6 +2,7 @@ package dev.emrion.shaders.mod.framegen;
 
 import static org.lwjgl.vulkan.VK10.*;
 
+import dev.emrion.shaders.mod.vk.FfxPass;
 import dev.emrion.shaders.mod.vk.RawImage;
 import java.nio.ByteBuffer;
 import org.lwjgl.vulkan.VkCommandBuffer;
@@ -16,7 +17,7 @@ final class OpticalFlow {
 
 	private final FfxPasses f;
 	private final int w, h;
-	private final FfxPasses.Pass prepareLuma, inputPyramid, scdHistogram, scdDivergence, search, filter, scale;
+	private final FfxPass prepareLuma, inputPyramid, scdHistogram, scdDivergence, search, filter, scale;
 	private final RawImage[][] input = new RawImage[2][LEVELS], flowLevels = new RawImage[2][LEVELS];
 	private final RawImage scdHist, scdPrevHist, scdTemp;
 	final RawImage flow, scd;

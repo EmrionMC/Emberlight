@@ -17,6 +17,7 @@ public final class RawBuffer {
 	public final long size;
 	public final long mapped;
 	private final long allocation;
+	private long address;
 
 	public RawBuffer(VulkanContext ctx, long size, int vkUsage, boolean hostMapped) {
 		this(ctx, size, vkUsage, hostMapped, "buffer");
@@ -42,6 +43,14 @@ public final class RawBuffer {
 			mapped = hostMapped ? allocInfo.pMappedData() : 0L;
 		}
 		dev.emrion.shaders.mod.debug.HitchLog.add(dev.emrion.shaders.mod.debug.HitchLog.BUFFER, start);
+	}
+
+	/** The buffer's device address (needs SHADER_DEVICE_ADDRESS usage); fixed for its life, so looked up once. */
+	public long address() {
+		if (address == 0) try (MemoryStack stack = MemoryStack.stackPush()) {
+			address = org.lwjgl.vulkan.VK12.vkGetBufferDeviceAddress(ctx.vk, org.lwjgl.vulkan.VkBufferDeviceAddressInfo.calloc(stack).sType$Default().buffer(handle));
+		}
+		return address;
 	}
 
 	public void destroyLater() {

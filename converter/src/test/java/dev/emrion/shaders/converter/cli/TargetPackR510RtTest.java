@@ -19,7 +19,7 @@ class TargetPackR510RtTest {
 	static final Path PACK = ROOT.resolve("unbound-euphoria-r510");
 	static final Path SETTINGS = ROOT.resolve("ComplementaryUnbound_r5.10 + EuphoriaPatches_1.11.2.txt");
 	/** sha256 over the RT-off output, as TargetPackRtTest.RT_OFF_GOLDEN. */
-	static final String RT_OFF_GOLDEN = "f93e3dd19dbb87cd67088c6f7fd48ba2920d803b45a37006110bfb730eba59ea";
+	static final String RT_OFF_GOLDEN = "6194961d3560b8b3bd56aa9e1f88fb27b50ee4b8e2e459917e507a3a4667d978";
 	/** What RtConfig.request() asks for with the user's settings (RTX style, full shadows, high GI, 8 block-light rays). */
 	static final Set<String> USER_RT = Set.of("shadows", "shadows:full", "shadows:rays=4", "shadows:entities", "shadows:rtx", "reflections",
 			"reflections:halfRate=1", "materials", "shafts", "refraction", "refraction:entities", "refraction:glass=0", "caustics", "ao",
@@ -27,8 +27,12 @@ class TargetPackR510RtTest {
 			"gi:res=1.0", "prepass", "upscale");
 
 	static Converter.Result convert(Path out, Path settings, Set<String> rt) {
+		return convert(PACK, out, settings, rt);
+	}
+
+	static Converter.Result convert(Path pack, Path out, Path settings, Set<String> rt) {
 		try (var compiler = new ShadercSpirvCompiler()) {
-			return ConverterCli.defaultConverter(compiler).convert(new Converter.Request(PACK, settings, out, null, Converter.ProgressListener.NONE, false, rt));
+			return ConverterCli.defaultConverter(compiler).convert(new Converter.Request(pack, settings, out, null, Converter.ProgressListener.NONE, false, rt));
 		}
 	}
 
@@ -38,6 +42,43 @@ class TargetPackR510RtTest {
 		var r = convert(out, SETTINGS, Set.of());
 		assertNull(r.manifest().rt());
 		assertEquals(RT_OFF_GOLDEN, TargetPackRtTest.dirHash(r.outputDir()));
+		assertFalse(Files.readString(r.outputDir().resolve("src/world0/gbuffers_terrain.fsh.glsl")).contains("emrSets"), "no shadow refinement without upscaler");
+	}
+
+	@Test
+	void upscaleRefinesShadowMapPenumbras(@TempDir Path out) throws Exception {
+		assumeTrue(Files.isDirectory(PACK) && Files.isRegularFile(SETTINGS));
+		var r = convert(out, SETTINGS, Set.of("upscale"));
+		assertEquals(0, r.stagesFailed());
+		assertEquals(Map.of(), r.manifest().rt().unavailable());
+		for (String p : new String[]{"gbuffers_terrain", "gbuffers_entities", "gbuffers_water", "gbuffers_hand"})
+			assertTrue(Files.readString(r.outputDir().resolve("src/world0/" + p + ".fsh.glsl")).contains("emrSets = min(int(min(emrPx, 12.0) * 0.25) + 1, clamp(16 / shadowSamples, 1, 4))"), p);
+	}
+
+	@Test
+	void shadowRefinementIsLeftOutWhenATapStatementDiffers(@TempDir Path tmp) throws Exception {
+		assumeTrue(Files.isDirectory(PACK) && Files.isRegularFile(SETTINGS));
+		// the loop head still matches, but the lift of the second tap fails: only that optional patch goes, upscaling stays
+		Path pack = tmp.resolve("unbound-euphoria-r510");
+		try (var w = Files.walk(PACK)) {
+			for (Path f : w.toList()) {
+				Path to = pack.resolve(PACK.relativize(f).toString());
+				if (Files.isDirectory(f)) Files.createDirectories(to);
+				else Files.copy(f, to);
+			}
+		}
+		Path sampling = pack.resolve("shaders/lib/lighting/shadowSampling.glsl");
+		String src = Files.readString(sampling);
+		assertTrue(src.contains("shadow += SampleShadow(vec3(shadowPos.st - offset2"));
+		Files.writeString(sampling, src.replace("shadow += SampleShadow(vec3(shadowPos.st - offset2", "shadow += 1.0 * SampleShadow(vec3(shadowPos.st - offset2"));
+		var r = convert(pack, tmp.resolve("out"), SETTINGS, Set.of("upscale"));
+		assertEquals(0, r.stagesFailed());
+		assertEquals(Map.of(), r.manifest().rt().unavailable());
+		assertTrue(r.manifest().rt().effects().contains("upscale"), r.manifest().rt().toString());
+		String fsh = Files.readString(r.outputDir().resolve("src/world0/gbuffers_terrain.fsh.glsl"));
+		assertFalse(fsh.contains("emrSets"), "shadow patch absent");
+		assertTrue(fsh.contains("shadow += 1.0 * SampleShadow("), "the pack's loop stays");
+		assertTrue(r.diagnostics().stream().anyMatch(d -> d.message().contains("optional patch of SampleTAAFilteredShadow left out")));
 	}
 
 	@Test
@@ -58,6 +99,7 @@ class TargetPackR510RtTest {
 		// at the same point, or mipmapped fringe texels the prepass dropped get shaded without depth (fogless outlines, grass overlay)
 		String anchor = fsh.lines().filter(l -> l.contains("emr_draw.emr_alphaTestRef > 1.5")).findFirst().orElseThrow();
 		assertTrue(anchor.contains("if (emr_draw.emr_alphaTestRef < -1.5 && !(color.a > -2.0 - emr_draw.emr_alphaTestRef)) discard;"), anchor);
+		assertFalse(fsh.contains("emrSets"), "RT shadows keep their own SampleTAAFilteredShadow under the upscaler");
 	}
 
 	@Test

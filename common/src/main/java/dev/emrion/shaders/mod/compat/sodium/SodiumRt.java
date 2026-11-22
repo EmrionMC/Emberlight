@@ -16,7 +16,6 @@ import dev.emrion.shaders.mod.vk.Barriers;
 import dev.emrion.shaders.mod.vk.ComputePipelines;
 import dev.emrion.shaders.mod.vk.Descriptors;
 import dev.emrion.shaders.mod.vk.RawBuffer;
-import dev.emrion.shaders.mod.vk.ShaderModules;
 import dev.emrion.shaders.mod.vk.VulkanContext;
 import java.util.ArrayDeque;
 import java.util.IdentityHashMap;
@@ -53,6 +52,7 @@ public final class SodiumRt {
 		final SectionRenderDataStorage[] storages = new SectionRenderDataStorage[LAYERS.length];
 		final int[] versions = new int[LAYERS.length];
 		long base, size;
+		VulkanGpuBuffer geometry; // null: no RT geometry buffer
 		final RtScene.Entry[][] entries = new RtScene.Entry[LAYERS.length][RenderRegion.REGION_SIZE];
 		int frame;
 	}
@@ -74,9 +74,7 @@ public final class SodiumRt {
 		positions = new RawBuffer(ctx, POSITIONS, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
 				| VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, false, "rt sodium positions");
 		layout = Descriptors.pipelineLayout(ctx, 20);
-		long cs = ShaderModules.create(ctx, ShaderModules.resource("/assets/emberlight/spv/rt_sodium_positions.comp.spv"));
-		pipeline = ComputePipelines.create(ctx, cs, layout, ctx.pipelineCache().handle);
-		ShaderModules.destroy(ctx, cs);
+		pipeline = ComputePipelines.create(ctx, "/assets/emberlight/spv/rt_sodium_positions.comp.spv", layout);
 		EmrionShadersClient.LOG.info("RT: Sodium path, BLAS from Sodium's region arenas ({} MiB position buffer)", POSITIONS >> 20);
 	}
 
@@ -146,16 +144,19 @@ public final class SodiumRt {
 
 	private void sync(RenderRegion region, Vec3 cam, double maxDist) {
 		var resources = region.getResources();
+		Region r = regions.get(region);
 		long base = 0, size = 0;
+		VulkanGpuBuffer geometry = null;
 		if (resources != null && resources.getGeometryBuffer() instanceof VulkanGpuBuffer buf && (buf.usage() & Formats.USAGE_RT_INPUT) != 0) {
-			base = scene.address(buf.vkBuffer());
+			geometry = buf;
+			base = r != null && r.geometry == buf ? r.base : scene.address(buf.vkBuffer()); // fixed for the buffer's life
 			size = buf.size();
 		}
-		Region r = regions.get(region);
 		if (r == null) {
 			if (base == 0) return;
 			regions.put(region, r = new Region());
 		}
+		r.geometry = geometry;
 		r.frame = frame;
 		boolean moved = base != r.base || size != r.size;
 		r.base = base;

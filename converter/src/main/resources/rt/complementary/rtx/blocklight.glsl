@@ -17,7 +17,7 @@ const ivec2 EMR_BL_RING[8] = ivec2[8](ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), iv
 // source reaches; false: nothing matches (the hand, particles). hidden: the view ray found a surface well in front of this
 // fragment, which raster will draw over it (overdraw; the Deep Dark corridor shaded thousands of these through the fallback).
 bool emrRtxBlLookup(vec3 playerPos, vec3 n, out vec4 r, out bool hidden) {
-	ivec2 size = textureSize(emrBlGSampler, 0), p = clamp(ivec2(gl_FragCoord.xy), ivec2(0), size - 1);
+	ivec2 size = textureSize(emrBlGSampler, 0), p = clamp(ivec2(gl_FragCoord.xy * emrRt_blocklight_res), ivec2(0), size - 1);
 	float d = length(playerPos);
 	vec4 g = texelFetch(emrBlGSampler, p, 0);
 	r = texelFetch(emrBlOutSampler, p, 0);
@@ -39,8 +39,9 @@ bool emrRtxBlLookup(vec3 playerPos, vec3 n, out vec4 r, out bool hidden) {
 // copy (rtx/gi_apply.glsl emrRtxGiHidden).
 bool emrRtxBlHidden() {
 	ivec2 size = textureSize(emrBlGSampler, 0);
-	float w = texelFetch(emrBlGSampler, clamp(ivec2(gl_FragCoord.xy), ivec2(0), size - 1), 0).w;
-	vec4 v = gbufferProjectionInverse * vec4(gl_FragCoord.xy / vec2(size) * 2.0 - 1.0, gl_FragCoord.z * 2.0 - 1.0, 1.0);
+	vec2 t = gl_FragCoord.xy * emrRt_blocklight_res; // blocklight:res: the passes' resolution
+	float w = texelFetch(emrBlGSampler, clamp(ivec2(t), ivec2(0), size - 1), 0).w;
+	vec4 v = gbufferProjectionInverse * vec4(t / vec2(size) * 2.0 - 1.0, gl_FragCoord.z * 2.0 - 1.0, 1.0);
 	float d = length(v.xyz / v.w);
 	return w > 0.0 && d > w + emrRt_blocklight_hiddenMargin + 0.05 * d;
 }

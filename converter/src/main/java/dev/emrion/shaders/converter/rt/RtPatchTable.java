@@ -152,7 +152,7 @@ public record RtPatchTable(String id, List<String> detect, Map<String, Effect> e
 			this(requires, options, helpers, uniforms, needs, skipIds, skipIdsWhen, frees, patches, null, null, null, null, null, null);
 		}
 
-		/** This effect with {@code v} merged in: options, uniforms, needs and images added, helpers appended, patches and computes replaced. */
+		/** This effect with {@code v} merged in: options, uniforms, needs and images added, helpers appended, patches replaced, computes as {@link #mergeComputes}. */
 		public Effect with(Variant v) {
 			var o = new java.util.LinkedHashMap<>(options);
 			if (v.options() != null) o.putAll(v.options());
@@ -166,7 +166,17 @@ public record RtPatchTable(String id, List<String> detect, Map<String, Effect> e
 				im.putAll(v.images());
 			}
 			return new Effect(requires, o, v.helpers() == null ? helpers : helpers == null ? v.helpers() : helpers + "," + v.helpers(), u, n, skipIds, skipIdsWhen, frees,
-					v.patches() == null ? patches : v.patches(), dimensions, library, v.computes() == null ? computes : v.computes(), im, null, lifts);
+					v.patches() == null ? patches : v.patches(), dimensions, library, mergeComputes(computes, v.computes()), im, null, lifts);
+		}
+
+		/** The variant's computes replace the list, unless one shares a program with it: then they replace by program, new ones appended. */
+		private static List<Compute> mergeComputes(List<Compute> base, List<Compute> v) {
+			if (v == null) return base;
+			if (base == null || v.stream().noneMatch(c -> base.stream().anyMatch(b -> b.program().equals(c.program())))) return v;
+			var out = new java.util.ArrayList<Compute>();
+			for (Compute b : base) out.add(v.stream().filter(c -> c.program().equals(b.program())).findFirst().orElse(b));
+			for (Compute c : v) if (out.stream().noneMatch(o -> o.program().equals(c.program()))) out.add(c);
+			return out;
 		}
 	}
 
@@ -184,12 +194,14 @@ public record RtPatchTable(String id, List<String> detect, Map<String, Effect> e
 	 *                 the body is inserted
 	 * @param find     null or a token sequence (exactly once in the body) replaced by {@code body}'s text; with neither,
 	 *                 {@code body} replaces the function body
+	 * @param statements with {@code find}: null, or how many whole statements starting at {@code find} the body replaces
+	 *                 (an anchor of a few tokens instead of a quote of the pack's code)
 	 * @param optional a stage of one of {@code programs} need not match this patch (two patches for code a pack setting switches
 	 *                 between, where one of them is enough)
 	 * @param oneOf    null or a group name: a stage needs only one patch of the group (the same anchor in two pack versions)
 	 */
 	public record Patch(String function, String body, List<String> programs, List<String> needs, boolean bare, String after, String find,
-	                    boolean optional, String oneOf) {
+	                    boolean optional, String oneOf, Integer statements) {
 		public Patch(String function, String body) {
 			this(function, body, null, null, false, null, null);
 		}
@@ -199,7 +211,7 @@ public record RtPatchTable(String id, List<String> detect, Map<String, Effect> e
 		}
 
 		public Patch(String function, String body, List<String> programs, List<String> needs, boolean bare, String after, String find) {
-			this(function, body, programs, needs, bare, after, find, false, null);
+			this(function, body, programs, needs, bare, after, find, false, null, null);
 		}
 	}
 
@@ -215,8 +227,11 @@ public record RtPatchTable(String id, List<String> detect, Map<String, Effect> e
 	 */
 	public record Lift(String program, String function, String at, Integer statements, String otherwise, String text) {}
 
-	/** One compute program: the library, {@code helpers} and {@code body} (a whole compute stage; {@code $<option>} replaced). */
-	public record Compute(String program, List<String> helpers, String body) {
+	/**
+	 * One compute program: the library, {@code helpers} and {@code body} (a whole compute stage; {@code $<option>} replaced).
+	 * {@code skipIf} ("option=value"): left out when the option has that value (a pass that would return at once).
+	 */
+	public record Compute(String program, List<String> helpers, String body, String skipIf) {
 		public Compute {
 			helpers = helpers == null ? List.of() : helpers;
 		}

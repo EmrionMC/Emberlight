@@ -109,7 +109,7 @@ public final class NativeCompiler {
 		}
 		for (var c : custom) if (c.uniform()) u.add(new Transpiler.UniformDecl(c.name(), c.type(), 0, null));
 		return new Transpiler.ProgramAnalysis("emberlight frame", ProgramGroup.COMPOSITE, List.of(), u, List.of(), List.of(), List.of(),
-				List.of(), List.of(), List.of(), List.of());
+				List.of(), List.of());
 	}
 
 	// ---- one compile -------------------------------------------------------------------------------------------------
@@ -212,7 +212,7 @@ public final class NativeCompiler {
 						env, options.manifest(), properties(), layout, idMaps(), copied, dimensionMap, planned, rt(programs));
 				ManifestJson.write(tmp.resolve(CacheDir.MANIFEST), manifest);
 				List<Diagnostic> all = diagnostics.all();
-				ManifestJson.write(tmp.resolve(CacheDir.REPORT), new Report(!diagnostics.hasErrors(), programCount, ok, failed, all));
+				ManifestJson.write(tmp.resolve(CacheDir.REPORT), new Report(!diagnostics.hasErrors(), programCount, ok, failed, all, false));
 				Path out = CacheDir.commit(tmp, req.cacheRoot(), key);
 				progress.progress("write", 1, 1);
 				return new Converter.Result(out, manifest, all, false, ok, failed);
@@ -364,7 +364,7 @@ public final class NativeCompiler {
 			List<String> effects = new ArrayList<>();
 			// the TLAS only when an enabled pass traces rays (options and dimension overrides can disable them all)
 			boolean rq = m.requires().contains("ray_query")
-					&& programs.values().stream().flatMap(List::stream).anyMatch(p -> p.pass().raytracing());
+					&& programs.values().stream().flatMap(List::stream).anyMatch(p -> p.pass() != null && p.pass().raytracing());
 			if (rq) effects.add(RT_EFFECT);
 			if (rq && Boolean.TRUE.equals(m.settings().get("rayTracedEntities"))) effects.add(RT_EFFECT + ":entities");
 			if (req.rt().contains("upscale")) effects.add("upscale");

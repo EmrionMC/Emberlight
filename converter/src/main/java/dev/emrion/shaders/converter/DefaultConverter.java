@@ -92,7 +92,7 @@ public final class DefaultConverter implements Converter {
 			if (NativeCompiler.isNative(opened)) { // NATIVE_FORMAT.md §15: compiled directly, not through the Iris path
 				String key = NativeCompiler.cacheKey(opened, request, environment);
 				if (request.useCache()) {
-					Result hit = cached(request.cacheRoot().resolve(key), key);
+					Result hit = cached(CacheDir.current(request.cacheRoot(), key), key);
 					if (hit != null) return hit;
 				}
 				return NativeCompiler.compile(opened, key, request, environment, compiler, pool, progress, diagnostics);
@@ -100,7 +100,7 @@ public final class DefaultConverter implements Converter {
 			String packHash = source.contentHash();
 			String key = CacheKey.compute(packHash, request.settings(), environment.mcVersion(), environment.macros(), request.dimensions(), request.rt());
 			if (request.useCache()) {
-				Result hit = cached(request.cacheRoot().resolve(key), key);
+				Result hit = cached(CacheDir.current(request.cacheRoot(), key), key);
 				if (hit != null) return hit;
 			}
 			return new Run(source, packHash, key, request, progress, diagnostics, pool).execute();
@@ -111,7 +111,7 @@ public final class DefaultConverter implements Converter {
 	}
 
 	private static Result cached(Path dir, String key) throws IOException {
-		Manifest manifest = CacheDir.readValid(dir, key);
+		Manifest manifest = dir == null ? null : CacheDir.readValid(dir, key);
 		if (manifest == null || !Files.isRegularFile(dir.resolve(CacheDir.REPORT))) return null;
 		Report report;
 		try {
@@ -120,6 +120,7 @@ public final class DefaultConverter implements Converter {
 			return null; // corrupt report: reconvert, commit replaces the entry
 		}
 		if (report == null || report.diagnostics() == null) return null;
+		if (report.crashed()) return null; // a converter crash may be transient (memory): try again rather than keep it
 		return new Result(dir, manifest, report.diagnostics(), true, report.stagesCompiled(), report.stagesFailed());
 	}
 
@@ -146,6 +147,8 @@ public final class DefaultConverter implements Converter {
 		final ProgressListener progress;
 		final Diagnostics diagnostics;
 		final ExecutorService pool;
+		/** A converter crash (not a pack error) happened: the result is written but not reused from the cache. */
+		volatile boolean crashed;
 
 		Run(PackSource source, String packHash, String key, Request request, ProgressListener progress, Diagnostics diagnostics, ExecutorService pool) {
 			this.source = source;
@@ -189,6 +192,7 @@ public final class DefaultConverter implements Converter {
 					plans.put(dim, planner.plan(dim, pack.dimensions().get(dim), analyses.get(dim), pack.properties(),
 							pack.options().values(), layout, diagnostics));
 				} catch (RuntimeException e) {
+					crashed = true;
 					diagnostics.add(new Diagnostic(Diagnostic.Severity.ERROR, null, 0, null, null, "planning " + dim + " failed: " + e));
 				}
 				progress.progress("plan", plans.size(), dims.size());
@@ -228,7 +232,7 @@ public final class DefaultConverter implements Converter {
 					pack.dimensionMap(), dimensions, rt);
 			ManifestJson.write(tmp.resolve(CacheDir.MANIFEST), manifest);
 			List<Diagnostic> all = diagnostics.all();
-			ManifestJson.write(tmp.resolve(CacheDir.REPORT), new Report(!diagnostics.hasErrors(), programs, compiled, failed[0], all));
+			ManifestJson.write(tmp.resolve(CacheDir.REPORT), new Report(!diagnostics.hasErrors(), programs, compiled, failed[0], all, crashed));
 			Path out = CacheDir.commit(tmp, request.cacheRoot(), key);
 			progress.progress("write", 1, 1);
 			return new Result(out, manifest, all, false, compiled, failed[0]);
@@ -273,10 +277,13 @@ public final class DefaultConverter implements Converter {
 					}
 			AtomicInteger done = new AtomicInteger();
 			progress.progress("analyse", 0, programs.size());
-			List<Transpiler.ProgramAnalysis> results = parallel(programs.stream().<Callable<Transpiler.ProgramAnalysis>>map(p -> () -> {
+			RuntimeException[] errors = new RuntimeException[programs.size()];
+			List<Transpiler.ProgramAnalysis> results = parallel(java.util.stream.IntStream.range(0, programs.size()).<Callable<Transpiler.ProgramAnalysis>>mapToObj(i -> () -> {
 				try {
-					return transpiler.analyze(p.stages());
+					return transpiler.analyze(programs.get(i).stages());
 				} catch (RuntimeException e) {
+					crashed = true;
+					errors[i] = e;
 					return null;
 				} finally {
 					progress.progress("analyse", done.incrementAndGet(), programs.size());
@@ -289,7 +296,7 @@ public final class DefaultConverter implements Converter {
 				var program = programs.get(i);
 				var analysis = results.get(i);
 				if (analysis == null) {
-					diagnostics.add(new Diagnostic(Diagnostic.Severity.ERROR, null, 0, program.name(), null, "transpiler crashed during analysis"));
+					diagnostics.add(new Diagnostic(Diagnostic.Severity.ERROR, null, 0, program.name(), null, "transpiler crashed during analysis: " + errors[i]));
 				} else {
 					analysis.diagnostics().forEach(d -> diagnostics.add(d.program() == null ? d.in(program.name(), d.stage()) : d));
 					if (analysis.diagnostics().stream().noneMatch(d -> d.severity() == Diagnostic.Severity.ERROR)) {
@@ -328,6 +335,7 @@ public final class DefaultConverter implements Converter {
 				try {
 					return transpiler.emitVariants(analysis, plans.get(e.dim()).emits().get(e.program()).context(), variants);
 				} catch (RuntimeException ex) {
+					crashed = true;
 					return java.util.Collections.nCopies(es.size(), new Transpiler.EmitResult(Map.of(), List.of(Diagnostic.error(null, 0, "transpiler crashed: " + ex))));
 				}
 			}).toList())) results.addAll(rs);
@@ -374,6 +382,7 @@ public final class DefaultConverter implements Converter {
 					var r = compiler.compile(job.baseName(), job.glsl(), job.stage(), srcLines(job.srcPath(), job.source()));
 					return new StageResult(job, r.spv(), r.diagnostics().stream().map(d -> d.in(job.program(), job.stageName())).toList());
 				} catch (RuntimeException e) {
+					crashed = true;
 					return new StageResult(job, null, List.of(new Diagnostic(Diagnostic.Severity.ERROR, job.srcPath(), 0,
 							job.program(), job.stageName(), "compiler crashed: " + e)));
 				} finally {

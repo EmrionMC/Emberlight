@@ -29,11 +29,11 @@ vec3 emrGiTransmit(vec3 o, vec3 d, float tMax) {
 		int ci = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false);
 		EmrRtVerts cv = emrRtVerts(ci);
 		uvec3 ct = emrRtTri(uint(rayQueryGetIntersectionPrimitiveIndexEXT(rq, false)));
-		int id = emrRtId(cv, ct.x);
+		bool translucent = emrRtSection[ci].z == 2u;
+		if (translucent && emrRtId(cv, ct.x) == 32000) continue; // water: no tint, so no atlas fetch
 		vec4 c = textureLod(emrRtAtlas, emrRtBaryUv(cv, ct, rayQueryGetIntersectionBarycentricsEXT(rq, false)), 0.0);
-		if (emrRtSection[ci].z == 2u) {
-			if (id != 32000) tint *= emrGiGlass(c * vec4(emrRtColor(cv, ct.x).rgb, 1.0));
-		} else if (c.a >= 0.1) rayQueryConfirmIntersectionEXT(rq);
+		if (translucent) tint *= emrGiGlass(c * vec4(emrRtColor(cv, ct.x).rgb, 1.0));
+		else if (c.a >= 0.1) rayQueryConfirmIntersectionEXT(rq);
 	}
 	return !more && rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT ? tint : vec3(0.0);
 }
@@ -120,17 +120,17 @@ int emrGiTraceRtx(vec3 o, vec3 d, float tMax, out EmrGiHit h, out vec3 tint) {
 		int ci = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false);
 		EmrRtVerts cv = emrRtVerts(ci);
 		uvec3 ct = emrRtTri(uint(rayQueryGetIntersectionPrimitiveIndexEXT(rq, false)));
+		bool translucent = emrRtSection[ci].z == 2u;
+		if (translucent && emrRtId(cv, ct.x) == 32000) continue; // water: not remembered, so no atlas fetch
 		vec4 c = textureLod(emrRtAtlas, emrRtBaryUv(cv, ct, rayQueryGetIntersectionBarycentricsEXT(rq, false)), 0.0);
-		if (emrRtSection[ci].z == 2u) { // translucent: remembered, applied below if in front of the closest opaque hit
-			if (emrRtId(cv, ct.x) != 32000) {
-				float tc = rayQueryGetIntersectionTEXT(rq, false);
-				int j = glassN; // full: this face replaces the farthest one kept, if nearer
-				if (glassN == 4) for (int i = 0; i < 4; i++) if (gt[i] > tc && (j == 4 || gt[i] > gt[j])) j = i;
-				if (j < 4) {
-					gt[j] = tc;
-					gc[j] = emrGiGlass(c * vec4(emrRtColor(cv, ct.x).rgb, 1.0));
-					glassN = max(glassN, j + 1);
-				}
+		if (translucent) { // translucent: remembered, applied below if in front of the closest opaque hit
+			float tc = rayQueryGetIntersectionTEXT(rq, false);
+			int j = glassN; // full: this face replaces the farthest one kept, if nearer
+			if (glassN == 4) for (int i = 0; i < 4; i++) if (gt[i] > tc && (j == 4 || gt[i] > gt[j])) j = i;
+			if (j < 4) {
+				gt[j] = tc;
+				gc[j] = emrGiGlass(c * vec4(emrRtColor(cv, ct.x).rgb, 1.0));
+				glassN = max(glassN, j + 1);
 			}
 		} else if (c.a >= 0.1) rayQueryConfirmIntersectionEXT(rq);
 	}

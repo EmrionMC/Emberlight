@@ -264,6 +264,10 @@ public final class RtPatcher {
 			diagnostics.addAll(liftNotes);
 			if (effect.computes() != null)
 				for (var c : effect.computes()) {
+					if (c.skipIf() != null) {
+						String[] kv = c.skipIf().split("=", 2);
+						if (kv[1].equals(opts.getOrDefault(kv[0], effect.options().get(kv[0])))) continue;
+					}
 					if (programs.stream().anyMatch(p -> p.name().equals(c.program())))
 						throw new Unavailable(d.getKey() + ": the pack already has a program " + c.program());
 					programs.add(new ResolvedPack.ProgramSource(c.program(), true, List.of(computeStage(table, d.getKey(), c, name, effect, opts))));
@@ -462,33 +466,47 @@ public final class RtPatcher {
 		// token index -> {last replaced token, replacement}
 		Map<Integer, Object[]> edits = new TreeMap<>();
 		for (Match m : ms) {
-			String raw = table.text(m.patch().body());
-			Set<String> known = declaredBefore.get(m.function());
-			if (m.function().kind == ItemKind.DECL) {
-				var d = m.function().decls.getFirst();
-				edits.put(d.initStart(), new Object[]{d.initEnd() - 1, oneLine(raw)});
-				continue;
+			try {
+				String raw = table.text(m.patch().body());
+				Set<String> known = declaredBefore.get(m.function());
+				if (m.function().kind == ItemKind.DECL) {
+					var d = m.function().decls.getFirst();
+					edits.put(d.initStart(), new Object[]{d.initEnd() - 1, oneLine(raw)});
+					continue;
+				}
+				if (m.patch().after() != null) {
+					int at = anchor(t, m, label);
+					edits.put(at, new Object[]{at, t.get(at).text + " " + lifts.expand(raw, Lifts.known(known, t, m.function(), at))});
+					continue;
+				}
+				if (m.patch().find() == null) {
+					edits.put(m.function().bodyStart, new Object[]{m.function().bodyEnd, "{ " + lifts.expand(raw, Lifts.known(known, t, m.function(), m.function().bodyStart)) + " }"});
+					continue;
+				}
+				List<Token> f = GlslLexer.lex(m.patch().find());
+				int at = -1;
+				for (int i = m.function().bodyStart; i + f.size() - 1 <= m.function().bodyEnd; i++) {
+					boolean eq = true;
+					for (int j = 0; j < f.size() && eq; j++) eq = t.get(i + j).text.equals(f.get(j).text);
+					if (!eq) continue;
+					if (at >= 0) throw new Unavailable(label + ": '" + m.patch().find() + "' occurs more than once in " + m.function().name);
+					at = i;
+				}
+				if (at < 0) throw new Unavailable(label + ": '" + m.patch().find() + "' not found in " + m.function().name);
+				int end = at + f.size() - 1;
+				if (m.patch().statements() != null) {
+					if (m.patch().statements() < 1) throw new IllegalArgumentException(label + ": \"statements\" must be at least 1");
+					if (!t.get(at - 1).is(";") && !t.get(at - 1).is("{") && !t.get(at - 1).is("}") && !t.get(at - 1).is(")"))
+						throw new Unavailable(label + ": '" + m.patch().find() + "' does not start a statement in " + m.function().name);
+					end = at - 1;
+					for (int n = 0; n < m.patch().statements() && end < m.function().bodyEnd; n++) end = Lifts.statementEnd(t, end + 1);
+					if (end >= m.function().bodyEnd) throw new Unavailable(label + ": " + m.function().name + " ends before the statements at '" + m.patch().find() + "'");
+				}
+				edits.put(at, new Object[]{end, lifts.expand(raw, Lifts.known(known, t, m.function(), at))});
+			} catch (Unavailable u) { // an optional patch whose lift or statements don't fit this pack is left out, like a missing find
+				if (!m.patch().optional()) throw u;
+				lifts.notes().add(new Diagnostic(Diagnostic.Severity.INFO, null, 0, null, null, "RT " + label + ": optional patch of " + m.function().name + " left out: " + u.getMessage()));
 			}
-			if (m.patch().after() != null) {
-				int at = anchor(t, m, label);
-				edits.put(at, new Object[]{at, t.get(at).text + " " + lifts.expand(raw, Lifts.known(known, t, m.function(), at))});
-				continue;
-			}
-			if (m.patch().find() == null) {
-				edits.put(m.function().bodyStart, new Object[]{m.function().bodyEnd, "{ " + lifts.expand(raw, Lifts.known(known, t, m.function(), m.function().bodyStart)) + " }"});
-				continue;
-			}
-			List<Token> f = GlslLexer.lex(m.patch().find());
-			int at = -1;
-			for (int i = m.function().bodyStart; i + f.size() - 1 <= m.function().bodyEnd; i++) {
-				boolean eq = true;
-				for (int j = 0; j < f.size() && eq; j++) eq = t.get(i + j).text.equals(f.get(j).text);
-				if (!eq) continue;
-				if (at >= 0) throw new Unavailable(label + ": '" + m.patch().find() + "' occurs more than once in " + m.function().name);
-				at = i;
-			}
-			if (at < 0) throw new Unavailable(label + ": '" + m.patch().find() + "' not found in " + m.function().name);
-			edits.put(at, new Object[]{at + f.size() - 1, lifts.expand(raw, Lifts.known(known, t, m.function(), at))});
 		}
 		StringBuilder out = new StringBuilder(text.length() + helper.length() + 1024);
 		for (int i = 0; i < t.size(); i++) {
@@ -571,6 +589,7 @@ public final class RtPatcher {
 		String expand(String glsl, Set<String> known) {
 			List<Token> t = GlslLexer.lex(glsl);
 			StringBuilder sb = new StringBuilder();
+			Set<String> lifted = new HashSet<>(); // what earlier markers' statements declared, for the later ones
 			for (int i = 0; i < t.size(); i++) {
 				Token k = t.get(i);
 				sb.append(k.ws);
@@ -580,7 +599,11 @@ public final class RtPatcher {
 				}
 				Set<String> here = new HashSet<>(known);
 				here.addAll(declared(t, 0, i));
-				sb.append(' ').append(lift(t.get(++i).text, here)).append(' ');
+				here.addAll(lifted);
+				String code = lift(t.get(++i).text, here);
+				List<Token> ct = GlslLexer.lex(code);
+				lifted.addAll(declared(ct, 0, ct.size()));
+				sb.append(' ').append(code).append(' ');
 			}
 			return oneLine(sb.toString());
 		}

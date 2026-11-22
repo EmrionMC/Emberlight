@@ -9,8 +9,9 @@ const vec2 EMR_GI_RING[8] = vec2[8](vec2(1, 0), vec2(-1, 0), vec2(0, 1), vec2(0,
 // (emrBlG, declared by this effect too; without RTX block light nothing writes it, it stays cleared and nothing is hidden).
 bool emrRtxGiHidden() {
 	ivec2 size = textureSize(emrBlGSampler, 0);
-	float w = texelFetch(emrBlGSampler, clamp(ivec2(gl_FragCoord.xy), ivec2(0), size - 1), 0).w;
-	vec4 v = gbufferProjectionInverse * vec4(gl_FragCoord.xy / vec2(size) * 2.0 - 1.0, gl_FragCoord.z * 2.0 - 1.0, 1.0);
+	vec2 t = gl_FragCoord.xy * emrRt_gi_blres; // gi:blres = blocklight:res, the resolution emrBlG has
+	float w = texelFetch(emrBlGSampler, clamp(ivec2(t), ivec2(0), size - 1), 0).w;
+	vec4 v = gbufferProjectionInverse * vec4(t / vec2(size) * 2.0 - 1.0, gl_FragCoord.z * 2.0 - 1.0, 1.0);
 	float d = length(v.xyz / v.w);
 	return w > 0.0 && d > w + emrRt_gi_hiddenMargin + 0.05 * d;
 }

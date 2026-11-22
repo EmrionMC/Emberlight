@@ -47,7 +47,7 @@ public final class GeometryPipelines {
 	private GeometryPipelines() {}
 
 	/** Per-pipeline draw constants: alpha-test reference and the extra set-0 samplers the pack reads but vanilla does not push. */
-	public record Draw(float alphaRef, boolean blockAtlas, int firstExtra, int[] extras, boolean defaults, boolean sodium) {}
+	public record Draw(float alphaRef, int firstExtra, int[] extras, boolean defaults, boolean sodium) {}
 
 	/** Vertex buffer slot of the constant default attributes (MC uses slots 0 and 1). */
 	public static final int DEFAULTS_BINDING = 15;
@@ -109,18 +109,27 @@ public final class GeometryPipelines {
 	private static VkCommandBuffer boundCb;
 	private static VulkanRenderPipeline bound;
 	private static Draw boundDraw;
+	private static @Nullable Object boundPass;
 	/** EmrionDraw push constants: entityColor, entityId, blockEntityId, currentRenderedItemId, alphaTestRef, atlasSize. */
 	private static final ByteBuffer PUSH = MemoryUtil.memCalloc(40);
 
-	/** Called from {@code VulkanRenderPass.setPipeline} TAIL. */
-	public static void onSetPipeline(VkCommandBuffer cb, VulkanRenderPipeline pipeline) {
+	/** Called from {@code VulkanRenderPass.setPipeline} TAIL; {@code pass}: that VulkanRenderPass (a new one per MC pass). */
+	public static void onSetPipeline(Object pass, VkCommandBuffer cb, VulkanRenderPipeline pipeline) {
 		if (dev.emrion.shaders.mod.debug.TerrainStats.ENABLED) dev.emrion.shaders.mod.debug.TerrainStats.bound(cb, NAMES.get(pipeline));
 		Draw d = OURS.get(pipeline);
 		if (d == null) {
 			boundCb = null;
 			return;
 		}
+		// MC sets the same pipeline again per draw batch: in the same pass, set 1, push constants and extras are still bound
+		if (pass == boundPass && cb == boundCb && pipeline == bound) {
+			long normals = EXTRA_VIEWS[PBR], specular = EXTRA_VIEWS[PBR + 1];
+			PbrTextures.views(sampler0, EXTRA_VIEWS, PBR); // maps that finished loading since the last bind
+			if (normals != EXTRA_VIEWS[PBR] || specular != EXTRA_VIEWS[PBR + 1]) pushExtras(cb, pipeline.pipelineLayout(), d, PBR);
+			return;
+		}
 		boundCb = cb;
+		boundPass = pass;
 		bound = pipeline;
 		boundDraw = d;
 		bind(cb, pipeline, d);
@@ -149,6 +158,7 @@ public final class GeometryPipelines {
 	/** The render pass ended: nothing of ours is bound any more. */
 	public static void unbind() {
 		boundCb = null;
+		boundPass = null;
 		bound = null;
 		atlasWidth = atlasHeight = 0; // a new pass starts with no Sampler0
 		sampler0 = null;

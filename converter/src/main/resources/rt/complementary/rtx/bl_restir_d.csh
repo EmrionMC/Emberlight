@@ -1,7 +1,7 @@
 // RTX block light, denoiser pass 2 (prepare_i): one edge-aware a-trous step (5x5, normal and plane distance like GI's filter),
 // emrBlT -> emrBlOut, which the gbuffers read. This frame's accumulation and geometry become next frame's history.
 layout(local_size_x = 8, local_size_y = 8) in;
-const vec2 workGroupsRender = vec2(1.0, 1.0);
+const vec2 workGroupsRender = vec2($res, $res);
 layout(rgba16f) uniform readonly image2D emrBlT;
 layout(rgba16f) uniform readonly image2D emrBlG;
 layout(rgba16f) uniform writeonly image2D emrBlOut;
@@ -22,7 +22,8 @@ void main() {
 		imageStore(emrBlOut, p, vec4(t.rgb, 1.0));
 		return;
 	}
-	vec3 pos = emrBlPixelPos(p, size, g.w);
+	EmrBlRays rays = emrBlRays(size);
+	vec3 pos = emrBlTapPos(rays, p, g.w);
 	const float k[3] = float[](0.375, 0.25, 0.0625);
 	// young history (few frames) is noisier: a wider step
 	int step = t.a < 4.0 ? 2 : 1;
@@ -35,8 +36,10 @@ void main() {
 			if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, size))) continue;
 			vec4 gq = imageLoad(emrBlG, q), tq = imageLoad(emrBlT, q);
 			if (gq.w <= 0.0 || tq.a <= 0.0) continue;
-			vec3 pq = emrBlPixelPos(q, size, gq.w);
-			float w = k[abs(x)] * k[abs(y)] * pow(max(dot(gq.xyz, g.xyz), 0.0), 32.0) * exp(-abs(dot(g.xyz, pq - pos)) / tol);
+			vec3 pq = emrBlTapPos(rays, q, gq.w);
+			float c = max(dot(gq.xyz, g.xyz), 0.0);
+			c *= c; c *= c; c *= c; c *= c; // c^16, squared below: the normal weight c^32
+			float w = k[abs(x)] * k[abs(y)] * (c * c) * exp(-abs(dot(g.xyz, pq - pos)) / tol);
 			s += w * tq.rgb;
 			ws += w;
 		}

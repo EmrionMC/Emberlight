@@ -10,7 +10,6 @@ import dev.emrion.shaders.mod.vk.Descriptors;
 import dev.emrion.shaders.mod.vk.RawBuffer;
 import dev.emrion.shaders.mod.vk.RawCommands;
 import dev.emrion.shaders.mod.vk.RawImage;
-import dev.emrion.shaders.mod.vk.ShaderModules;
 import dev.emrion.shaders.mod.vk.VulkanContext;
 import java.util.Properties;
 import java.util.Set;
@@ -271,9 +270,7 @@ public final class Hdr {
 			setLayout = new Descriptors.LayoutBuilder().add(0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, c).add(1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, c)
 					.add(2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, c).add(3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, c).build(ctx, true);
 			layout = Descriptors.pipelineLayout(ctx, 16, setLayout);
-			long module = ShaderModules.create(ctx, ShaderModules.resource("/assets/emberlight/spv/hdr_encode.comp.spv"));
-			pipeline = ComputePipelines.create(ctx, module, layout, ctx.pipelineCache().handle);
-			ShaderModules.destroy(ctx, module);
+			pipeline = ComputePipelines.create(ctx, "/assets/emberlight/spv/hdr_encode.comp.spv", layout);
 		}
 		try (MemoryStack stack = MemoryStack.stackPush()) {
 			VulkanCommandEncoder.memoryBarrier(cb, stack); // the source was just written (interpolation) or the target last read (blit)

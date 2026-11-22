@@ -53,7 +53,7 @@ public class ChunkBuilderMeshingTaskMixin {
 	@WrapOperation(method = EXECUTE, at = @At(value = "INVOKE", target = "Lnet/caffeinemc/mods/sodium/client/world/LevelSlice;getBlockState(III)Lnet/minecraft/world/level/block/state/BlockState;"))
 	private BlockState emrion$lightsBlock(LevelSlice slice, int x, int y, int z, Operation<BlockState> original) {
 		BlockState state = original.call(slice, x, y, z);
-		if (LightColors.candidate(state)) RtLights.block(state, new BlockPos(x, y, z), slice);
+		if (RtLights.collecting && LightColors.candidate(state)) RtLights.block(state, new BlockPos(x, y, z), slice);
 		return state;
 	}
 

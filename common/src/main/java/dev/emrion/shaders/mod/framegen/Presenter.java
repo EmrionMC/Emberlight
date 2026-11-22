@@ -301,8 +301,12 @@ public final class Presenter {
 	private static void present(VulkanContext ctx, Frame f) {
 		if (f.swapchain() != semaphoreSwapchain || f.images().length != presentSemaphores.length) newSwapchain(ctx, f); // handles get reused
 		long delta = 0;
-		if (f.interp() != null) {
-			waitTimeline(ctx, f.timelineValue());
+		if (f.interp() != null && !waitTimeline(ctx, f.timelineValue())) {
+			// the real frame is not done after 5 s (or we are stopping): a copy would only wait for it on the GPU
+			skipped++;
+			signalCopied(f.timelineValue());
+			copiedUpTo = f.timelineValue();
+		} else if (f.interp() != null) {
 			delta = pacing.update(System.nanoTime());
 			if (behind(ctx)) delta = 0;
 			int s = slot;
@@ -387,6 +391,7 @@ public final class Presenter {
 			var submit = VkSubmitInfo2.calloc(1, stack).sType$Default().pSignalSemaphoreInfos(signal);
 			LOCK.lock();
 			try {
+				if (stop) return; // abandoned: MC no longer takes LOCK, so the queue is not ours to submit to
 				check(KHRSynchronization2.vkQueueSubmit2KHR(vkQueue, submit, VK_NULL_HANDLE), "frame generation copy signal");
 			} finally {
 				LOCK.unlock();
@@ -410,11 +415,18 @@ public final class Presenter {
 		pacing.reset();
 	}
 
-	private static void waitTimeline(VulkanContext ctx, long value) {
+	private static boolean waitTimeline(VulkanContext ctx, long value) {
 		try (MemoryStack stack = MemoryStack.stackPush()) {
 			var info = VkSemaphoreWaitInfo.calloc(stack).sType$Default().semaphoreCount(1).pSemaphores(stack.longs(timeline)).pValues(stack.longs(value));
-			for (int i = 0; i < 50 && !stop; i++) if (vkWaitSemaphores(ctx.vk, info, 100_000_000L) == VK_SUCCESS) return;
+			for (int i = 0; i < 50 && !stop; i++) {
+				int r = vkWaitSemaphores(ctx.vk, info, 100_000_000L);
+				if (r == VK_SUCCESS) return true;
+				// device lost etc.: the real frame's semaphore may never signal either, so no present; loop()'s catch
+				// releases the slot and reports OUT_OF_DATE, which makes MC recreate the swapchain
+				if (r != VK_TIMEOUT) throw new IllegalStateException("frame generation timeline wait failed: " + r);
+			}
 		}
+		return false; // timeout on a frame MC already submitted, or stopping
 	}
 
 	/** vkAcquireNextImageKHR without ever blocking inside the lock (the other side may need it to free an image). */

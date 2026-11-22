@@ -502,8 +502,6 @@ public final class GlslTranspiler implements Transpiler {
 		Map<String, ImageDecl> images = new LinkedHashMap<>();
 		Map<String, BufferDecl> buffers = new LinkedHashMap<>();
 		Set<String> set0 = new LinkedHashSet<>();
-		Set<String> inputs = new LinkedHashSet<>();
-		Set<Integer> outputs = new java.util.TreeSet<>();
 		Set<String> builtinNames = builtinNames(p);
 		for (Stage s : p.stages) {
 			for (Var u : s.uniforms) {
@@ -540,29 +538,8 @@ public final class GlslTranspiler implements Transpiler {
 			boolean usesFog = s.used("gl_Fog");
 			if (usesFog) for (String f : List.of("emr_FogColor", "emr_FogDensity", "emr_FogStart", "emr_FogEnd"))
 				uniforms.putIfAbsent(f, new UniformDecl(f, INJECTED_UNIFORMS.get(f), 0, null));
-			if (s.type == StageType.FRAGMENT) {
-				for (String id : s.counts.keySet()) if (id.equals("gl_FragColor")) outputs.add(0);
-				for (int i = 0; i + 3 < s.t.size(); i++) {
-					if (s.t.get(i).is("gl_FragData") && s.t.get(i + 1).is("[") && s.t.get(i + 3).is("]")) {
-						try { outputs.add(Integer.decode(s.t.get(i + 2).text)); } catch (NumberFormatException ignored) {}
-					}
-				}
-				for (int i = 0; i < s.fragOuts.size(); i++) if (s.used(s.fragOuts.get(i).name())) outputs.add(outputIndex(s.fragOuts, i));
-			}
 			if (p.geometry && s.type == StageType.VERTEX) {
 				boolean position = s.used("gl_Vertex") || s.used("ftransform") || s.used("vaPosition") || s.used("chunkOffset");
-				if (position) inputs.add("Position");
-				if (s.used("gl_Color") || s.used("vaColor")) inputs.add("Color");
-				if (s.used("gl_MultiTexCoord0") || s.used("vaUV0")) inputs.add("UV0");
-				if (s.used("gl_MultiTexCoord1") || s.used("gl_MultiTexCoord2") || s.used("vaUV2")) inputs.add("UV2");
-				if (s.used("gl_Normal") || s.used("vaNormal")) inputs.add("Normal");
-				if (s.used("gl_MultiTexCoord3")) inputs.add("mc_midTexCoord");
-				if (p.entityColorVarying || s.used("vaUV1")) inputs.add("UV1");
-				if (p.entityIdVarying) inputs.add("iris_Entity");
-				for (Var a : s.attributes) {
-					String c = ATTRIBUTE_ALIAS.get(a.name());
-					if (c != null && s.used(a.name())) inputs.add(c);
-				}
 				boolean transforms = position || s.used("gl_ModelViewMatrix") || s.used("gl_Color") || s.used("gl_TextureMatrix")
 						|| s.used("gl_NormalMatrix") || s.used("modelViewMatrix") || s.used("vaColor") || p.entityColorVarying;
 				if (transforms) set0.add("DynamicTransforms");
@@ -577,10 +554,8 @@ public final class GlslTranspiler implements Transpiler {
 		}
 		List<String> orderedSet0 = new ArrayList<>();
 		for (String n : VertexLayouts.SET0_CANONICAL) if (set0.contains(n)) orderedSet0.add(n);
-		List<String> orderedInputs = new ArrayList<>();
-		for (String n : VertexLayouts.INPUT_LOCATIONS) if (inputs.contains(n)) orderedInputs.add(n);
 		return new ProgramAnalysis(p.name, p.group, List.copyOf(stages), List.copyOf(uniforms.values()), List.copyOf(samplers.values()),
-				List.copyOf(images.values()), List.copyOf(buffers.values()), orderedSet0, orderedInputs, List.copyOf(outputs),
+				List.copyOf(images.values()), List.copyOf(buffers.values()), orderedSet0,
 				List.copyOf(p.diagnostics));
 	}
 
@@ -1212,7 +1187,9 @@ public final class GlslTranspiler implements Transpiler {
 					String r = callRepl.get(name);
 					if (r != null) { out.append(r); continue; }
 					if (repl.containsKey(name)) { out.append(repl.get(name)); continue; }
-					out.append(name.equals("texture") ? name : kw(name));
+					// dvec/dmat constructors are the built-in types in a 4xx stage, not renamed user functions
+					boolean ctor = s.version >= 400 && (name.startsWith("dvec") || name.startsWith("dmat")) && KEYWORDS_450.contains(name);
+					out.append(name.equals("texture") || ctor ? name : kw(name));
 					continue;
 				}
 				String r = repl.get(name);

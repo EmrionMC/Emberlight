@@ -32,8 +32,6 @@ public interface Transpiler {
 			List<ImageDecl> images,          // image* uniforms that are referenced
 			List<BufferDecl> buffers,        // SSBO blocks
 			List<String> set0,               // MC per-draw resources needed (names from VertexLayouts.SET0_CANONICAL)
-			List<String> vertexInputs,       // canonical input names used (VertexLayouts.INPUT_LOCATIONS)
-			List<Integer> fragmentOutputs,   // gl_FragData indices / out locations actually written
 			List<Diagnostic> diagnostics
 	) {}
 

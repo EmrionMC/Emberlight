@@ -139,6 +139,8 @@ public final class RtScene {
 	private final List<Entry>[] compactEntries = new List[RING];
 	private final long[][] compactIds = new long[RING][COMPACT_SLOTS];
 	private long compactSaved, compactCount;
+	// CPU of the BLAS build and compaction paths: totals, and the worst frame since the last log line
+	private long blasNs, blasWorstNs, compactNs, compactWorstNs;
 	private long lastLog;
 
 	private RtScene() {
@@ -147,17 +149,22 @@ public final class RtScene {
 			vkGetPhysicalDeviceProperties2(ctx.vk.getPhysicalDevice(), VkPhysicalDeviceProperties2.calloc(stack).sType$Default().pNext(as));
 			scratchAlign = Math.max(1, as.minAccelerationStructureScratchOffsetAlignment());
 		}
-		if (COMPACT) try (MemoryStack stack = MemoryStack.stackPush()) {
-			LongBuffer p = stack.mallocLong(1);
-			check(vkCreateQueryPool(ctx.vk, VkQueryPoolCreateInfo.calloc(stack).sType$Default().queryType(VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR)
-					.queryCount(RING * COMPACT_SLOTS), null, p), "vkCreateQueryPool");
-			compactPool = p.get(0);
-			for (int r = 0; r < RING; r++) compactEntries[r] = new ArrayList<>();
+		try {
+			if (COMPACT) try (MemoryStack stack = MemoryStack.stackPush()) {
+				LongBuffer p = stack.mallocLong(1);
+				check(vkCreateQueryPool(ctx.vk, VkQueryPoolCreateInfo.calloc(stack).sType$Default().queryType(VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR)
+						.queryCount(RING * COMPACT_SLOTS), null, p), "vkCreateQueryPool");
+				compactPool = p.get(0);
+				for (int r = 0; r < RING; r++) compactEntries[r] = new ArrayList<>();
+			}
+			scratch = new RawBuffer(ctx, SCRATCH_SIZE + scratchAlign, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false, "rt blas scratch");
+			ensureCapacity();
+			omm = RtOmm.supported ? new RtOmm(this) : null;
+			sodium = new dev.emrion.shaders.mod.compat.sodium.SodiumRt(this);
+		} catch (RuntimeException e) {
+			destroy(); // not published yet: shutdown() would find nothing to free
+			throw e;
 		}
-		scratch = new RawBuffer(ctx, SCRATCH_SIZE + scratchAlign, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false, "rt blas scratch");
-		ensureCapacity();
-		omm = RtOmm.supported ? new RtOmm(this) : null;
-		sodium = new dev.emrion.shaders.mod.compat.sodium.SodiumRt(this);
 		RtLights.collecting = true;
 		EmrionShadersClient.LOG.info("RT: scene created, TLAS capacity {} instances, BLAS budget {} triangles/frame, scratch alignment {}", CAPACITY, BUDGET, scratchAlign);
 	}
@@ -180,28 +187,33 @@ public final class RtScene {
 		RtScene s = instance;
 		if (s == null) return;
 		RtLights.clear();
-		s.scratch.destroyLater();
-		if (s.indices != null) s.indices.destroyLater();
-		if (s.entities != null) s.entities.destroy();
-		s.entities = null;
-		for (int r = 0; r < RING; r++) if (s.instances[r] != null) s.instances[r].destroyLater();
-		if (s.sections != null) s.sections.destroyLater();
-		if (s.tlas != 0) {
-			long t = s.tlas;
-			s.ctx.destroyLater(() -> vkDestroyAccelerationStructureKHR(s.ctx.vk, t, null));
-			s.tlasStorage.destroyLater();
-			s.tlasScratch.destroyLater();
-		}
-		if (s.compactPool != 0) {
-			long q = s.compactPool;
-			s.ctx.destroyLater(() -> vkDestroyQueryPool(s.ctx.vk, q, null));
-		}
-		s.sodium.destroy();
-		if (s.omm != null) s.omm.destroy();
+		s.destroy();
 		RtLights.collecting = false;
-		s.lights.destroyLater();
 		instance = null;
 		EmrionShadersClient.LOG.info("RT: scene destroyed");
+	}
+
+	/** Frees what exists (null checks: also the cleanup of a constructor that threw partway). */
+	private void destroy() {
+		if (scratch != null) scratch.destroyLater();
+		if (indices != null) indices.destroyLater();
+		if (entities != null) entities.destroy();
+		entities = null;
+		for (int r = 0; r < RING; r++) if (instances[r] != null) instances[r].destroyLater();
+		if (sections != null) sections.destroyLater();
+		if (tlas != 0) {
+			long t = tlas;
+			ctx.destroyLater(() -> vkDestroyAccelerationStructureKHR(ctx.vk, t, null));
+		}
+		if (tlasStorage != null) tlasStorage.destroyLater();
+		if (tlasScratch != null) tlasScratch.destroyLater();
+		if (compactPool != 0) {
+			long q = compactPool;
+			ctx.destroyLater(() -> vkDestroyQueryPool(ctx.vk, q, null));
+		}
+		if (sodium != null) sodium.destroy();
+		if (omm != null) omm.destroy();
+		lights.destroyLater();
 	}
 
 	// ---- BLAS ---------------------------------------------------------------------------------------------------------------
@@ -248,11 +260,16 @@ public final class RtScene {
 				e.blasSize = sizes.accelerationStructureSize();
 				e.storage = new RawBuffer(ctx, e.blasSize, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false, "rt blas");
 				create.buffer(e.storage.handle).offset(0).size(e.blasSize).type(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR);
-				check(vkCreateAccelerationStructureKHR(ctx.vk, create, null, p), "vkCreateAccelerationStructureKHR");
+				int created = vkCreateAccelerationStructureKHR(ctx.vk, create, null, p);
+				if (created != VK_SUCCESS) { // unbuild() skips an entry without a BLAS: its storage would leak
+					e.storage.destroyLater();
+					e.storage = null;
+				}
+				check(created, "vkCreateAccelerationStructureKHR");
 				e.blas = p.get(0);
 				e.blasAddr = vkGetAccelerationStructureDeviceAddressKHR(ctx.vk, addrInfo.accelerationStructure(e.blas));
 				e.buildId = built;
-				e.scratchAddr = align(address(scratch.handle), scratchAlign) + scratchOffset; // the buffer base itself may be less aligned
+				e.scratchAddr = align(scratch.address(), scratchAlign) + scratchOffset; // the buffer base itself may be less aligned
 				scratchOffset += scratchSize;
 				batch.add(e);
 				blasBytes += e.blasSize;
@@ -262,6 +279,9 @@ public final class RtScene {
 		}
 		record(cb, batch);
 		dev.emrion.shaders.mod.debug.HitchLog.add(dev.emrion.shaders.mod.debug.HitchLog.BLAS, start, built - builtBefore);
+		long ns = System.nanoTime() - start;
+		blasNs += ns;
+		blasWorstNs = Math.max(blasWorstNs, ns);
 	}
 
 	/** One vkCmdBuildAccelerationStructuresKHR over the batch (heap-allocated structs: a batch can hold thousands). */
@@ -303,9 +323,9 @@ public final class RtScene {
 		var t = g.geometry().triangles().sType$Default().vertexFormat(VK_FORMAT_R32G32B32_SFLOAT).vertexStride(12)
 				.maxVertex(e.quads * 4 - 1).indexType(VK_INDEX_TYPE_UINT32);
 		t.vertexData().deviceAddress(e.posAddr);
-		t.indexData().deviceAddress(address(indices.handle));
+		t.indexData().deviceAddress(indices.address());
 		t.pNext(0);
-		if (e.ommIndices != null) RtOmm.chain(t, e, ommGeom, ommUsage, address(e.ommIndices.handle));
+		if (e.ommIndices != null) RtOmm.chain(t, e, ommGeom, ommUsage, e.ommIndices.address());
 	}
 
 	private static void blasInfo(VkAccelerationStructureBuildGeometryInfoKHR info, VkAccelerationStructureGeometryKHR.Buffer geom, long dst, long scratchAddr) {
@@ -459,7 +479,13 @@ public final class RtScene {
 			rebuildSections();
 		}
 		frame = (frame + 1) % RING;
-		if (compactPool != 0) compact(cb, frame);
+		if (compactPool != 0) {
+			long cs = System.nanoTime();
+			compact(cb, frame);
+			long ns = System.nanoTime() - cs;
+			compactNs += ns;
+			compactWorstNs = Math.max(compactWorstNs, ns);
+		}
 		sodium.update(cb, cam);
 		Profiler.mark(cb, "RT: BLAS builds");
 		long inst = instances[frame].mapped, sec = sections.mapped + (long) frame * CAPACITY * 16;
@@ -483,6 +509,11 @@ public final class RtScene {
 		lights.upload(cb, cam, frame);
 		dev.emrion.shaders.mod.debug.HitchLog.add(dev.emrion.shaders.mod.debug.HitchLog.RT_LIGHTS, start);
 		tlasValid = true;
+	}
+
+	/** True if {@link #refreshEntities} has work this frame. */
+	public boolean refreshPending() {
+		return deferEntities;
 	}
 
 	/** After the shadow pass captured this frame's entities: their BLAS and the TLAS again (sections unchanged). */
@@ -515,11 +546,11 @@ public final class RtScene {
 		try (MemoryStack stack = MemoryStack.stackPush()) {
 			var geom = VkAccelerationStructureGeometryKHR.calloc(1, stack);
 			geom.get(0).sType$Default().geometryType(VK_GEOMETRY_TYPE_INSTANCES_KHR).geometry().instances().sType$Default().arrayOfPointers(false)
-					.data().deviceAddress(address(instances[frame].handle));
+					.data().deviceAddress(instances[frame].address());
 			var info = VkAccelerationStructureBuildGeometryInfoKHR.calloc(1, stack).sType$Default().type(VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR)
 					.flags(TLAS_FLAGS).mode(refit ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR : VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR)
 					.srcAccelerationStructure(refit ? tlas : VK_NULL_HANDLE).dstAccelerationStructure(tlas).pGeometries(geom).geometryCount(1);
-			info.scratchData().deviceAddress(align(address(tlasScratch.handle), scratchAlign));
+			info.scratchData().deviceAddress(align(tlasScratch.address(), scratchAlign));
 			var range = VkAccelerationStructureBuildRangeInfoKHR.calloc(1, stack).primitiveCount(i);
 			vkCmdBuildAccelerationStructuresKHR(cb, info, stack.pointers(range));
 		}
@@ -581,7 +612,7 @@ public final class RtScene {
 	}
 
 	long indexAddress() {
-		return address(indices.handle);
+		return indices.address();
 	}
 
 	long scratchAlign() {
@@ -643,6 +674,10 @@ public final class RtScene {
 		}
 	}
 
+	private static String ms(long ns) {
+		return String.format(java.util.Locale.ROOT, "%.1f", ns / 1e6);
+	}
+
 	static long align(long v, long a) {
 		return (v + a - 1) / a * a;
 	}
@@ -657,9 +692,11 @@ public final class RtScene {
 		lastLog = now;
 		long ring = RING * (long) CAPACITY * (VkAccelerationStructureInstanceKHR.SIZEOF + 16);
 		EmrionShadersClient.LOG.info("RT: {} BLAS ({} pending, longest wait {} frames), {} triangles, BLAS {} MiB (avg {} B/tri), TLAS {} instances {} KiB ({} refits), {} BLAS compacted (-{} MiB), scratch {} MiB, "
-						+ "instance+table rings {} MiB; {} builds so far, {} Sodium layer uploads, Sodium RT CPU {} ms",
+						+ "instance+table rings {} MiB; {} builds so far, {} Sodium layer uploads, Sodium RT CPU {} ms; BLAS CPU {} ms (worst frame {} ms), compaction CPU {} ms (worst frame {} ms)",
 				sodium.built(), sodium.pendingCount(), sodium.takeMaxWait(), triangles, blasBytes >> 20, triangles == 0 ? 0 : blasBytes / triangles, instanceCount, tlasBytes >> 10, tlasRefitCount, compactCount, compactSaved >> 20,
-				SCRATCH_SIZE >> 20, ring >> 20, built, dev.emrion.shaders.mod.compat.sodium.SodiumRt.meshUploads, dev.emrion.shaders.mod.compat.sodium.SodiumRt.updateNs / 1_000_000);
+				SCRATCH_SIZE >> 20, ring >> 20, built, dev.emrion.shaders.mod.compat.sodium.SodiumRt.meshUploads, dev.emrion.shaders.mod.compat.sodium.SodiumRt.updateNs / 1_000_000,
+				ms(blasNs), ms(blasWorstNs), ms(compactNs), ms(compactWorstNs));
+		blasWorstNs = compactWorstNs = 0;
 		if (entities != null) EmrionShadersClient.LOG.info("RT: {}", entities.summary());
 		if (omm != null && ommOn) EmrionShadersClient.LOG.info("RT: {}", omm.summary());
 	}

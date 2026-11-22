@@ -2,6 +2,7 @@ package dev.emrion.shaders.mod.framegen;
 
 import static org.lwjgl.vulkan.VK10.*;
 
+import dev.emrion.shaders.mod.vk.FfxPass;
 import dev.emrion.shaders.mod.vk.RawBuffer;
 import dev.emrion.shaders.mod.vk.RawImage;
 import java.nio.ByteBuffer;
@@ -19,12 +20,11 @@ final class FrameInterpolation {
 	private static final int CB_SIZE = 176;
 	private final FfxPasses f;
 	final int renderW, renderH, displayW, displayH;
-	private final FfxPasses.Pass reconstructAndDilate, setup, reconstructPrevDepth, gameMvField, ofMvField, disocclusion, interpolation,
+	private final FfxPass reconstructAndDilate, setup, reconstructPrevDepth, gameMvField, ofMvField, disocclusion, interpolation,
 			inpaintingPyramid, inpainting, gameVectorFieldPyramid;
 	private final RawImage reconstructedDepthInterpolated, gameMvX, gameMvY, pyramid, ofMvX, ofMvY, previousSource, inpaintingMask,
 			disocclusionMask, defaultDistortion, dilatedDepth, dilatedMotion, reconstructedPrevDepth;
 	private final RawBuffer counters;
-	private final long pyramidMips;
 	private final long[] pyramidMipViews = new long[13];
 	private long dispatchCount;
 
@@ -51,7 +51,6 @@ final class FrameInterpolation {
 		int pw = Math.max(1, dw / 2), ph = Math.max(1, dh / 2);
 		int mips = 32 - Integer.numberOfLeadingZeros(Math.max(pw, ph)); // mipCount 0 in the SDK = the full chain
 		pyramid = f.image(VK_FORMAT_R16G16B16A16_SFLOAT, pw, ph, mips, "fi inpainting pyramid");
-		pyramidMips = mips;
 		for (int i = 0; i < pyramidMipViews.length; i++) pyramidMipViews[i] = f.mipView(pyramid, Math.min(i, mips - 1));
 		ofMvX = f.image(VK_FORMAT_R32_UINT, rw, rh, 1, "fi optical flow motion vector field x");
 		ofMvY = f.image(VK_FORMAT_R32_UINT, rw, rh, 1, "fi optical flow motion vector field y");
@@ -177,10 +176,5 @@ final class FrameInterpolation {
 	private void pyramidConstants(int w, int h) {
 		int[] spd = FfxPasses.spdSetup(w, h, -1);
 		f.constants("cbInpaintingPyramid", 16).putInt(0, spd[3]).putInt(4, spd[2]).putInt(8, 0).putInt(12, 0);
-	}
-
-	/** Restarts the history (the next dispatch only copies the current frame). */
-	void reset() {
-		dispatchCount = 0;
 	}
 }

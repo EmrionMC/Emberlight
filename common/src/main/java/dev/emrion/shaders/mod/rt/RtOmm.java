@@ -120,10 +120,20 @@ public final class RtOmm {
 			maxLevel = Math.min(MAX_LEVEL, props.maxOpacity4StateSubdivisionLevel());
 		}
 		int cs = VK_SHADER_STAGE_COMPUTE_BIT;
-		setLayout = new Descriptors.LayoutBuilder().add(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, cs).build(ctx, true);
-		layout = Descriptors.pipelineLayout(ctx, 68, setLayout);
-		indexPipeline = pipeline("rt_omm_index.comp");
-		dataPipeline = pipeline("rt_omm_data.comp");
+		long sl = new Descriptors.LayoutBuilder().add(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, cs).build(ctx, true), pl = 0, ip = 0;
+		try {
+			pl = Descriptors.pipelineLayout(ctx, 68, sl);
+			ip = pipeline("rt_omm_index.comp", pl);
+			dataPipeline = pipeline("rt_omm_data.comp", pl);
+		} catch (RuntimeException e) { // the scene never gets this object to destroy: free here (no GPU use yet)
+			if (ip != 0) vkDestroyPipeline(ctx.vk, ip, null);
+			if (pl != 0) vkDestroyPipelineLayout(ctx.vk, pl, null);
+			vkDestroyDescriptorSetLayout(ctx.vk, sl, null);
+			throw e;
+		}
+		setLayout = sl;
+		layout = pl;
+		indexPipeline = ip;
 		EmrionShadersClient.LOG.info("RT: opacity micromaps on (VK_EXT_opacity_micromap, 4-state up to level {})", maxLevel);
 	}
 
@@ -131,11 +141,13 @@ public final class RtOmm {
 		org.lwjgl.vulkan.VK11.vkGetPhysicalDeviceProperties2(d, p);
 	}
 
-	private long pipeline(String name) {
+	private long pipeline(String name, long layout) {
 		long m = ShaderModules.create(ctx, ShaderModules.resource("/assets/emberlight/spv/" + name + ".spv"));
-		long p = ComputePipelines.create(ctx, m, layout, ctx.pipelineCache().handle);
-		ShaderModules.destroy(ctx, m);
-		return p;
+		try {
+			return ComputePipelines.create(ctx, m, layout, ctx.pipelineCache().handle);
+		} finally {
+			ShaderModules.destroy(ctx, m);
+		}
 	}
 
 	/** Block ids a patched shader decides per id (Manifest.Rt.anyHitIds); true if they changed (the caller rebuilds the BLAS). */
@@ -344,8 +356,8 @@ public final class RtOmm {
 					any = true;
 				}
 				Atlas a = atlas;
-				pc.putLong(0, e.vertexAddr).putLong(8, scene.address(e.ommIndices.handle)).putLong(16, m.spritesAddr).putLong(24, m.gridAddr)
-						.putLong(32, anyHit == null ? 0 : scene.address(anyHit.handle)).putInt(40, e.quads * 2).putInt(44, 0)
+				pc.putLong(0, e.vertexAddr).putLong(8, e.ommIndices.address()).putLong(16, m.spritesAddr).putLong(24, m.gridAddr)
+						.putLong(32, anyHit == null ? 0 : anyHit.address()).putInt(40, e.quads * 2).putInt(44, 0)
 						.putInt(48, m.gridW).putInt(52, m.gridH).putInt(56, m.cellShift).putInt(60, anyHitIds.size()).putFloat(64, a == null ? 0.05f : eps(a));
 				vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_ALL, 0, pc);
 				vkCmdDispatch(cb, (e.quads * 2 + 63) / 64, 1, 1);

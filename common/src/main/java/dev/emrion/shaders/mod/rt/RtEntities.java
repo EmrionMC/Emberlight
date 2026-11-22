@@ -22,7 +22,6 @@ import dev.emrion.shaders.mod.vk.ComputePipelines;
 import dev.emrion.shaders.mod.vk.Descriptors;
 import dev.emrion.shaders.mod.vk.RawBuffer;
 import dev.emrion.shaders.mod.vk.RawImage;
-import dev.emrion.shaders.mod.vk.ShaderModules;
 import dev.emrion.shaders.mod.vk.UboRing;
 import dev.emrion.shaders.mod.vk.VulkanContext;
 import java.nio.ByteBuffer;
@@ -92,7 +91,7 @@ public final class RtEntities {
 	 * turning only adds or drops whole sections, which add or drop instances instead of rebuilding one BLAS over the whole
 	 * storage. Off (one static BLAS per draw, as before): -Demrion.rt.noStaticRegions=true.
 	 */
-	private static boolean regions = true;
+	private static boolean regions = true, staticBlockEntities = true, cutoutChests;
 
 	/** A draw's cache hits in vertex order, 3 longs each: first vertex << 32 | vertex count, entry generation, section key. */
 	private static final class Hits {
@@ -151,6 +150,8 @@ public final class RtEntities {
 		if (extraOnly && shadowHasEntities && shadowHasBlockEntities) return;
 		capturing = true;
 		regions = !Boolean.getBoolean("emrion.rt.noStaticRegions");
+		staticBlockEntities = !Boolean.getBoolean("emrion.rt.noStaticBlockEntities"); // once per capture, not per draw
+		cutoutChests = Boolean.getBoolean("emrion.rt.cutoutChests");
 		if (shadow) {
 			shadowCaptured = true;
 			shadowHasEntities = entities;
@@ -210,7 +211,7 @@ public final class RtEntities {
 			GpuTextureView tex = null;
 			for (var t : type.textures()) if (t.name().equals("Sampler0")) tex = t.textureView();
 			if (tex == null) continue;
-			Hits hits = blockEntity && !Boolean.getBoolean("emrion.rt.noStaticBlockEntities") ? cachedHits.get(d) : null;
+			Hits hits = blockEntity && staticBlockEntities ? cachedHits.get(d) : null;
 			if (hits != null && captureStatic(a, n & ~3, hits, name, tex)) continue;
 			int bytes = (n & ~3) * STRIDE;
 			if (cap.remaining() < bytes) {
@@ -347,7 +348,7 @@ public final class RtEntities {
 	 */
 	private static boolean solidSheet(GpuTexture tex) {
 		String l = tex.getLabel();
-		return !Boolean.getBoolean("emrion.rt.cutoutChests") && (l.contains("atlas/chest") || l.contains("atlas/shulker"));
+		return !cutoutChests && (l.contains("atlas/chest") || l.contains("atlas/shulker"));
 	}
 
 	private static boolean isPlayer(long vertex) {
@@ -426,6 +427,12 @@ public final class RtEntities {
 	private final java.util.ArrayDeque<Blas> spare = new java.util.ArrayDeque<>();
 	private static final int SPARES = 2, SPARE_MIN_BYTES = 1 << 20, SPARE_FRAMES = 600;
 	private java.util.Set<Long> candidates = new java.util.HashSet<>(); // static signatures of the last frame
+	/** prepareTimed's per-frame lists, cleared and refilled each frame; {@code nextSigs} becomes {@code candidates} (swapped). */
+	private final Map<String, Integer> seen = new HashMap<>();
+	private final List<Blas> work = new ArrayList<>(), reused = new ArrayList<>();
+	private final it.unimi.dsi.fastutil.booleans.BooleanArrayList update = new it.unimi.dsi.fastutil.booleans.BooleanArrayList();
+	private final it.unimi.dsi.fastutil.longs.LongArrayList offsets = new it.unimi.dsi.fastutil.longs.LongArrayList();
+	private java.util.Set<Long> nextSigs = new java.util.HashSet<>();
 	private int frameNo;
 	/** Frames between copies of the textures in use into the atlas (they may change in place). */
 	private static final int REFRESH_FRAMES = 10;
@@ -440,9 +447,7 @@ public final class RtEntities {
 		setLayout = new Descriptors.LayoutBuilder().add(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_COMPUTE_BIT)
 				.add(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_SHADER_STAGE_COMPUTE_BIT).build(ctx, true);
 		layout = Descriptors.pipelineLayout(ctx, 16, setLayout);
-		long cs = ShaderModules.create(ctx, ShaderModules.resource("/assets/emberlight/spv/rt_entity_blit.comp.spv"));
-		pipeline = ComputePipelines.create(ctx, cs, layout, ctx.pipelineCache().handle);
-		ShaderModules.destroy(ctx, cs);
+		pipeline = ComputePipelines.create(ctx, "/assets/emberlight/spv/rt_entity_blit.comp.spv", layout);
 		EmrionShadersClient.LOG.info("RT: entities on (atlas {}², budget {} triangles/frame, {} refits per rebuild)", ATLAS, BUDGET, REFITS);
 	}
 
@@ -498,7 +503,7 @@ public final class RtEntities {
 		draws = builds = refits = dropped = blits = 0;
 		triangles = 0;
 		if (captured.isEmpty()) {
-			candidates = new java.util.HashSet<>();
+			candidates.clear();
 			staticSigs = java.util.Set.of();
 			retire();
 			return;
@@ -513,16 +518,17 @@ public final class RtEntities {
 			verts[slot] = new RawBuffer(ctx, Math.max(1L << 20, Long.highestOneBit(bytes) << 1), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR
 					| VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, "rt entity vertices");
 		}
-		long base = verts[slot].mapped, baseAddr = scene.address(verts[slot].handle);
+		long base = verts[slot].mapped, baseAddr = verts[slot].address();
 		GpuTexture blocks = Minecraft.getInstance().getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS).getTexture();
 		placeTextures(cb, blocks);
-		Map<String, Integer> seen = new HashMap<>();
-		List<Blas> work = new ArrayList<>();
-		List<Boolean> update = new ArrayList<>();
-		List<Long> offsets = new ArrayList<>();
+		seen.clear();
+		work.clear();
+		update.clear();
+		offsets.clear();
+		reused.clear();
 		long tris = 0, scratchSize = 0;
-		List<Blas> reused = new ArrayList<>();
-		java.util.Set<Long> sigs = new java.util.HashSet<>();
+		java.util.Set<Long> sigs = nextSigs;
+		sigs.clear();
 		try (MemoryStack stack = MemoryStack.stackPush()) {
 			var geom = VkAccelerationStructureGeometryKHR.calloc(1, stack);
 			var info = VkAccelerationStructureBuildGeometryInfoKHR.calloc(stack);
@@ -579,7 +585,7 @@ public final class RtEntities {
 							| VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, "rt static entity vertices");
 					MemoryUtil.memCopy(src, b.data.mapped, size);
 					b.rect = rect;
-					b.vertexAddr = scene.address(b.data.handle);
+					b.vertexAddr = b.data.address();
 					b.sig = c.sig();
 				} else {
 					MemoryUtil.memCopy(src, dst, size);
@@ -623,6 +629,7 @@ public final class RtEntities {
 		record(cb, work, update, offsets);
 		live.addAll(work);
 		live.addAll(reused);
+		nextSigs = candidates;
 		candidates = sigs;
 		draws = work.size() + reused.size();
 		triangles = tris;
@@ -721,7 +728,7 @@ public final class RtEntities {
 		for (int i = 0; i < views.size(); i++) blit(cb, views.get(i), placed.get(i));
 	}
 
-	private void record(VkCommandBuffer cb, List<Blas> work, List<Boolean> update, List<Long> offsets) {
+	private void record(VkCommandBuffer cb, List<Blas> work, it.unimi.dsi.fastutil.booleans.BooleanList update, it.unimi.dsi.fastutil.longs.LongList offsets) {
 		int n = work.size();
 		if (n == 0) return;
 		var geoms = VkAccelerationStructureGeometryKHR.calloc(n);
@@ -729,13 +736,13 @@ public final class RtEntities {
 		var ranges = VkAccelerationStructureBuildRangeInfoKHR.calloc(n);
 		PointerBuffer pRanges = MemoryUtil.memAllocPointer(n);
 		try {
-			long s = align(scene.address(scratch.handle));
+			long s = align(scratch.address());
 			for (int i = 0; i < n; i++) {
 				Blas b = work.get(i);
-				boolean refit = update.get(i);
+				boolean refit = update.getBoolean(i);
 				int quads = b.vertices / 4;
 				fill(geoms.get(i), b, quads);
-				buildInfo(infos.get(i), VkAccelerationStructureGeometryKHR.create(geoms.address(i), 1), refit, b.as, s + offsets.get(i));
+				buildInfo(infos.get(i), VkAccelerationStructureGeometryKHR.create(geoms.address(i), 1), refit, b.as, s + offsets.getLong(i));
 				ranges.get(i).primitiveCount(quads * 2);
 				pRanges.put(i, ranges.address(i));
 				if (refit) refits++;

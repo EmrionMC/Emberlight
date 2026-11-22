@@ -41,7 +41,8 @@ import org.lwjgl.vulkan.VkSamplerCreateInfo;
 
 /**
  * GPU state of one pack dimension at one window size: targets, custom textures, samplers and one pre-built set-1 descriptor
- * set per flip state. A window resize builds a new PackRuntime from the same {@link PackPipelines}.
+ * set per flip state. A window resize builds a new PackRuntime from the same {@link PackPipelines}; what does not depend on
+ * the size (custom textures, SPIR-V analyses) is kept in {@link Shared} and not read or uploaded again.
  */
 public final class PackRuntime {
 	private static final Pattern COLORTEX = Pattern.compile("colortex(\\d+)");
@@ -116,12 +117,47 @@ public final class PackRuntime {
 
 	final Map<String, Img[]> images = new HashMap<>();
 	final Map<String, Buf> buffers = new HashMap<>();
-	private final Map<String, Img> textures = new HashMap<>();
 	private final Map<Manifest.SamplerDef, Long> samplers = new HashMap<>();
-	private final List<GpuTexture> ownedTextures = new ArrayList<>();
-	private final List<GpuTextureView> ownedViews = new ArrayList<>();
-	private final List<RawImage> rawTextures = new ArrayList<>();
+	/** Size-independent state of the dimension {@link #pipelines} belongs to, shared by its runtimes. */
+	private Shared sh;
 	private Img dummy;
+	/** Custom textures of this runtime only (the fallback for ones that did not load); the rest are in {@link Shared#textures}. */
+	private final Map<String, Img> textures = new HashMap<>();
+
+	/**
+	 * What a resize keeps: the custom textures (disk reads and uploads), the 1×1 fallbacks and the SPIR-V analyses of
+	 * {@link IdentityCopies} and {@link FlipSwap}. One at a time, for the {@link PackPipelines} and atlas generation (a
+	 * resource reload: textures read from MC's resources may have changed) it was made with; released by
+	 * {@link #releaseShared} or when a runtime for others is built. Filled per item, so a failed build keeps
+	 * what it finished and the next one adds the rest.
+	 */
+	private static final class Shared {
+		final PackPipelines owner;
+		final int atlasGeneration = PbrAtlases.generation();
+		final Map<String, Img> textures = new HashMap<>(), fallbacks = new HashMap<>();
+		final List<GpuTexture> ownedTextures = new ArrayList<>();
+		final List<GpuTextureView> ownedViews = new ArrayList<>();
+		final List<RawImage> rawTextures = new ArrayList<>();
+		Set<Integer> skipped;
+		/** Upscaling on/off (final's cut target is excluded when on) → swapped targets. */
+		final Map<Boolean, Set<String>> swapped = new HashMap<>();
+
+		Shared(PackPipelines owner) {
+			this.owner = owner;
+		}
+	}
+
+	private static Shared shared;
+
+	/** Queues the kept textures for destruction (after the last runtime using them was released); render thread. */
+	public static void releaseShared() {
+		Shared s = shared;
+		shared = null;
+		if (s == null) return;
+		s.ownedViews.forEach(GpuTextureView::close);
+		s.ownedTextures.forEach(GpuTexture::close);
+		s.rawTextures.forEach(RawImage::destroyLater);
+	}
 	/** Builtin resources. */
 	private final Map<String, Img> builtins = new HashMap<>();
 	private DescriptorPool pool;
@@ -155,6 +191,11 @@ public final class PackRuntime {
 	}
 
 	private void init(Path cacheDir) {
+		if (shared == null || shared.owner != pipelines || shared.atlasGeneration != atlasGeneration) {
+			releaseShared();
+			shared = new Shared(pipelines);
+		}
+		sh = shared;
 		long align = ctx.limits().minUniformBufferOffsetAlignment();
 		boolean upscale = dev.emrion.shaders.mod.upscale.Upscaling.active();
 		// + final's own frame block (window-size viewWidth/viewHeight) while upscaling
@@ -164,7 +205,7 @@ public final class PackRuntime {
 		java.util.Set<String> storage = new java.util.HashSet<>();
 		for (var r : dim.resources()) if (r.kind().equals("storage_image")) storage.add(r.target());
 		for (var t : dim.targets()) createTarget(t, storage.contains(t.name()));
-		dummy = mcTexture("emrion white", solid(0xFFFFFFFF));
+		dummy = fallback("emrion white", 0xFFFFFFFF);
 		builtins.put("white", dummy);
 		PbrAtlases.request();
 		var atlas = PbrAtlases.blockAtlas();
@@ -174,8 +215,8 @@ public final class PackRuntime {
 		if (dim.resources().stream().anyMatch(r -> "block_atlas_specular".equals(r.builtin()) || "block_atlas_normals".equals(r.builtin()))) {
 			var n = PbrAtlases.normals();
 			var s = PbrAtlases.specular();
-			builtins.put("block_atlas_normals", n != null ? view("block atlas normals", n) : mcTexture("emrion default normals", solid(0xFFFF7F7F)));
-			builtins.put("block_atlas_specular", s != null ? view("block atlas specular", s) : mcTexture("emrion default specular", solid(0)));
+			builtins.put("block_atlas_normals", n != null ? view("block atlas normals", n) : fallback("emrion default normals", 0xFFFF7F7F));
+			builtins.put("block_atlas_specular", s != null ? view("block atlas specular", s) : fallback("emrion default specular", 0));
 		}
 		if (dim.resources().stream().anyMatch(r -> RtAoPass.BUILTIN.equals(r.builtin()))) {
 			rtAo = new RtAoPass(ctx, width, height);
@@ -187,7 +228,12 @@ public final class PackRuntime {
 			img.sampled = entityAtlas;
 			builtins.put("emrion_rt_entity_atlas", img);
 		}
-		for (var tex : manifest.textures()) textures.put(tex.name(), loadTexture(cacheDir, tex));
+		for (var tex : manifest.textures()) {
+			if (sh.textures.containsKey(tex.name())) continue;
+			Img img = loadTexture(cacheDir, tex);
+			if (img != dummy) sh.textures.put(tex.name(), img); // a failed or unresolved one is tried again next build, as before
+			else textures.put(tex.name(), img);
+		}
 
 		int maxBinding = dim.resources().stream().mapToInt(Manifest.Resource::binding).max().orElse(0);
 		bindingKind = new String[maxBinding + 1];
@@ -211,15 +257,17 @@ public final class PackRuntime {
 		Map<String, Boolean> partial = new HashMap<>();
 		java.util.function.Predicate<String> discards = prog -> partial.computeIfAbsent(prog, q -> FlipSwap.discards(fragment.apply(q))
 				|| !FullscreenCoverage.covers(spv(cacheDir, fullscreenVertex(dim.programs().get(q)))));
-		skipped = IDENTITY_SKIP ? IdentityCopies.skippable(dim, fragment, discards) : Set.of();
-		if (!skipped.isEmpty()) dev.emrion.shaders.mod.EmrionShadersClient.LOG.info("Skipping identity copy passes {}",
+		boolean analysed = sh.skipped != null;
+		if (!analysed) sh.skipped = IDENTITY_SKIP ? IdentityCopies.skippable(dim, fragment, discards) : Set.of();
+		skipped = sh.skipped;
+		if (!skipped.isEmpty() && !analysed) dev.emrion.shaders.mod.EmrionShadersClient.LOG.info("Skipping identity copy passes {}",
 				skipped.stream().map(i -> dim.frame().get(i).program()).toList());
 		skip = new boolean[dim.frame().size()];
 		for (int i : skipped) skip[i] = true;
 		var kept = new ArrayList<Manifest.Command>();
 		for (int i = 0; i < dim.frame().size(); i++) if (!skipped.contains(i)) kept.add(dim.frame().get(i));
 		var withoutSkipped = new Manifest.Dimension(dim.programs(), dim.resources(), dim.targets(), dim.flipStates(), kept, dim.once(), dim.shadow());
-		swapped = FLIP_SWAP ? FlipSwap.swappable(withoutSkipped, discards, upscale ? cutTarget(dim) : null) : Set.of();
+		swapped = sh.swapped.computeIfAbsent(upscale, up -> FLIP_SWAP ? FlipSwap.swappable(withoutSkipped, discards, up ? cutTarget(dim) : null) : Set.of());
 		int parities = swapped.isEmpty() ? 1 : 2; // one set of descriptor sets per image assignment
 		for (int i = 1; i < sizes.length; i += 2) sizes[i] *= parities;
 		pool = new DescriptorPool(ctx, (upscale ? n + 1 : n) * parities, sizes);
@@ -494,7 +542,7 @@ public final class PackRuntime {
 		Img img = new Img("emrion " + t.name(), null);
 		img.raw = new RawImage(ctx, VulkanConst.toVk(Formats.gpu(t.format())), s[0], s[1], s[2], t.dims(), 1,
 				VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, img.label);
-		rawTextures.add(img.raw);
+		sh.rawTextures.add(img.raw);
 		img.image = img.raw.image;
 		img.sampled = img.raw.view;
 		var staging = new RawBuffer(ctx, data.length, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true, img.label + " upload");
@@ -528,6 +576,13 @@ public final class PackRuntime {
 		return img;
 	}
 
+	/** A kept 1×1 texture of one colour. */
+	private Img fallback(String label, int abgr) {
+		Img img = sh.fallbacks.get(label);
+		if (img == null) sh.fallbacks.put(label, img = mcTexture(label, solid(abgr)));
+		return img;
+	}
+
 	private static NativeImage solid(int abgr) {
 		NativeImage img = new NativeImage(1, 1, false);
 		img.setPixelABGR(0, 0, abgr);
@@ -536,14 +591,17 @@ public final class PackRuntime {
 
 	/** 1×1 D32 = 1.0: what unbound shadow samplers (compare) read. */
 	private Img whiteDepth() {
+		Img kept = sh.fallbacks.get("white depth");
+		if (kept != null) return kept;
 		var tex = RenderSystem.getDevice().createTexture("emrion white depth", MC_USAGE,
 				GpuFormat.D32_FLOAT, 1, 1, 1, 1);
-		ownedTextures.add(tex); // owned before anything below can throw
+		sh.ownedTextures.add(tex); // owned before anything below can throw
 		RenderSystem.getDevice().createCommandEncoder().clearDepthTexture(tex, 1.0);
 		var view = RenderSystem.getDevice().createTextureView(tex);
-		ownedViews.add(view);
+		sh.ownedViews.add(view);
 		Img img = new Img("emrion white depth", null);
 		img.sampled = ((VulkanGpuTextureView) view).vkImageView();
+		sh.fallbacks.put("white depth", img);
 		return img;
 	}
 
@@ -558,10 +616,10 @@ public final class PackRuntime {
 		try (source) {
 			var tex = RenderSystem.getDevice().createTexture(label, GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_TEXTURE_BINDING,
 					GpuFormat.RGBA8_UNORM, source.getWidth(), source.getHeight(), 1, 1);
-			ownedTextures.add(tex); // owned before the upload can throw
+			sh.ownedTextures.add(tex); // owned before the upload can throw
 			RenderSystem.getDevice().createCommandEncoder().writeToTexture(tex, source);
 			var view = RenderSystem.getDevice().createTextureView(tex);
-			ownedViews.add(view);
+			sh.ownedViews.add(view);
 			Img img = new Img(label, null);
 			img.sampled = ((VulkanGpuTextureView) view).vkImageView();
 			return img;
@@ -602,7 +660,7 @@ public final class PackRuntime {
 					Descriptors.writeImage(ctx, set, r.binding(), VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, img.attach, VK_NULL_HANDLE);
 				}
 				case "sampled_image" -> {
-					Img img = r.target() != null ? setOverride.getOrDefault(r.target(), read(r.target(), flip)) : r.texture() != null ? textures.getOrDefault(r.texture(), dummy)
+					Img img = r.target() != null ? setOverride.getOrDefault(r.target(), read(r.target(), flip)) : r.texture() != null ? sh.textures.getOrDefault(r.texture(), textures.getOrDefault(r.texture(), dummy))
 							: builtins.getOrDefault(r.builtin(), dummy);
 					if (img == null) img = dummy;
 					if (img.target != null || rtAo != null && img == rtAo.output) res[r.binding()] = img;
@@ -660,7 +718,7 @@ public final class PackRuntime {
 		};
 	}
 
-	/** Releases everything after the frames in flight retired. The pipelines are shared and released by the owner. */
+	/** Releases everything after the frames in flight retired. The pipelines and {@link Shared} are released by their owner. */
 	public void destroyLater() {
 		if (pool != null) pool.destroyLater();
 		if (ring != null) ring.destroyLater();
@@ -671,9 +729,7 @@ public final class PackRuntime {
 		if (ocm != 0 && ocm != cm) ctx.destroyLater(() -> vkDestroyImageView(ctx.vk, ocm, null));
 		for (Img[] sides : images.values()) for (Img img : sides) if (img != null) release(img);
 		buffers.values().forEach(b -> b.buffer.destroyLater());
-		ownedViews.forEach(GpuTextureView::close);
-		ownedTextures.forEach(GpuTexture::close);
-		rawTextures.forEach(RawImage::destroyLater);
+		// the textures in sh stay for the next runtime: releaseShared()
 		List<Long> s = List.copyOf(samplers.values());
 		ctx.destroyLater(() -> s.forEach(h -> vkDestroySampler(ctx.vk, h, null)));
 	}

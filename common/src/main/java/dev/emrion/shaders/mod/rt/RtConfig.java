@@ -32,7 +32,7 @@ public final class RtConfig {
 	public static volatile int blockLightRays;
 	/** RT global illumination quality: off | low (half res, 1 ray) | medium (half res, 2 rays) | high (full res, 2 rays). */
 	public static final List<String> GI_MODES = List.of("off", "low", "medium", "high");
-	public static volatile String gi = "off";
+	public static volatile String gi = "low";
 	/** RTX GI: world-space radiance cache (SHaRC-style hash grid) ends bounce rays at cached light (RAYTRACING.md §39). */
 	public static volatile boolean giCache = true;
 	/**
@@ -61,7 +61,7 @@ public final class RtConfig {
 		shadowEntities = Boolean.parseBoolean(get(p, "shadowEntities", "true"));
 		blockLightRays = parse(get(p, "blockLightRays", null), 4, 0, 16);
 		String g = get(p, "gi", "low");
-		gi = GI_MODES.contains(g) ? g : "off";
+		gi = GI_MODES.contains(g) ? g : "low";
 		giCache = Boolean.parseBoolean(get(p, "giCache", "true"));
 		String st = get(p, "style", "rtx");
 		style = STYLES.contains(st) ? st : "rtx";
@@ -143,7 +143,9 @@ public final class RtConfig {
 				if (giCache) s.add("gi:cache");
 			}
 			s.add("gi");
-			if (!gi.equals("low")) s.add("gi:rays=2");
+			// High at full res with the RTX radiance cache: 1 ray, the cache carries the bounce (hall GI trace 2.4 -> 1.4 ms, no visible
+			// change in stills or pans); without the cache 2 rays
+			if (gi.equals("medium") || gi.equals("high") && !(rtx && giCache)) s.add("gi:rays=2");
 			if (gi.equals("high")) s.add("gi:res=1.0");
 			String debug = System.getProperty("emrion.rt.giDebug"); // 1 = history match (red), 2 = GI only (x4)
 			if (debug != null) s.add("gi:debug=" + debug);

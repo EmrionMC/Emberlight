@@ -69,9 +69,7 @@ public final class MotionVectors {
 					.add(4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, cs).add(5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, cs).build(ctx, true);
 			layout = Descriptors.pipelineLayout(ctx, 0, setLayout);
 			params = new RawBuffer(ctx, (long) SLOT * UboRing.REGIONS, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true, "motion vector params");
-			long module = ShaderModules.create(ctx, ShaderModules.resource("/assets/emberlight/spv/upscale_motion.comp.spv"));
-			pipeline = ComputePipelines.create(ctx, module, layout, ctx.pipelineCache().handle);
-			ShaderModules.destroy(ctx, module);
+			pipeline = ComputePipelines.create(ctx, "/assets/emberlight/spv/upscale_motion.comp.spv", layout);
 
 			objSetLayout = new Descriptors.LayoutBuilder().add(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT).build(ctx, true);
 			objLayout = Descriptors.pipelineLayout(ctx, 16, objSetLayout);

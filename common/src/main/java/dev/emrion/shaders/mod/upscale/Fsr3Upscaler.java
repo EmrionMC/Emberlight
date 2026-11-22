@@ -3,14 +3,9 @@ package dev.emrion.shaders.mod.upscale;
 import static dev.emrion.shaders.mod.vk.Barriers.*;
 import static org.lwjgl.vulkan.VK10.*;
 
-import dev.emrion.shaders.converter.spirv.SpirvReflection;
 import dev.emrion.shaders.mod.debug.Profiler;
-import dev.emrion.shaders.mod.vk.ComputePipelines;
-import dev.emrion.shaders.mod.vk.Descriptors;
-import dev.emrion.shaders.mod.vk.RawBuffer;
-import dev.emrion.shaders.mod.vk.RawCommands;
+import dev.emrion.shaders.mod.vk.FfxPass;
 import dev.emrion.shaders.mod.vk.RawImage;
-import dev.emrion.shaders.mod.vk.ShaderModules;
 import dev.emrion.shaders.mod.vk.UboRing;
 import dev.emrion.shaders.mod.vk.VulkanContext;
 import java.nio.ByteBuffer;
@@ -22,14 +17,9 @@ import org.joml.Matrix4fc;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.KHRPushDescriptor;
-import org.lwjgl.vulkan.VkBufferImageCopy;
-import org.lwjgl.vulkan.VkClearColorValue;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDescriptorBufferInfo;
 import org.lwjgl.vulkan.VkDescriptorImageInfo;
-import org.lwjgl.vulkan.VkImageSubresourceRange;
-import org.lwjgl.vulkan.VkImageViewCreateInfo;
-import org.lwjgl.vulkan.VkSamplerCreateInfo;
 import org.lwjgl.vulkan.VkWriteDescriptorSet;
 
 /**
@@ -41,39 +31,8 @@ final class Fsr3Upscaler extends Upscaler {
 	private static final int USAGE = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 	private static final int MAX_QUEUED_FRAMES = 16;
 
-	private record Binding(int binding, int type, String name) {}
-
-	private final class Pass {
-		final String name;
-		final long setLayout, layout, pipeline;
-		final List<Binding> bindings = new ArrayList<>();
-
-		Pass(String name) {
-			this.name = name;
-			byte[] spv = ShaderModules.resource(SPV + name + ".spv");
-			var builder = new Descriptors.LayoutBuilder();
-			for (var d : SpirvReflection.reflect(spv).descriptors()) {
-				int type = switch (d.type()) {
-					case "separate_image" -> VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-					case "storage_image" -> VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-					case "uniform_buffer" -> VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-					case "separate_sampler" -> VK_DESCRIPTOR_TYPE_SAMPLER;
-					default -> throw new IllegalStateException("FSR " + name + ": unexpected descriptor " + d);
-				};
-				bindings.add(new Binding(d.binding(), type, d.name()));
-				builder.add(d.binding(), type, VK_SHADER_STAGE_COMPUTE_BIT);
-			}
-			setLayout = builder.build(ctx, true);
-			layout = Descriptors.pipelineLayout(ctx, 0, setLayout);
-			long module = ShaderModules.create(ctx, spv);
-			pipeline = ComputePipelines.create(ctx, module, layout, ctx.pipelineCache().handle);
-			ShaderModules.destroy(ctx, module);
-		}
-	}
-
-	private Pass prepareInputs, lumaPyramid, shadingChangePyramid, shadingChange, prepareReactivity, lumaInstability, accumulate,
+	private FfxPass prepareInputs, lumaPyramid, shadingChangePyramid, shadingChange, prepareReactivity, lumaInstability, accumulate,
 			accumulateSharpen, rcas;
-	private final List<Pass> passes = new ArrayList<>();
 	private long pointSampler, linearSampler;
 	private UboRing ubo;
 	// internal resources (ffx_fsr3upscaler.cpp fsr3upscalerCreate)
@@ -146,10 +105,8 @@ final class Fsr3Upscaler extends Upscaler {
 		MemoryUtil.memFree(zero);
 	}
 
-	private Pass pass(String name) {
-		Pass p = new Pass(name);
-		passes.add(p);
-		return p;
+	private FfxPass pass(String name) {
+		return FfxPass.get(ctx, SPV, name, "FSR");
 	}
 
 	private RawImage img(int format, int w, int h, int mips, String label) {
@@ -159,39 +116,15 @@ final class Fsr3Upscaler extends Upscaler {
 	}
 
 	private long mipView(RawImage img, int level) {
-		try (MemoryStack stack = MemoryStack.stackPush()) {
-			var info = VkImageViewCreateInfo.calloc(stack).sType$Default().image(img.image).viewType(VK_IMAGE_VIEW_TYPE_2D).format(img.format);
-			info.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(level).levelCount(1).baseArrayLayer(0).layerCount(1);
-			var p = stack.mallocLong(1);
-			if (vkCreateImageView(ctx.vk, info, null, p) != VK_SUCCESS) throw new IllegalStateException("vkCreateImageView fsr spd mip");
-			return p.get(0);
-		}
+		return FfxPass.mipView(ctx, img, level, "fsr spd");
 	}
 
 	private long sampler(int filter) {
-		try (MemoryStack stack = MemoryStack.stackPush()) {
-			var info = VkSamplerCreateInfo.calloc(stack).sType$Default().magFilter(filter).minFilter(filter)
-					.mipmapMode(filter == VK_FILTER_LINEAR ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST)
-					.addressModeU(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE).addressModeV(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
-					.addressModeW(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE).maxAnisotropy(1).minLod(0).maxLod(VK_LOD_CLAMP_NONE);
-			var p = stack.mallocLong(1);
-			if (vkCreateSampler(ctx.vk, info, null, p) != VK_SUCCESS) throw new IllegalStateException("vkCreateSampler fsr");
-			return p.get(0);
-		}
+		return FfxPass.sampler(ctx, filter, "fsr");
 	}
 
 	private void upload(RawImage img, ByteBuffer data) {
-		var staging = new RawBuffer(ctx, data.remaining(), VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true, "fsr upload");
-		MemoryUtil.memByteBuffer(staging.mapped, data.remaining()).put(data);
-		try (MemoryStack stack = MemoryStack.stackPush()) {
-			var region = VkBufferImageCopy.calloc(1, stack);
-			region.imageSubresource().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
-			region.imageExtent().set(img.width, img.height, 1);
-			var cb = RawCommands.begin(ctx);
-			vkCmdCopyBufferToImage(cb, staging.handle, img.image, VK_IMAGE_LAYOUT_GENERAL, region);
-			RawCommands.submit(ctx, cb);
-		}
-		staging.destroyLater();
+		FfxPass.upload(ctx, img, data, "fsr");
 	}
 
 	private static float lanczos2(float x) {
@@ -210,14 +143,14 @@ final class Fsr3Upscaler extends Upscaler {
 		boolean resetAccumulation = reset || first;
 
 		try (MemoryStack stack = MemoryStack.stackPush()) {
-			if (first) for (RawImage i : new RawImage[] {accumulation[0], accumulation[1], luma[0], luma[1]}) clear(cb, stack, i, 0f);
+			if (first) for (RawImage i : new RawImage[] {accumulation[0], accumulation[1], luma[0], luma[1]}) clear(cb, i, 0f);
 			if (resetAccumulation) {
-				if (!first) clear(cb, stack, accumSrv, 0f); // first: cleared just above (a second clear would race it)
-				clearFloat(cb, stack, frameInfo, -1f, 1f, 0f, 0f);
+				if (!first) clear(cb, accumSrv, 0f); // first: cleared just above (a second clear would race it)
+				FfxPass.clearFloat(cb, frameInfo, -1f, 1f, 0f, 0f);
 			}
-			clearUint(cb, stack, reconstructedPrevDepth, Float.floatToRawIntBits(1f)); // forward depth: "far" is 1.0 (float bits in a uint)
-			clearUint(cb, stack, spdAtomic, 0);
-			clear(cb, stack, spdMips, 0f);
+			FfxPass.clearUint(cb, reconstructedPrevDepth, Float.floatToRawIntBits(1f)); // forward depth: "far" is 1.0 (float bits in a uint)
+			FfxPass.clearUint(cb, spdAtomic, 0);
+			clear(cb, spdMips, 0f);
 			memory(cb, TRANSFER, TRANSFER_WRITE, COMPUTE, SAMPLED_READ | STORAGE_READ | STORAGE_WRITE);
 			first = false;
 
@@ -234,6 +167,7 @@ final class Fsr3Upscaler extends Upscaler {
 			float aspect = (float) renderW / renderH, tanHalfFovY = 1f / p.m11();
 			float tanHalfFovX = tanHalfFovY * aspect;
 
+			ubo.nextFrame(); // first, not after the passes: a throw below must not leave the region full for every later frame
 			long cbOff = ubo.alloc(160);
 			ByteBuffer c = MemoryUtil.memByteBuffer(ubo.address(cbOff), 160).order(java.nio.ByteOrder.nativeOrder());
 			c.putInt(0, renderW).putInt(4, renderH).putInt(8, prevRenderW == 0 ? renderW : prevRenderW).putInt(12, prevRenderH == 0 ? renderH : prevRenderH);
@@ -249,7 +183,7 @@ final class Fsr3Upscaler extends Upscaler {
 			c.putFloat(112, Math.clamp(deltaMs / 1000f, 0f, 1f)).putFloat(116, 1f).putFloat(120, 1f).putFloat(124, frameIndex);
 			c.putFloat(128, 1f).putFloat(132, 1f).putFloat(136, 1f).putFloat(140, 1f / 3f).putFloat(144, -1f / 3f);
 
-			int[] spd = spdSetup(renderW, renderH);
+			int[] spd = FfxPass.spdSetup(renderW, renderH, -1);
 			long spdOff = ubo.alloc(32);
 			MemoryUtil.memByteBuffer(ubo.address(spdOff), 32).order(java.nio.ByteOrder.nativeOrder())
 					.putInt(0, spd[3]).putInt(4, spd[2]).putInt(8, 0).putInt(12, 0).putInt(16, renderW).putInt(20, renderH);
@@ -318,7 +252,6 @@ final class Fsr3Upscaler extends Upscaler {
 			run(cb, stack, sharpen ? accumulateSharpen : accumulate, srv, uav, cbs, dstX, dstY);
 			if (sharpen) run(cb, stack, rcas, srv, uav, cbs, (displayW + 15) / 16, (displayH + 15) / 16);
 		}
-		ubo.nextFrame();
 		lastJitter[0] = jitter[0];
 		lastJitter[1] = jitter[1];
 		prevRenderW = renderW;
@@ -330,22 +263,15 @@ final class Fsr3Upscaler extends Upscaler {
 
 	private final float[] lastJitter = new float[2];
 
-	/** ffxSpdSetup for a (0, 0, w, h) rect: {dispatchX, dispatchY, numWorkGroups, mips}. */
-	static int[] spdSetup(int w, int h) {
-		int x = (w - 1) / 64 + 1, y = (h - 1) / 64 + 1;
-		int mips = (int) Math.min(Math.floor(Math.log(Math.max(w, h)) / Math.log(2)), 12);
-		return new int[] {x, y, x * y, mips};
-	}
-
-	private void run(VkCommandBuffer cb, MemoryStack stack, Pass p, Map<String, Long> srv, Map<String, Long> uav, Map<String, Long> cbs, int x, int y) {
+	private void run(VkCommandBuffer cb, MemoryStack stack, FfxPass p, Map<String, Long> srv, Map<String, Long> uav, Map<String, Long> cbs, int x, int y) {
 		var writes = VkWriteDescriptorSet.calloc(p.bindings.size(), stack);
-		for (Binding b : p.bindings) {
+		for (FfxPass.Binding b : p.bindings) {
 			var w = writes.get().sType$Default().dstBinding(b.binding()).descriptorType(b.type()).descriptorCount(1);
 			switch (b.type()) {
 				case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER -> {
 					Long off = cbs.entrySet().stream().filter(e -> b.name().toLowerCase(java.util.Locale.ROOT).startsWith(e.getKey().toLowerCase(java.util.Locale.ROOT))).map(Map.Entry::getValue).findFirst()
 							.orElseThrow(() -> new IllegalStateException("FSR " + p.name + ": unknown constant buffer " + b.name()));
-					w.pBufferInfo(VkDescriptorBufferInfo.calloc(1, stack).buffer(ubo.buffer.handle).offset(off).range(VK_WHOLE_SIZE));
+					w.pBufferInfo(VkDescriptorBufferInfo.calloc(1, stack).buffer(ubo.buffer.handle).offset(off).range(ubo.range(off)));
 				}
 				case VK_DESCRIPTOR_TYPE_SAMPLER -> w.pImageInfo(VkDescriptorImageInfo.calloc(1, stack)
 						.sampler(b.name().contains("Linear") ? linearSampler : pointSampler));
@@ -364,22 +290,8 @@ final class Fsr3Upscaler extends Upscaler {
 		Profiler.mark(cb, "FSR " + p.name);
 	}
 
-	private static void clear(VkCommandBuffer cb, MemoryStack stack, RawImage img, float v) {
-		clearFloat(cb, stack, img, v, v, v, v);
-	}
-
-	private static void clearFloat(VkCommandBuffer cb, MemoryStack stack, RawImage img, float r, float g, float b, float a) {
-		var value = VkClearColorValue.calloc(stack).float32(0, r).float32(1, g).float32(2, b).float32(3, a);
-		vkCmdClearColorImage(cb, img.image, VK_IMAGE_LAYOUT_GENERAL, value, range(stack));
-	}
-
-	private static void clearUint(VkCommandBuffer cb, MemoryStack stack, RawImage img, int v) {
-		var value = VkClearColorValue.calloc(stack).uint32(0, v).uint32(1, v).uint32(2, v).uint32(3, v);
-		vkCmdClearColorImage(cb, img.image, VK_IMAGE_LAYOUT_GENERAL, value, range(stack));
-	}
-
-	private static VkImageSubresourceRange range(MemoryStack stack) {
-		return VkImageSubresourceRange.calloc(stack).aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).levelCount(VK_REMAINING_MIP_LEVELS).layerCount(1);
+	private static void clear(VkCommandBuffer cb, RawImage img, float v) {
+		FfxPass.clearFloat(cb, img, v, v, v, v);
 	}
 
 	@Override
@@ -388,16 +300,10 @@ final class Fsr3Upscaler extends Upscaler {
 		all.forEach(RawImage::destroyLater);
 		if (ubo != null) ubo.destroyLater(); // null after a failed construction
 		long[] views = spdMipViews.clone();
-		List<Pass> ps = List.copyOf(passes);
-		ctx.destroyLater(() -> {
+		ctx.destroyLater(() -> { // the passes are shared (FfxPass)
 			for (long v : views) vkDestroyImageView(ctx.vk, v, null);
 			vkDestroySampler(ctx.vk, pointSampler, null);
 			vkDestroySampler(ctx.vk, linearSampler, null);
-			for (Pass p : ps) {
-				vkDestroyPipeline(ctx.vk, p.pipeline, null);
-				vkDestroyPipelineLayout(ctx.vk, p.layout, null);
-				vkDestroyDescriptorSetLayout(ctx.vk, p.setLayout, null);
-			}
 		});
 	}
 }

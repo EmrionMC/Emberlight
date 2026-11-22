@@ -175,8 +175,24 @@ float emrRtRfAoRay(vec3 origin, vec3 t, vec3 bt, vec3 n, int i) {
 	return 1.0;
 }
 
+// The RT AO pass already traced, accumulated and filtered the floor the straight view shows: where the hit p is the surface
+// drawn at its own pixel (depthtex1 there within a few centimetres), its open value is read instead of tracing; else -1.
+float emrRtRfAoScreen(vec3 p) {
+	vec4 c = gbufferProjection * (gbufferModelView * vec4(p, 1.0));
+	if (c.w <= 0.0) return -1.0;
+	vec2 size = vec2(viewWidth, viewHeight);
+	ivec2 px = ivec2((c.xy / c.w * 0.5 + 0.5) * size);
+	if (any(lessThan(px, ivec2(0))) || any(greaterThanEqual(px, ivec2(size)))) return -1.0;
+	float z = texelFetch(depthtex1, px, 0).r;
+	if (z >= 1.0) return -1.0;
+	vec4 v = gbufferProjectionInverse * vec4(vec3((vec2(px) + 0.5) / size, z) * 2.0 - 1.0, 1.0);
+	return distance(emrRtRfWorld(v.xyz / v.w), p) < 0.03 + 0.004 * length(p) ? texelFetch(emrRtAo, px, 0).r : -1.0;
+}
+
 float emrRtRfAo(vec3 p, vec3 n) {
 	if (emrRt_refraction_aoRays <= 0) return 1.0;
+	float s = emrRt_refraction_aoScreen != 0 ? emrRtRfAoScreen(p) : -1.0;
+	if (s >= 0.0) return pow(s, float(emrRt_refraction_aoStrength) * 0.004);
 	vec3 t = normalize(cross(n, abs(n.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
 	vec3 bt = cross(n, t);
 	vec3 origin = p + n * (0.004 + 0.002 * length(p));

@@ -2,7 +2,7 @@
 // (reprojected, distance and normal), at most emrRt_blocklight_frames frames (3 where a light was just placed or removed). The
 // history is held to the spread of this frame's 3x3 neighbourhood, so a moving shadow or a light switched off does not trail.
 layout(local_size_x = 8, local_size_y = 8) in;
-const vec2 workGroupsRender = vec2(1.0, 1.0);
+const vec2 workGroupsRender = vec2($res, $res);
 layout(rgba16f) uniform readonly image2D emrBlR;
 layout(rgba16f) uniform readonly image2D emrBlG;
 layout(rgba16f) uniform readonly image2D emrBlGH;
@@ -17,7 +17,8 @@ void main() {
 		imageStore(emrBlT, p, vec4(0.0));
 		return;
 	}
-	vec3 pos = emrBlPixelPos(p, size, g.w);
+	EmrBlRays rays = emrBlRays(size);
+	vec3 pos = emrBlTapPos(rays, p, g.w);
 	vec4 h = vec4(0.0);
 	float ws = 0.0;
 	vec2 hp;
@@ -46,7 +47,7 @@ void main() {
 			for (int x = -1; x <= 1; x++) {
 				ivec2 q = clamp(p + ivec2(x, y), ivec2(0), size - 1);
 				vec4 gq = imageLoad(emrBlG, q), rq = imageLoad(emrBlR, q);
-				if (rq.a <= 0.0 || !emrBlSimilar(g, pos, gq, emrBlPixelPos(q, size, gq.w))) continue;
+				if (rq.a <= 0.0 || !emrBlSimilar(g, pos, gq, emrBlTapPos(rays, q, gq.w))) continue;
 				m1 += rq.rgb;
 				m2 += rq.rgb * rq.rgb;
 				k += 1.0;

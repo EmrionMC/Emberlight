@@ -96,7 +96,10 @@ public final class PhotoMode {
 		EmrionShadersClient.LOG.warn("Photo mode: 2× does not fit into GPU memory, taking the photo at 1×", e);
 		Minecraft.getInstance().execute(() -> Minecraft.getInstance().showDebugChat(Component.literal("Photo: not enough GPU memory for 2×, taking it at 1×")));
 		shotScale = 1;
-		seen = 0;
+		// start the samples over: readbacks still queued at 2× must not land in a 1× sum
+		seen = issued = done = 0;
+		generation++;
+		acc = null;
 		return true;
 	}
 

@@ -27,6 +27,6 @@ public class VulkanRenderPassMixin {
 
 	@Inject(method = "setPipeline", at = @At("RETURN")) // RETURN: NeoForge adds an early return (stencil pipelines)
 	private void emrion$bindSet1(BackendRenderPipeline pipeline, CallbackInfo ci) {
-		GeometryPipelines.onSetPipeline(commandBuffer, (VulkanRenderPipeline) pipeline);
+		GeometryPipelines.onSetPipeline(this, commandBuffer, (VulkanRenderPipeline) pipeline);
 	}
 }

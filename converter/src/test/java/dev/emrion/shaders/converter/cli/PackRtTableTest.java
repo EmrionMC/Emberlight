@@ -184,6 +184,27 @@ class PackRtTableTest {
 	}
 
 	@Test
+	void findWithStatementsReplacesWholeStatements(@TempDir Path tmp) throws Exception {
+		String t = TABLE.replace("{\"function\": \"float getShadow(vec3)\", \"body\": \"shadow_body.glsl\"}",
+				"{\"function\": \"void main()\", \"find\": \"color =\", \"statements\": 1, \"body\": \"main_body.glsl\"}");
+		Map<String, String> files = pack(t);
+		files.put("shaders/emberlight/main_body.glsl", "color = vec4(vec3(tinyRtShadow(playerPos)), 1.0);\n");
+		var r = convert(folder(tmp.resolve("a/Tiny"), files), tmp.resolve("o1"), Set.of("shadows"));
+		assertShadowsApplied(r);
+		String fsh = Files.readString(r.outputDir().resolve("src/gbuffers_terrain.fsh.glsl"));
+		assertTrue(fsh.contains("color = vec4(vec3(tinyRtShadow(playerPos)), 1.0);") && !fsh.contains("getShadow(playerPos)"), fsh);
+		files.put("shaders/emberlight/rt.json", t.replace("\"statements\": 1", "\"statements\": 2"));
+		r = convert(folder(tmp.resolve("b/Tiny"), files), tmp.resolve("o2"), Set.of("shadows"));
+		assertTrue(r.manifest().rt().unavailable().get("shadows").contains("ends before the statements at 'color ='"), r.manifest().rt().toString());
+		files.put("shaders/emberlight/rt.json", t.replace("\"color =\"", "\"vec4(vec3(getShadow\""));
+		r = convert(folder(tmp.resolve("c/Tiny"), files), tmp.resolve("o3"), Set.of("shadows"));
+		assertTrue(r.manifest().rt().unavailable().get("shadows").contains("does not start a statement"), r.manifest().rt().toString());
+		files.put("shaders/emberlight/rt.json", t.replace("\"statements\": 1", "\"statements\": 0"));
+		r = convert(folder(tmp.resolve("d/Tiny"), files), tmp.resolve("o4"), Set.of("shadows"));
+		assertTrue(r.manifest().rt().unavailable().get("shadows").contains("must be at least 1"), r.manifest().rt().toString());
+	}
+
+	@Test
 	void alternativeSignaturesAndTextLifts(@TempDir Path tmp) throws Exception {
 		// a pack version that changed the signature: either alternative matches; a text lift follows whichever the pack has
 		String alt = TABLE.replace("\"float getShadow(vec3)\"", "\"float getShadow(vec3,float) | float getShadow(vec3)\"")

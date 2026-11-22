@@ -131,9 +131,7 @@ final class DlssFrameGen implements Generator {
 			uiSetLayout = new dev.emrion.shaders.mod.vk.Descriptors.LayoutBuilder().add(0, st, cs)
 					.add(1, org.lwjgl.vulkan.VK10.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, cs).add(2, st, cs).build(ctx, true);
 			uiLayout = dev.emrion.shaders.mod.vk.Descriptors.pipelineLayout(ctx, 0, uiSetLayout);
-			long module = dev.emrion.shaders.mod.vk.ShaderModules.create(ctx, dev.emrion.shaders.mod.vk.ShaderModules.resource("/assets/emberlight/spv/fg_ui_compose.comp.spv"));
-			uiPipeline = dev.emrion.shaders.mod.vk.ComputePipelines.create(ctx, module, uiLayout, ctx.pipelineCache().handle);
-			dev.emrion.shaders.mod.vk.ShaderModules.destroy(ctx, module);
+			uiPipeline = dev.emrion.shaders.mod.vk.ComputePipelines.create(ctx, "/assets/emberlight/spv/fg_ui_compose.comp.spv", uiLayout);
 		}
 		FfxPasses.barrier(cb);
 		try (var stack = org.lwjgl.system.MemoryStack.stackPush()) {

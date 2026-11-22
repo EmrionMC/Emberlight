@@ -261,7 +261,6 @@ class GlslTranspilerTest {
 		assertTrue(o.fs().contains("layout(location = 0) out vec4 emr_FragData0;"));
 		assertTrue(o.fs().contains("\nvec4 emr_FragData1;"));
 		assertTrue(o.fs().contains("layout(location = 1) out vec4 emr_FragData2;"));
-		assertEquals(List.of(0, 1, 2), o.analysis().fragmentOutputs());
 	}
 
 	@Test
@@ -272,7 +271,6 @@ class GlslTranspilerTest {
 				void main() { gl_FragColor = vec4(texCoord, 0.0, 1.0); }
 				""");
 		assertTrue(o.fs().contains("emr_FragData0 = vec4(texCoord"));
-		assertEquals(List.of(0), o.analysis().fragmentOutputs());
 	}
 
 	@Test
@@ -323,7 +321,6 @@ class GlslTranspilerTest {
 		assertTrue(o.vs().contains("(vec4(emr_in_mc_Entity, 0.0, 1.0))"), "mc_Entity converted to the declared vec4");
 		assertTrue(o.vs().contains("layout(location = 8) in vec4 emr_in_at_tangent;"));
 		assertTrue(o.vs().contains("layout(location = 5) in vec3 emr_in_Normal;"));
-		assertTrue(o.analysis().vertexInputs().containsAll(List.of("Position", "Color", "Normal", "mc_Entity", "at_tangent")));
 	}
 
 	@Test
@@ -550,7 +547,6 @@ class GlslTranspilerTest {
 		assertTrue(o.vs().contains("layout(location = 13) in uvec3 emr_in_iris_Entity;"));
 		assertTrue(o.vs().contains("emr_entityInfo = ivec3(emr_in_iris_Entity);"));
 		assertFalse(o.vs().contains("emr_draw"));
-		assertTrue(o.analysis().vertexInputs().contains("iris_Entity"));
 		Out p = run("gbuffers_entities", ProgramGroup.GBUFFERS, "position_color", null, null, VS, fs);
 		assertTrue(p.vs().contains("emr_entityInfo = ivec3(emr_draw.entityId, emr_draw.blockEntityId, emr_draw.currentRenderedItemId);"));
 		assertTrue(p.vs().contains("layout(push_constant) uniform EmrionDraw { layout(offset = 0) vec4 entityColor; layout(offset = 16) int entityId;"));
@@ -593,7 +589,6 @@ class GlslTranspilerTest {
 		Transpiler.ProgramAnalysis a = TR.analyze(st);
 		String fs = TR.emit(a, new Transpiler.EmitContext(Map.of(), n -> 2, Map.of(0, 0), null), "entity").glsl().get(StageType.FRAGMENT);
 		assertTrue(fs.contains("float(emr_draw.entityId)"), fs);
-		assertFalse(a.vertexInputs().contains("iris_Entity"));
 	}
 
 	@Test
@@ -899,7 +894,6 @@ class GlslTranspilerTest {
 	void analysisReportsSet0AndInputsForGeometry() throws Exception {
 		Out o = gbuffers("terrain_sodium", VS, FS);
 		assertEquals(List.of("DynamicTransforms", "Sampler0"), o.analysis().set0());
-		assertEquals(List.of("Position", "UV0"), o.analysis().vertexInputs());
 		assertTrue(o.diagnostics().isEmpty(), o.diagnostics().toString());
 	}
 

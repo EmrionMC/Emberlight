@@ -44,10 +44,6 @@ public final class Formats {
 		return s.endsWith("_UINT") || s.endsWith("_SINT");
 	}
 
-	public static boolean isUnsigned(GpuFormat f) {
-		return f.name().endsWith("_UINT");
-	}
-
 	public static int fullMipChain(int w, int h, int d) {
 		return 32 - Integer.numberOfLeadingZeros(Math.max(w, Math.max(h, d)));
 	}

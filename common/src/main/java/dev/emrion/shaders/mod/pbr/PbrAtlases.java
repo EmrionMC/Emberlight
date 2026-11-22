@@ -311,9 +311,18 @@ public final class PbrAtlases {
 			return;
 		}
 		long cpu = System.nanoTime();
-		normals = upload(l, Type.NORMAL, loaded.normals());
-		specular = upload(l, Type.SPECULAR, loaded.specular());
-		built = true;
+		built = true; // also on failure below: no retry loop, the flat defaults stay bound until the next reload
+		try {
+			normals = upload(l, Type.NORMAL, loaded.normals());
+			specular = upload(l, Type.SPECULAR, loaded.specular());
+		} catch (RuntimeException ex) { // nobody observes this future: log and free here
+			EmrionShadersClient.LOG.error("Uploading the PBR atlases of {} failed", location, ex);
+			if (normals != null) normals.close();
+			normals = null;
+			close(loaded.normals()); // closing an image twice is a no-op
+			close(loaded.specular());
+			return;
+		}
 		// a runtime created while this built bound the flat defaults: the bump makes PackManager rebuild it with these views
 		if (location.equals(TextureAtlas.LOCATION_BLOCKS) && (normals != null || specular != null)) generation++;
 		long bytesPerAtlas = 0;
@@ -349,15 +358,20 @@ public final class PbrAtlases {
 			sprites.put(missing, sprite(l, r, type, image, Optional.empty(), new AtomicLong()));
 		}
 		PbrAtlas atlas = new PbrAtlas(location(l, type), type);
-		atlas.upload(new SpriteLoader.Preparations(l.width(), l.height(), l.mipLevel(), sprites.get(missing), sprites, CompletableFuture.completedFuture(null)));
-		// Catch up with the block atlas's animations (both started at frame 0 at the block atlas upload).
-		var states = ((TextureAtlasAccessor) (Object) atlas).emrion$animationStates();
-		if (ticks > 0 && !states.isEmpty()) {
-			for (var state : states) {
-				fastForward(state, ticks);
-				((AnimationStateAccessor) state).emrion$setDirty(true);
+		try {
+			atlas.upload(new SpriteLoader.Preparations(l.width(), l.height(), l.mipLevel(), sprites.get(missing), sprites, CompletableFuture.completedFuture(null)));
+			// Catch up with the block atlas's animations (both started at frame 0 at the block atlas upload).
+			var states = ((TextureAtlasAccessor) (Object) atlas).emrion$animationStates();
+			if (ticks > 0 && !states.isEmpty()) {
+				for (var state : states) {
+					fastForward(state, ticks);
+					((AnimationStateAccessor) state).emrion$setDirty(true);
+				}
+				((TextureAtlasAccessor) (Object) atlas).emrion$uploadAnimationFrames();
 			}
-			((TextureAtlasAccessor) (Object) atlas).emrion$uploadAnimationFrames();
+		} catch (RuntimeException e) {
+			atlas.close(); // finish() frees the rest; this one is not assigned yet
+			throw e;
 		}
 		// The GPU holds everything now (animation frames have their own textures): free the CPU images early.
 		sprites.values().forEach(s -> s.contents().close());

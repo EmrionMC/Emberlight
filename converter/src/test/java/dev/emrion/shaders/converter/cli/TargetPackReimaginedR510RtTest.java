@@ -19,7 +19,7 @@ class TargetPackReimaginedR510RtTest {
 	static final Path PACK = ROOT.resolve("reimagined-r510");
 	static final Path SETTINGS = ROOT.resolve("ComplementaryReimagined_r5.10.zip.txt");
 	/** sha256 over the RT-off output, as TargetPackRtTest.RT_OFF_GOLDEN. */
-	static final String RT_OFF_GOLDEN = "a654c154822622b8e48ceed4a327524b944b46a772e2f571bf8e7f197ecda046";
+	static final String RT_OFF_GOLDEN = "ac75752df02166da6ff9348046d3ada7009bd31bdbf8d0e2f4ecc4004082ef9a";
 	/** The same RT request as the Unbound test; the settings file is the Unbound one minus the keys Reimagined lacks. */
 	static final Set<String> USER_RT = TargetPackR510RtTest.USER_RT;
 

@@ -810,13 +810,18 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 				if (size == null && n < 8) size = props.get("size.buffer." + IrisPrograms.LEGACY.get(n));
 				if (size != null) {
 					String[] t = size.trim().split("\\s+");
-					if (t.length == 2) {
+					try {
+						if (t.length != 2) throw new NumberFormatException();
 						abs = new int[2];
 						for (int i = 0; i < 2; i++) {
 							if (t[i].contains(".")) rel[i] = Float.parseFloat(t[i]);
 							else abs[i] = Integer.parseInt(t[i]);
 						}
-					} else warn(null, "invalid size.buffer.colortex" + n + " = " + size);
+					} catch (NumberFormatException e) { // one bad line must not drop the dimension: screen size
+						rel[0] = rel[1] = 1;
+						abs = null;
+						warn(null, "invalid size.buffer.colortex" + n + " = " + size);
+					}
 				}
 				out.add(new Manifest.Target("colortex" + n, "color", f[1], f[0], 2, rel, abs, mipmapped.contains(n) ? 0 : 1,
 						needsAlt.contains(n), clear, cc, fog, 0));
@@ -1064,7 +1069,13 @@ public final class IrisDimensionPlanner implements DimensionPlanner {
 			if (!m.matches()) return null;
 			String[] p = m.group(1).split(",");
 			float[] f = new float[4];
-			for (int i = 0; i < 4; i++) f[i] = Float.parseFloat(p[p.length == 1 ? 0 : i].trim());
+			try {
+				if (p.length != 1 && p.length != 4) throw new NumberFormatException();
+				for (int i = 0; i < 4; i++) f[i] = Float.parseFloat(p[p.length == 1 ? 0 : i].trim());
+			} catch (NumberFormatException e) { // "1.0/255.0" or 3 components: unset, rather than drop the dimension
+				warn(null, "invalid vec4 " + v);
+				return null;
+			}
 			return f;
 		}
 

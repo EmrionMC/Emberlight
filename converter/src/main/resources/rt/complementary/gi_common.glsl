@@ -38,6 +38,27 @@ vec3 emrGiPos(ivec2 p, float dist) {
 	return e + d * (sqrt(max(b * b - dot(e, e) + dist * dist, 0.0)) - b); // |e + d t| = dist
 }
 
+// emrGiDir before its normalize, as o + p.x * dx + p.y * dy: a perspective projection's inverse gives every (x, y, -1, 1)
+// the same w (jitter included), so the ray is affine in the texel. Filter taps use it (emrGiTapPos) instead of two matrix products.
+struct EmrGiRays { vec3 o, dx, dy; };
+EmrGiRays emrGiRays() {
+	vec2 s = 2.0 / floor(vec2(viewWidth, viewHeight) * emrRt_gi_res);
+	vec4 v = gbufferProjectionInverse * vec4(s * 0.5 - 1.0, -1.0, 1.0); // texel (0, 0)
+	mat3 m = mat3(gbufferModelViewInverse);
+	return EmrGiRays(m * (v.xyz / v.w), m * (gbufferProjectionInverse[0].xyz * (s.x / v.w)), m * (gbufferProjectionInverse[1].xyz * (s.y / v.w)));
+}
+
+vec3 emrGiTapPos(EmrGiRays r, ivec2 p, float dist) { // = emrGiPos(p, dist)
+	vec3 e = gbufferModelViewInverse[3].xyz, d = normalize(r.o + r.dx * float(p.x) + r.dy * float(p.y));
+	float b = dot(e, d);
+	return e + d * (sqrt(max(b * b - dot(e, e) + dist * dist, 0.0)) - b);
+}
+
+float emrPow32(float x) { // x^32 as five squarings
+	x *= x; x *= x; x *= x; x *= x;
+	return x * x;
+}
+
 vec3 emrGiPlayerPos(ivec2 fp, float z) {
 	vec2 uv = (vec2(fp) + 0.5) / vec2(viewWidth, viewHeight);
 	vec4 v = gbufferProjectionInverse * vec4(vec3(uv, z) * 2.0 - 1.0, 1.0);

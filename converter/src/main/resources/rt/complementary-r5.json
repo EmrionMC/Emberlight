@@ -61,10 +61,10 @@
     },
     "refraction": {
       "requires": ["composite1", "gbuffers_water"],
-      "options": {"ior": "1.333", "glassIor": "1.5", "glass": "1", "entities": "0", "waves": "@WATER_REFRACTION_INTENSITY", "aoStrength": "@SSAO_I", "aoRays": "4", "sunRays": "1", "blockLight": "1"},
+      "options": {"ior": "1.333", "glassIor": "1.5", "glass": "1", "entities": "0", "waves": "@WATER_REFRACTION_INTENSITY", "aoStrength": "@SSAO_I", "aoRays": "4", "aoScreen": "1", "sunRays": "1", "blockLight": "1"},
       "helpers": "rt/complementary/refraction.glsl",
       "uniforms": {"gbufferProjection": "mat4", "gbufferProjectionInverse": "mat4", "gbufferModelView": "mat4", "gbufferModelViewInverse": "mat4",
-        "viewWidth": "float", "viewHeight": "float", "far": "float", "isEyeInWater": "int"},
+        "viewWidth": "float", "viewHeight": "float", "far": "float", "isEyeInWater": "int", "emrRtAo": "sampler2D"},
       "needs": ["depthtex1"],
       "lifts": {
         "terrainAoCurve": {"program": "gbuffers_terrain", "function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float) | void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
@@ -139,7 +139,7 @@
           "cameraPositionBestFract", "DoFog", "sqrt3", "minOf"]},
         {"function": "void main()", "after": "bool opaqueSurface = z0 == z1;",
          "body": "rt/complementary/refl_half_pick.glsl", "programs": ["composite"], "optional": true},
-        {"function": "void main()", "find": "reflectOutput.rgb = mix(prevRef.rgb, reflectOutput.rgb, min1(minBlendFactor / prevValid)); reflectOutput.a = linearZ1;",
+        {"function": "void main()", "find": "reflectOutput.rgb = mix(prevRef.rgb,", "statements": 2,
          "body": "rt/complementary/refl_half_blend.glsl", "programs": ["composite"], "optional": true},
         {"function": "void UpdateSceneVoxelMap(int,vec3,vec3)", "body": "rt/complementary/refl_novoxels.glsl", "programs": ["shadow"], "bare": true}
       ]
@@ -157,7 +157,7 @@
         {"function": "vec4 GetVolumetricLight(inout float,vec3,float,float,vec3,float,float,float,float,float,float) | vec4 GetVolumetricLight(inout float,vec3,float,float,vec3,float,float,float,float,float,float,float)",
          "find": "localDensity = vec3(shadowSample);", "body": "rt/complementary/rtx/shafts_visibility.glsl", "programs": ["composite1"]},
         {"function": "vec4 GetVolumetricLight(inout float,vec3,float,float,vec3,float,float,float,float,float,float) | vec4 GetVolumetricLight(inout float,vec3,float,float,vec3,float,float,float,float,float,float,float)",
-         "find": "nextDistance = pow(t, sampleDistribution) * activeThreshold;", "body": "rt/complementary/rtx/shafts_spread.glsl", "programs": ["composite1"]},
+         "find": "nextDistance = pow(", "statements": 1, "body": "rt/complementary/rtx/shafts_spread.glsl", "programs": ["composite1"]},
         {"function": "vec4 GetVolumetricLight(inout float,vec3,float,float,vec3,float,float,float,float,float,float) | vec4 GetVolumetricLight(inout float,vec3,float,float,vec3,float,float,float,float,float,float,float)",
          "after": "volumetricLight.rgb *= vlMult;", "body": "rt/complementary/rtx/shafts_apply.glsl"}
       ]
@@ -198,7 +198,7 @@
       "variants": {
         "rtx": {
           "options": {"strength": "1.9", "chroma": "0.5", "far": "1.0", "ref": "0", "debug": "0", "visRay": "1", "bias": "1", "mcap": "4", "radius": "16.0", "reach": "1.0", "frames": "8",
-            "clamp": "2.0", "filter": "1", "hidden": "0", "hiddenMargin": "1.5"},
+            "clamp": "2.0", "filter": "1", "hidden": "0", "hiddenMargin": "1.5", "groupCull": "1", "spatialMin": "2", "res": "1.0"},
           "helpers": "rt/complementary/rtx/bl_common.glsl,rt/complementary/rtx/blocklight.glsl",
           "patches": [
             {"function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float) | void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
@@ -209,7 +209,7 @@
              "after": "blockLighting = mix(specialLighting, blockLighting, blocklightDecider);", "body": "rt/complementary/rtx/blocklight_apply_terrain.glsl",
              "programs": ["gbuffers_terrain"]},
             {"function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float) | void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
-             "find": "shadowMult *= GetShadow(shadowPos, lightmap.y, offset, shadowSamples, leaves, playerPos);",
+             "find": "shadowMult *= GetShadow(", "statements": 1,
              "body": "rt/complementary/rtx/bl_hidden_shadow.glsl", "programs": ["gbuffers_terrain"], "optional": true},
             {"function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float) | void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
              "after": "blockLighting = mix(specialLighting, blockLighting, blocklightDecider);", "body": "rt/complementary/rtx/blocklight_apply_hit.glsl",
@@ -226,15 +226,15 @@
              "body": "rt/complementary/rtx/bl_restir_d.csh"}
           ],
           "images": {
-            "emrBlRes": "emrBlResSampler rgba_integer rgba32ui unsigned_int false true 1.0 1.0",
-            "emrBlResH": "emrBlResHSampler rgba_integer rgba32ui unsigned_int false true 1.0 1.0",
-            "emrBlG": "emrBlGSampler rgba rgba16f half_float false true 1.0 1.0",
-            "emrBlGH": "emrBlGHSampler rgba rgba16f half_float false true 1.0 1.0",
-            "emrBlU": "emrBlUSampler rgba rgba16f half_float false true 1.0 1.0",
-            "emrBlR": "emrBlRSampler rgba rgba16f half_float false true 1.0 1.0",
-            "emrBlT": "emrBlTSampler rgba rgba16f half_float false true 1.0 1.0",
-            "emrBlRH": "emrBlRHSampler rgba rgba16f half_float false true 1.0 1.0",
-            "emrBlOut": "emrBlOutSampler rgba rgba16f half_float false true 1.0 1.0"
+            "emrBlRes": "emrBlResSampler rgba_integer rgba32ui unsigned_int false true $res $res",
+            "emrBlResH": "emrBlResHSampler rgba_integer rgba32ui unsigned_int false true $res $res",
+            "emrBlG": "emrBlGSampler rgba rgba16f half_float false true $res $res",
+            "emrBlGH": "emrBlGHSampler rgba rgba16f half_float false true $res $res",
+            "emrBlU": "emrBlUSampler rgba rgba16f half_float false true $res $res",
+            "emrBlR": "emrBlRSampler rgba rgba16f half_float false true $res $res",
+            "emrBlT": "emrBlTSampler rgba rgba16f half_float false true $res $res",
+            "emrBlRH": "emrBlRHSampler rgba rgba16f half_float false true $res $res",
+            "emrBlOut": "emrBlOutSampler rgba rgba16f half_float false true $res $res"
           }
         }
       }
@@ -266,7 +266,7 @@
       "patches": [
         {
           "function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float) | void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
-          "find": "vec3 sceneLighting = lightColorM * shadowLightMult + ambientColorM * ambientMult;",
+          "find": "vec3 sceneLighting =", "statements": 1,
           "body": "rt/complementary/gi_scene_lighting.glsl"
         }
       ],
@@ -299,7 +299,8 @@
             "rt/complementary/gi_common.glsl",
             "rt/complementary/gi_atrous.glsl"
           ],
-          "body": "rt/complementary/gi_atrous_d.csh"
+          "body": "rt/complementary/gi_atrous_d.csh",
+          "skipIf": "filter=0"
         },
         {
           "program": "deferred_e",
@@ -307,12 +308,13 @@
             "rt/complementary/gi_common.glsl",
             "rt/complementary/gi_atrous.glsl"
           ],
-          "body": "rt/complementary/gi_atrous_e.csh"
+          "body": "rt/complementary/gi_atrous_e.csh",
+          "skipIf": "filter=0"
         }
       ],
       "variants": {
         "rtx": {
-          "options": {"glass": "1.6", "bounce": "0.85", "blockStrength": "2.5", "blockHue": "0.75", "boost": "4", "entities": "0", "hiddenMargin": "0.3", "waterSearch": "0"},
+          "options": {"glass": "1.6", "bounce": "0.85", "blockStrength": "2.5", "blockHue": "0.75", "boost": "4", "entities": "0", "hiddenMargin": "0.3", "waterSearch": "0", "blres": "1.0"},
           "helpers": "rt/complementary/rtx/gi_apply.glsl",
           "needs": ["blocklightCol"],
           "uniforms": {"gbufferModelView": "mat4", "gbufferProjection": "mat4", "gbufferModelViewInverse": "mat4", "gbufferProjectionInverse": "mat4",
@@ -320,14 +322,14 @@
           "patches": [
             {
               "function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float) | void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
-              "find": "vec3 sceneLighting = lightColorM * shadowLightMult + ambientColorM * ambientMult;",
+              "find": "vec3 sceneLighting =", "statements": 1,
               "body": "rt/complementary/rtx/gi_scene_lighting.glsl",
               "programs": ["gbuffers_basic", "gbuffers_line", "gbuffers_textured", "gbuffers_terrain", "gbuffers_block", "gbuffers_entities",
                "gbuffers_lightning", "gbuffers_entities_glowing", "gbuffers_block_translucent", "gbuffers_entities_translucent"]
             },
             {
               "function": "void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float) | void DoLighting(inout vec4,inout vec3,vec3,vec3,float,vec3,vec3,float,vec3,vec2,bool,bool,bool,bool,int,float,float,float,inout float,bool,inout float,vec3)",
-              "find": "vec3 sceneLighting = lightColorM * shadowLightMult + ambientColorM * ambientMult;",
+              "find": "vec3 sceneLighting =", "statements": 1,
               "body": "rt/complementary/rtx/gi_scene_lighting_water.glsl",
               "programs": ["gbuffers_water"]
             }
@@ -337,25 +339,21 @@
               "rt/complementary/rtx/gi_cache_off.glsl", "rt/complementary/rtx/gi_common.glsl"], "body": "rt/complementary/rtx/gi_trace.csh"},
             {"program": "prepare_b", "helpers": ["rt/complementary/gi_common.glsl"], "body": "rt/complementary/rtx/gi_temporal.csh"},
             {"program": "prepare_c", "helpers": ["rt/complementary/gi_common.glsl", "rt/complementary/rtx/gi_atrous.glsl"], "body": "rt/complementary/rtx/gi_atrous_c.csh"},
-            {"program": "prepare_d", "helpers": ["rt/complementary/gi_common.glsl", "rt/complementary/rtx/gi_atrous.glsl"], "body": "rt/complementary/rtx/gi_atrous_d.csh"},
-            {"program": "prepare_e", "helpers": ["rt/complementary/gi_common.glsl", "rt/complementary/rtx/gi_atrous.glsl"], "body": "rt/complementary/rtx/gi_atrous_e.csh"}
+            {"program": "prepare_d", "helpers": ["rt/complementary/gi_common.glsl", "rt/complementary/rtx/gi_atrous.glsl"], "body": "rt/complementary/rtx/gi_atrous_d.csh", "skipIf": "filter=0"},
+            {"program": "prepare_e", "helpers": ["rt/complementary/gi_common.glsl", "rt/complementary/rtx/gi_atrous.glsl"], "body": "rt/complementary/rtx/gi_atrous_e.csh", "skipIf": "filter=0"}
           ],
           "images": {
             "emrGiRC": "emrGiRCSampler rgba rgba16f half_float false true $res $res",
             "emrGiTC": "emrGiTCSampler rgba rgba16f half_float false true $res $res",
             "emrGiHC": "emrGiHCSampler rgba rgba16f half_float false true $res $res",
             "emrGiFC": "emrGiFCSampler rgba rgba16f half_float false true $res $res",
-            "emrBlG": "emrBlGSampler rgba rgba16f half_float false true 1.0 1.0"
+            "emrBlG": "emrBlGSampler rgba rgba16f half_float false true $blres $blres"
           }
         },
         "cache": {
           "options": {"cacheRate": "0.125", "cacheBounce": "0.25", "cacheVoxel": "0.5", "cacheNear": "16.0", "cacheMin": "4.0", "cacheFrames": "32.0", "cacheStale": "96.0"},
           "computes": [
             {"program": "prepare_a", "helpers": ["rt/complementary/gi_common.glsl", "rt/complementary/bl_buffer.glsl", "rt/complementary/rtx/bl_common.glsl", "rt/complementary/rtx/gi_cache.glsl", "rt/complementary/rtx/gi_common.glsl"], "body": "rt/complementary/rtx/gi_trace.csh"},
-            {"program": "prepare_b", "helpers": ["rt/complementary/gi_common.glsl"], "body": "rt/complementary/rtx/gi_temporal.csh"},
-            {"program": "prepare_c", "helpers": ["rt/complementary/gi_common.glsl", "rt/complementary/rtx/gi_atrous.glsl"], "body": "rt/complementary/rtx/gi_atrous_c.csh"},
-            {"program": "prepare_d", "helpers": ["rt/complementary/gi_common.glsl", "rt/complementary/rtx/gi_atrous.glsl"], "body": "rt/complementary/rtx/gi_atrous_d.csh"},
-            {"program": "prepare_e", "helpers": ["rt/complementary/gi_common.glsl", "rt/complementary/rtx/gi_atrous.glsl"], "body": "rt/complementary/rtx/gi_atrous_e.csh"},
             {"program": "prepare_j", "helpers": ["rt/complementary/gi_common.glsl", "rt/complementary/bl_buffer.glsl", "rt/complementary/rtx/bl_common.glsl", "rt/complementary/rtx/gi_cache.glsl", "rt/complementary/rtx/gi_common.glsl"], "body": "rt/complementary/rtx/gi_cache_update.csh"},
             {"program": "prepare_k", "helpers": ["rt/complementary/gi_common.glsl", "rt/complementary/bl_buffer.glsl", "rt/complementary/rtx/gi_cache.glsl"],
              "body": "rt/complementary/rtx/gi_cache_resolve.csh"}
@@ -392,8 +390,16 @@
         {"function": "void DoTAA(inout vec3,inout vec3,float)", "body": "rt/complementary/upscale_masks.glsl", "needs": ["texelCoord", "colortex6", "depthtex0"]},
         {"function": "void FXAA311(inout vec3)", "body": "rt/complementary/upscale_off.glsl", "bare": true},
         {"function": "float InterleavedGradientNoiseForShadows()", "body": "rt/complementary/upscale_shadow_noise.glsl", "bare": true, "optional": true,
-         "programs": ["gbuffers_entities", "gbuffers_entities_glowing", "gbuffers_entities_translucent", "gbuffers_hand", "gbuffers_hand_water"]}
-      ]
+         "programs": ["gbuffers_entities", "gbuffers_entities_glowing", "gbuffers_entities_translucent", "gbuffers_hand", "gbuffers_hand_water"]},
+        {"function": "vec3 SampleTAAFilteredShadow(vec3,float,int,bool,float,float)", "body": "rt/complementary/upscale_shadow_taa.glsl", "bare": true, "optional": true,
+         "needs": ["viewWidth", "viewHeight", "gbufferProjectionInverse", "gbufferModelViewInverse", "gbufferPreviousProjection", "gbufferPreviousModelView", "cameraPosition", "previousCameraPosition"],
+         "find": "for (int i = 0; i < shadowSamples; i++)", "statements": 1}
+      ],
+      "lifts": {
+        "shadowTapOffset": {"function": "vec3 SampleTAAFilteredShadow(vec3,float,int,bool,float,float)", "at": "vec2 offset2 =", "statements": 2},
+        "shadowTapPlus": {"function": "vec3 SampleTAAFilteredShadow(vec3,float,int,bool,float,float)", "at": "shadow += SampleShadow(vec3(shadowPos.st +"},
+        "shadowTapMinus": {"function": "vec3 SampleTAAFilteredShadow(vec3,float,int,bool,float,float)", "at": "shadow += SampleShadow(vec3(shadowPos.st -"}
+      }
     },
     "prepass": {
       "requires": ["gbuffers_terrain"],

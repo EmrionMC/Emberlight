@@ -528,8 +528,7 @@ public final class GbufferPipelines {
 				org.lwjgl.vulkan.VK10.vkDestroyDescriptorSetLayout(ctx.vk, set0Layout, null);
 				throw failed;
 			}
-			boolean atlas = k.variant() != null && k.variant().startsWith("terrain") || k.vanilla() == net.minecraft.client.renderer.RenderPipelines.CRUMBLING;
-			return GeometryPipelines.wrap(ctx, vanilla, pipeline, layout, set0Layout, states, new GeometryPipelines.Draw(alphaRef, atlas, bound.size(), extras, defaults, sodium));
+			return GeometryPipelines.wrap(ctx, vanilla, pipeline, layout, set0Layout, states, new GeometryPipelines.Draw(alphaRef, bound.size(), extras, defaults, sodium));
 		} finally {
 			for (long m : modules) ShaderModules.destroy(ctx, m);
 		}
