@@ -546,6 +546,12 @@ public final class PackManager {
 		return l == null ? null : l.manifest().rt();
 	}
 
+	/** The RT section of the pack that renders now (render thread; null: none, or converted without RT); {@link #rtState} may be a pending reload. */
+	public static Manifest.@Nullable Rt installedRt() {
+		Prepared c = current;
+		return c == null || !running() ? null : c.source().manifest().rt();
+	}
+
 	// ---- render-thread hooks ------------------------------------------------------------------------------------------
 
 	/** The executor while it renders a level (between LevelRenderer.render HEAD and the end of the plan), else null. */

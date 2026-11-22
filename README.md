@@ -93,8 +93,8 @@ In the shader pack screen, as in Iris: **Tab** opens the pack's options (Tab aga
 screen, **Ctrl+D** toggles debug mode (every shader error in chat, profiler on), and pack zips or folders can be dropped onto
 the window to install them.
 
-The FPS counter in the top left is always shown; start with `-Demberlight.hideFps=true` to hide it. With frame generation
-it shows both rates, e.g. `120 FPS (60 rendered)`.
+The profiler overlay (**F7**) shows the FPS in its first line, also with F1. With frame generation it shows both rates,
+e.g. `120 FPS (60 rendered)`.
 
 ## Settings
 

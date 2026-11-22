@@ -701,6 +701,11 @@ public final class RtScene {
 		if (omm != null && ommOn) EmrionShadersClient.LOG.info("RT: {}", omm.summary());
 	}
 
+	/** One short line for the F3 screen. */
+	public String f3Line() {
+		return String.format(java.util.Locale.ROOT, "RT scene: %d BLAS, %.1f M tris, %d MiB, %d instances", sodium.built(), triangles / 1e6, blasBytes >> 20, instanceCount);
+	}
+
 	/** One line for the RT options page. */
 	public String summary() {
 		String s = String.format(java.util.Locale.ROOT, "BLAS: %d MiB, %d section layers, %.1f M triangles; TLAS %d instances", blasBytes >> 20, sodium.built(), triangles / 1e6, instanceCount);

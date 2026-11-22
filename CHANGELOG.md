@@ -52,8 +52,8 @@ OptiFine/Iris shaderpacks on Minecraft's **Vulkan** renderer. Expect bugs and ke
 
 **Frame generation**
 - AMD FSR 3 Frame Generation (any GPU) and NVIDIA DLSS Frame Generation (RTX 40 or newer), with or without upscaling, on the
-  **Frame Generation…** page. Pauses itself when the rendered rate already reaches the monitor's refresh rate. The FPS
-  counter shows both rates.
+  **Frame Generation…** page. Pauses itself when the rendered rate already reaches the monitor's refresh rate. The F7
+  overlay shows both rates.
 
 **DLSS installation**
 - The DLSS bridge library ships in the jar (under its own terms, `LICENSE-DLSS.txt`, not the LGPL). Selecting DLSS the

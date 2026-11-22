@@ -12,8 +12,8 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Why: an FPS counter in the top-left corner that stays visible with F1 (hidden HUD): injected right after the HUD block of
- * Gui.extractRenderState, below screens. Off during autotests for clean screenshots; the F7 overlay is drawn the same way.
+ * Why: the F7 profiler overlay with an FPS line on top, top-left and visible with F1 (hidden HUD): injected right after the
+ * HUD block of Gui.extractRenderState, below screens. Only while the overlay is shown; the FPS line is off during autotests.
  */
 @Mixin(Gui.class)
 abstract class GuiFpsMixin {
@@ -23,14 +23,13 @@ abstract class GuiFpsMixin {
 	@Inject(method = "extractRenderState", at = @At(value = "FIELD", target = "Lnet/minecraft/client/gui/Gui;overlay:Lnet/minecraft/client/gui/screens/Overlay;", ordinal = 0))
 	private void emrion$fps(DeltaTracker deltaTracker, boolean shouldRenderLevel, boolean resourcesLoaded, CallbackInfo ci,
 	                        @Local GuiGraphicsExtractor graphics) {
-		if (!shouldRenderLevel) return;
+		if (!shouldRenderLevel || !Profiler.visible) return;
 		Minecraft mc = Minecraft.getInstance();
 		if (!DISABLED) {
 			String fps = dev.emrion.shaders.mod.framegen.Presenter.fpsLabel(mc.getFps());
 			graphics.fill(1, 1, 3 + mc.font.width(fps), 11, 0x90505050); // F3's backdrop: readable on a bright sky
 			graphics.text(mc.font, fps, 2, 2, 0xFFFFFFFF, false);
 		}
-		if (!Profiler.visible) return;
 		int y = 12;
 		for (String line : Profiler.lines()) {
 			graphics.text(mc.font, line, 2, y, 0xFFFFFFFF, true);
