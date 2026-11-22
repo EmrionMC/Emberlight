@@ -23,6 +23,12 @@ public interface SpirvCompiler extends AutoCloseable {
 		return compile(name, glsl450, stage, LineMap.IDENTITY_UNKNOWN);
 	}
 
+	/**
+	 * Names the compiler build for the per-stage SPIR-V cache (its options are code, covered by Converter.VERSION);
+	 * null: its output is never cached.
+	 */
+	default String cacheId() { return null; }
+
 	/** spv is null on failure; diagnostics carry shaderc messages mapped back to the input line. */
 	record Result(byte[] spv, List<Diagnostic> diagnostics) {}
 

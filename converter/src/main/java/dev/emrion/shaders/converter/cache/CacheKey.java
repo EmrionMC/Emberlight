@@ -41,6 +41,11 @@ public final class CacheKey {
 				normaliseSettings(settingsFile), env)).substring(0, 24);
 	}
 
+	/** Per-stage SPIR-V cache key: everything the compiled module depends on (the job name does not: shaderc emits no debug info). */
+	public static String stage(String compilerId, String stage, String glsl) {
+		return sha256(String.join("\0", Converter.VERSION, compilerId, stage, glsl));
+	}
+
 	/**
 	 * The settings as the converter parses them (Properties, like Iris), sorted by key, so reordering or comments do not
 	 * invalidate but a value the parser keeps different (a trailing space) does. Backslash-escaped so no two maps collide.

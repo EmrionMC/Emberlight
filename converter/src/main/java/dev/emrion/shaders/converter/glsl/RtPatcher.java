@@ -28,7 +28,8 @@ public final class RtPatcher {
 
 	private record Match(Item function, RtPatchTable.Patch patch) {}
 
-	private record StageMatch(int program, int stage, List<Match> matches) {}
+	/** A stage's tokens and items, as {@link #matches} found them in its text. */
+	private record StageMatch(int program, int stage, List<Token> tokens, List<Item> items, List<Match> matches, RuntimeException error) {}
 
 	/** The pack's own table ({@link RtPatchTable#PACK_TABLE}) wins over the bundled ones; a broken one is reported, not skipped. */
 	public static Result apply(ResolvedPack pack, Set<String> request) throws java.io.IOException {
@@ -210,31 +211,44 @@ public final class RtPatcher {
 		for (var d : dims.entrySet()) {
 			if (effect.dimensions() != null && !effect.dimensions().contains(d.getKey())) continue;
 			List<ResolvedPack.ProgramSource> programs = new ArrayList<>(d.getValue());
-			List<StageMatch> found = new ArrayList<>();
+			List<int[]> candidates = new ArrayList<>(); // {program, stage}
 			for (int p = 0; p < programs.size(); p++) {
 				if (!programs.get(p).enabled()) continue;
 				var stages = programs.get(p).stages();
-				for (int s = 0; s < stages.size(); s++) {
-					List<Token> t = GlslLexer.lex(stages.get(s).text());
-					String program = programs.get(p).name();
-					List<Match> m = matches(GlslParser.parse(t), t, effect, program);
-					if (m.isEmpty()) continue;
-					var missing = effect.patches().stream() // a stage that matches part of a program's patch set is never half-patched
-							.filter(patch -> !patch.optional() && patch.programs() != null && patch.programs().contains(program) && m.stream().noneMatch(x -> x.patch() == patch
-									|| patch.oneOf() != null && patch.oneOf().equals(x.patch().oneOf())))
-							.findFirst();
-					if (missing.isPresent()) {
-						// only optional extras matched (the Nether's composite without world-space reflections): not one of this effect's stages
-						if (m.stream().allMatch(x -> x.patch().optional())) {
-							diagnostics.add(new Diagnostic(Diagnostic.Severity.INFO, null, 0, null, null, "RT " + name + ": " + d.getKey() + "/" + program
-									+ " left out: only optional patches matched (no '" + missing.get().function() + "')"));
-							continue;
-						}
-						throw new Unavailable(d.getKey() + ": patch '" + missing.get().function() + "' matched no function in " + program
-								+ " (the pack's version or settings differ)");
-					}
-					found.add(new StageMatch(p, s, m));
+				for (int s = 0; s < stages.size(); s++)
+					if (mayMatch(effect, programs.get(p).name(), stages.get(s).text())) candidates.add(new int[]{p, s}); // most stages: no lex and parse
+			}
+			RtPatchTable.Effect eff = effect;
+			List<StageMatch> scanned = candidates.parallelStream().map(c -> { // lexing and parsing are pure; results and errors keep the order
+				try {
+					List<Token> t = GlslLexer.lex(programs.get(c[0]).stages().get(c[1]).text());
+					List<Item> items = GlslParser.parse(t);
+					return new StageMatch(c[0], c[1], t, items, matches(items, t, eff, programs.get(c[0]).name()), null);
+				} catch (RuntimeException e) {
+					return new StageMatch(c[0], c[1], null, null, null, e);
 				}
+			}).toList();
+			List<StageMatch> found = new ArrayList<>();
+			for (StageMatch sm : scanned) {
+				if (sm.error() != null) throw sm.error();
+				String program = programs.get(sm.program()).name();
+				List<Match> m = sm.matches();
+				if (m.isEmpty()) continue;
+				var missing = effect.patches().stream() // a stage that matches part of a program's patch set is never half-patched
+						.filter(patch -> !patch.optional() && patch.programs() != null && patch.programs().contains(program) && m.stream().noneMatch(x -> x.patch() == patch
+								|| patch.oneOf() != null && patch.oneOf().equals(x.patch().oneOf())))
+						.findFirst();
+				if (missing.isPresent()) {
+					// only optional extras matched (the Nether's composite without world-space reflections): not one of this effect's stages
+					if (m.stream().allMatch(x -> x.patch().optional())) {
+						diagnostics.add(new Diagnostic(Diagnostic.Severity.INFO, null, 0, null, null, "RT " + name + ": " + d.getKey() + "/" + program
+								+ " left out: only optional patches matched (no '" + missing.get().function() + "')"));
+						continue;
+					}
+					throw new Unavailable(d.getKey() + ": patch '" + missing.get().function() + "' matched no function in " + program
+							+ " (the pack's version or settings differ)");
+				}
+				found.add(sm);
 			}
 			if (found.isEmpty()) {
 				misses.add(d.getKey().isEmpty() ? "shaders/" : d.getKey());
@@ -248,12 +262,27 @@ public final class RtPatcher {
 			String skip = skipIds(programs, effect);
 			if (!skip.equals("false")) anyHitIds.addAll(effect.skipIds());
 			List<Diagnostic> liftNotes = new ArrayList<>();
-			Map<PreprocessedStage, Map.Entry<List<Token>, List<Item>>> parsed = new java.util.IdentityHashMap<>(); // lift sources, parsed once
-			for (StageMatch f : found) {
+			Map<PreprocessedStage, Map.Entry<List<Token>, List<Item>>> parsed = java.util.Collections.synchronizedMap(new java.util.IdentityHashMap<>()); // lift sources, parsed once
+			record Patched(String text, List<Diagnostic> notes, RuntimeException error) {}
+			List<Patched> patchedStages = found.parallelStream().map(f -> { // stages patch independently; results, notes and the first error go in order
 				var src = programs.get(f.program()).stages().get(f.stage());
 				String label = d.getKey() + "/" + src.program() + "." + src.stage().extension;
-				var lifts = new Lifts(effect, original.dimensions().get(d.getKey()), src.program(), src.stage(), label, liftNotes, parsed);
-				String text = patchStage(table, src.text(), src.program(), name, effect, opts, skip, label, lifts);
+				List<Diagnostic> notes = new ArrayList<>();
+				try {
+					var lifts = new Lifts(eff, original.dimensions().get(d.getKey()), src.program(), src.stage(), label, notes, parsed);
+					return new Patched(patchStage(table, src.text(), f, src.program(), name, eff, opts, skip, label, lifts), notes, null);
+				} catch (RuntimeException e) {
+					return new Patched(null, notes, e);
+				}
+			}).toList();
+			for (int i = 0; i < found.size(); i++) {
+				StageMatch f = found.get(i);
+				Patched r = patchedStages.get(i);
+				if (r.error() != null) throw r.error();
+				liftNotes.addAll(r.notes());
+				var src = programs.get(f.program()).stages().get(f.stage());
+				String label = d.getKey() + "/" + src.program() + "." + src.stage().extension;
+				String text = r.text();
 				var stages = new ArrayList<>(programs.get(f.program()).stages());
 				stages.set(f.stage(), new PreprocessedStage(src.program(), src.group(), src.stage(), src.sourcePath(), text,
 						src.lineMap(), src.directives()));
@@ -335,6 +364,22 @@ public final class RtPatcher {
 					.append(" = ").append(v).append(";\n");
 		}
 		return helper.toString();
+	}
+
+	/** False when no patch for {@code program} can match: the text does not even contain the patched function's (or global's) name. */
+	static boolean mayMatch(RtPatchTable.Effect effect, String program, String text) {
+		for (var p : effect.patches()) {
+			if (p.programs() != null && !p.programs().contains(program)) continue;
+			for (String f : p.function().split("\\|")) {
+				int paren = f.indexOf('(');
+				// the last identifier outside brackets: "vec3 name(...)", "vec2 offsets[8]", "vec2[8] offsets"
+				var ids = java.util.regex.Pattern.compile("[A-Za-z_]\\w*").matcher((paren >= 0 ? f.substring(0, paren) : f).replaceAll("\\[[^\\]]*\\]", " "));
+				String name = null;
+				while (ids.find()) name = ids.group();
+				if (name == null || text.contains(name)) return true;
+			}
+		}
+		return false;
 	}
 
 	static List<Match> matches(List<Item> items, List<Token> t, RtPatchTable.Effect effect, String program) {
@@ -424,11 +469,11 @@ public final class RtPatcher {
 	}
 
 	/** Patches one stage for one effect: the common library once per stage, each effect's helpers before its first patched function. */
-	private static String patchStage(RtPatchTable table, String text, String program, String effectName, RtPatchTable.Effect effect, Map<String, String> opts,
-	                                 String skip, String label, Lifts lifts) {
-		List<Token> t = GlslLexer.lex(text);
-		List<Item> items = GlslParser.parse(t);
-		List<Match> ms = matches(items, t, effect, program);
+	private static String patchStage(RtPatchTable table, String text, StageMatch scanned, String program, String effectName, RtPatchTable.Effect effect,
+	                                 Map<String, String> opts, String skip, String label, Lifts lifts) {
+		List<Token> t = scanned.tokens();
+		List<Item> items = scanned.items();
+		List<Match> ms = scanned.matches();
 		Item first = ms.getFirst().function();
 		Set<String> anywhere = new HashSet<>();
 		Map<Item, Set<String>> declaredBefore = new java.util.HashMap<>();

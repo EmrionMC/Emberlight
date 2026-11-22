@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.FileTime;
 import java.util.Comparator;
+import java.util.List;
 import java.util.stream.Stream;
 
 /**
@@ -21,6 +22,7 @@ public final class CacheDir {
 
 	public static final String MANIFEST = "manifest.json";
 	public static final String REPORT = "report.json";
+	static final String STAGES = "stages";
 	private static final String POINTER = ".current";
 	/** A cache dir of the layout before generations: the bare key (CacheKey: 24 hex chars); new entries always contain a dot. */
 	private static final java.util.regex.Pattern LEGACY = java.util.regex.Pattern.compile("[0-9a-f]{24}");
@@ -82,7 +84,49 @@ public final class CacheDir {
 				}
 			}
 		}
+		pruneUnusedKeys(root, key);
 		return Files.createTempDirectory(root, key + ".tmp");
+	}
+
+	/** Marks {@code key} as used (a cache hit): {@link #begin} keeps entries used within a week. */
+	public static void touch(Path root, String key) {
+		try {
+			Files.setLastModifiedTime(root.resolve(key + POINTER), FileTime.fromMillis(System.currentTimeMillis()));
+		} catch (IOException ignored) {
+			// not committed (or just pruned): nothing to keep
+		}
+	}
+
+	/**
+	 * Removes whole entries (pointer, generations, leftovers) of other keys whose pointer and current generation are a week
+	 * old: neither committed nor hit since (a hit {@link #touch}es the pointer), so every option change no longer leaves
+	 * a full conversion behind forever. The pointer goes first, so a new reader finds no entry and converts.
+	 * shortcut: a game that resolved an entry and runs more than a week without a reload could still lose its files; upgrade
+	 * by touching the active entry periodically if that ever matters.
+	 */
+	static void pruneUnusedKeys(Path root, String keep) throws IOException {
+		long weekAgo = System.currentTimeMillis() - 7 * 86_400_000L;
+		List<Path> pointers;
+		try (Stream<Path> all = Files.list(root)) {
+			pointers = all.filter(p -> p.getFileName().toString().endsWith(POINTER) && !p.getFileName().toString().equals(keep + POINTER)).toList();
+		}
+		for (Path ptr : pointers) {
+			String key = ptr.getFileName().toString();
+			key = key.substring(0, key.length() - POINTER.length());
+			if (!LEGACY.matcher(key).matches()) continue; // only key-shaped names are touched
+			try {
+				Path live = current(root, key);
+				if (Files.getLastModifiedTime(ptr).toMillis() >= weekAgo || live != null && Files.exists(live) && Files.getLastModifiedTime(live).toMillis() >= weekAgo)
+					continue;
+				Files.delete(ptr);
+				String prefix = key + ".";
+				try (Stream<Path> entry = Files.list(root)) {
+					for (Path p : entry.filter(p -> p.getFileName().toString().startsWith(prefix)).toList()) deleteRecursively(p);
+				}
+			} catch (IOException ignored) {
+				// another process is cleaning up too
+			}
+		}
 	}
 
 	/**
@@ -111,6 +155,60 @@ public final class CacheDir {
 			// begin() removes it and a leftover ptr file a day later
 		}
 		return gen;
+	}
+
+	/**
+	 * The per-stage SPIR-V cache {@code <root>/stages/<CacheKey.stage>.spv}: after an option change only the stages whose
+	 * source changed compile again. A hit renews the file's age; {@link #pruneStages} drops what went unused for a day.
+	 * Null when absent or not a SPIR-V module.
+	 */
+	public static byte[] readStage(Path root, String hash) {
+		Path file = root.resolve(STAGES).resolve(hash + ".spv");
+		try {
+			byte[] spv = Files.readAllBytes(file);
+			if (spv.length < 20 || spv.length % 4 != 0 || spv[0] != 0x03 || spv[1] != 0x02 || spv[2] != 0x23 || spv[3] != 0x07) return null;
+			try {
+				Files.setLastModifiedTime(file, FileTime.fromMillis(System.currentTimeMillis()));
+			} catch (IOException ignored) {
+				// pruned meanwhile: the bytes are read
+			}
+			return spv;
+		} catch (IOException e) {
+			return null;
+		}
+	}
+
+	/** Stores a clean compile; written to a private file and renamed, so a concurrent reader never sees half of it. */
+	public static void writeStage(Path root, String hash, byte[] spv) {
+		Path dir = root.resolve(STAGES), tmp = null;
+		try {
+			Files.createDirectories(dir);
+			tmp = Files.createTempFile(dir, hash, ".tmp");
+			Files.write(tmp, spv);
+			Files.move(tmp, dir.resolve(hash + ".spv"), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+		} catch (IOException e) {
+			try {
+				if (tmp != null) Files.deleteIfExists(tmp);
+			} catch (IOException ignored) {
+				// the day-old rule removes it
+			}
+		}
+	}
+
+	/** Removes per-stage entries (and leftover tmp files) untouched for a day. */
+	public static void pruneStages(Path root) {
+		long dayAgo = System.currentTimeMillis() - 86_400_000L;
+		try (Stream<Path> files = Files.list(root.resolve(STAGES))) {
+			for (Path p : files.toList()) {
+				try {
+					if (Files.getLastModifiedTime(p).toMillis() < dayAgo) Files.delete(p);
+				} catch (IOException ignored) {
+					// another process is cleaning up too
+				}
+			}
+		} catch (IOException ignored) {
+			// no stage cache yet
+		}
 	}
 
 	public static void deleteRecursively(Path dir) throws IOException {

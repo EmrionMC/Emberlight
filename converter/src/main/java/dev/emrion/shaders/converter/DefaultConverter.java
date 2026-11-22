@@ -121,6 +121,7 @@ public final class DefaultConverter implements Converter {
 		}
 		if (report == null || report.diagnostics() == null) return null;
 		if (report.crashed()) return null; // a converter crash may be transient (memory): try again rather than keep it
+		CacheDir.touch(dir.getParent(), key);
 		return new Result(dir, manifest, report.diagnostics(), true, report.stagesCompiled(), report.stagesFailed());
 	}
 
@@ -376,10 +377,17 @@ public final class DefaultConverter implements Converter {
 				if (job.glsl() == null || firsts.putIfAbsent(job.stage() + "\0" + job.glsl(), job) == null) unique.add(job);
 				else copies.add(job);
 			}
+			unique.sort(java.util.Comparator.comparingInt(j -> j.glsl() == null ? 0 : -j.glsl().length())); // biggest first: no long compile starts last
+			String compilerId = request.useCache() ? compiler.cacheId() : null; // null: no per-stage cache
+			if (compilerId != null) CacheDir.pruneStages(request.cacheRoot());
 			java.util.function.Function<StageJob, Callable<StageResult>> compileJob = job -> () -> {
 				try {
 					if (job.glsl() == null) return new StageResult(job, null, List.of());
+					String hash = compilerId == null ? null : CacheKey.stage(compilerId, job.stage().name(), job.glsl());
+					byte[] cached = hash == null ? null : CacheDir.readStage(request.cacheRoot(), hash);
+					if (cached != null) return new StageResult(job, cached, List.of()); // only clean compiles are stored
 					var r = compiler.compile(job.baseName(), job.glsl(), job.stage(), srcLines(job.srcPath(), job.source()));
+					if (hash != null && r.spv() != null && r.diagnostics().isEmpty()) CacheDir.writeStage(request.cacheRoot(), hash, r.spv());
 					return new StageResult(job, r.spv(), r.diagnostics().stream().map(d -> d.in(job.program(), job.stageName())).toList());
 				} catch (RuntimeException e) {
 					crashed = true;

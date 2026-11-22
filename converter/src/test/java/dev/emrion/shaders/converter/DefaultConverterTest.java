@@ -218,6 +218,41 @@ class DefaultConverterTest {
 	}
 
 	@Test
+	void stageCacheSkipsUnchangedStagesAfterASettingsChange() throws Exception {
+		SpirvCompiler cachingCounter = new SpirvCompiler() {
+			public Result compile(String name, String glsl, StageType stage, LineMap lineMap) { return COUNTING.compile(name, glsl, stage, lineMap); }
+			public String cacheId() { return "test"; }
+			public void close() {}
+		};
+		DefaultConverter c = new DefaultConverter(p -> new MemoryPack(), loader, (props, d) -> List.of(), TRANSPILER,
+				(analyses, custom, d) -> new Manifest.UniformLayout("EmrionUniforms", 0, List.of(), custom, null, null),
+				PLANNER, cachingCounter, new Manifest.Environment("26.3", Map.of("MC_VERSION", "260300")), 4);
+		settings = Files.writeString(out.resolve("settings.txt"), "SHADOW_QUALITY=3\n");
+		Path root = out.resolve("cache");
+		var request = new Converter.Request(Path.of("fake.zip"), settings, root, null, null, true);
+		var first = c.convert(request);
+		Path stages = root.resolve("stages");
+		Path old = Files.writeString(stages.resolve("stale.spv"), "x");
+		Files.setLastModifiedTime(old, java.nio.file.attribute.FileTime.fromMillis(System.currentTimeMillis() - 2 * 86_400_000L));
+		try (Stream<Path> files = Files.list(stages)) {
+			Path corrupt = files.filter(f -> !f.equals(old)).findFirst().orElseThrow();
+			Files.write(corrupt, new byte[]{1, 2, 3, 4}); // not SPIR-V: compiled again
+		}
+
+		Files.writeString(settings, "SHADOW_QUALITY=2\n");
+		int before = COMPILES.get();
+		var second = c.convert(request);
+		assertFalse(second.cacheHit());
+		assertEquals(before + 1, COMPILES.get(), "only the damaged entry compiles again");
+		assertEquals(5, second.stagesCompiled());
+		assertFalse(Files.exists(old), "entries unused for a day are pruned");
+		assertArrayEquals(Files.readAllBytes(first.outputDir().resolve("spv/world0/gbuffers_basic.fsh.spv")),
+				Files.readAllBytes(second.outputDir().resolve("spv/world0/gbuffers_basic.fsh.spv")));
+		assertArrayEquals(Files.readAllBytes(first.outputDir().resolve("spv/world0/composite.vsh.spv")),
+				Files.readAllBytes(second.outputDir().resolve("spv/world0/composite.vsh.spv")));
+	}
+
+	@Test
 	void compileErrorsPointAtThePackFile() throws Exception {
 		includeBroken = true;
 		brokenLines = new LineMap() {

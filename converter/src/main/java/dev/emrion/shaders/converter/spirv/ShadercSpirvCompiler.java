@@ -61,6 +61,11 @@ public final class ShadercSpirvCompiler implements SpirvCompiler {
 		}
 	}
 
+	@Override
+	public String cacheId() { // LWJGL pins its shaderc build unless the library is overridden
+		return "shaderc lwjgl " + org.lwjgl.Version.getVersion() + " " + org.lwjgl.system.Configuration.SHADERC_LIBRARY_NAME.get("");
+	}
+
 	static int kind(StageType stage) {
 		return switch (stage) {
 			case VERTEX -> shaderc_glsl_vertex_shader;

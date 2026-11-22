@@ -67,10 +67,10 @@ public final class ConverterCli {
 		if (positional.size() != 3) return usage(out, "expected 3 arguments, got " + positional.size());
 
 		boolean v = verbose;
-		Converter.ProgressListener progress = (stage, done, total) -> {
-			if (v && done == total) out.println("  " + stage + " " + done + "/" + total);
-		};
 		long start = System.nanoTime();
+		Converter.ProgressListener progress = (stage, done, total) -> {
+			if (v && done == total) out.println("  " + stage + " " + done + "/" + total + " at " + (System.nanoTime() - start) / 1_000_000 + " ms");
+		};
 		var result = converter.get().convert(new Converter.Request(Path.of(positional.get(0)),
 				positional.get(1).equals("-") ? null : Path.of(positional.get(1)), Path.of(positional.get(2)),
 				dimensions.isEmpty() ? null : dimensions, progress, useCache, java.util.Set.copyOf(rt)));

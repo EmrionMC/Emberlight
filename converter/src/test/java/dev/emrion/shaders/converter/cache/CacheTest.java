@@ -106,6 +106,32 @@ class CacheTest {
 	}
 
 	@Test
+	void beginRemovesKeysUnusedForAWeek() throws Exception {
+		var m = (java.util.function.Function<String, Manifest>) k -> new Manifest(Manifest.FORMAT_VERSION, "0.1.0", k, null, null, null, null, null, null, null, null, null);
+		String stale = "aaaaaaaaaaaaaaaaaaaaaaaa", hit = "bbbbbbbbbbbbbbbbbbbbbbbb", converting = "cccccccccccccccccccccccc";
+		for (String k : List.of(stale, hit, converting)) {
+			Path tmp = CacheDir.begin(dir, k);
+			ManifestJson.write(tmp.resolve(CacheDir.MANIFEST), m.apply(k));
+			CacheDir.commit(tmp, dir, k);
+		}
+		Path staleGen = CacheDir.current(dir, stale), hitGen = CacheDir.current(dir, hit), convGen = CacheDir.current(dir, converting);
+		var eightDays = java.nio.file.attribute.FileTime.fromMillis(System.currentTimeMillis() - 8 * 86_400_000L);
+		for (Path p : List.of(staleGen, hitGen, convGen, dir.resolve(stale + ".current"), dir.resolve(hit + ".current"), dir.resolve(converting + ".current")))
+			Files.setLastModifiedTime(p, eightDays);
+		Path leftover = Files.writeString(dir.resolve(stale + ".g1.ptr"), "x");
+		CacheDir.touch(dir, hit); // a cache hit today
+
+		Path tmp = CacheDir.begin(dir, converting);
+		assertFalse(Files.exists(dir.resolve(stale + ".current")), "a week unused: the pointer goes");
+		assertFalse(Files.exists(staleGen), "and its generation");
+		assertFalse(Files.exists(leftover), "and its leftovers");
+		assertEquals(hitGen, CacheDir.current(dir, hit), "a recent hit keeps the entry");
+		assertTrue(Files.exists(hitGen));
+		assertEquals(convGen, CacheDir.current(dir, converting), "the key being converted stays");
+		assertTrue(Files.exists(tmp));
+	}
+
+	@Test
 	void beginRemovesDayOldLegacyKeyDirs() throws Exception {
 		var old = java.nio.file.attribute.FileTime.fromMillis(System.currentTimeMillis() - 2 * 86_400_000L);
 		Path stale = Files.createDirectories(dir.resolve("0123456789abcdef01234567")), fresh = Files.createDirectories(dir.resolve("89abcdef0123456789abcdef"));
