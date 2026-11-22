@@ -194,8 +194,8 @@ perf.shadowReceivers=all
 1. Install Fabric (Fabric Loader 0.20.1 or newer and Fabric API) or NeoForge for Minecraft Java 26.3.
 2. Put the Emberlight jar for your loader into `mods/`: `emberlight-fabric-<version>.jar` or
    `emberlight-neoforge-<version>.jar`.
-3. Add **Sodium 0.9.3-beta.5** for the same loader, exactly that version: Emberlight hooks Sodium's internals, which
-   change between betas. If Fabric says *"Incompatible mods found … Emberlight … Sodium"*, your Sodium is the wrong
+3. Add **Sodium 0.9.3** for the same loader, exactly that version: Emberlight hooks Sodium's internals, which
+   change between versions. If Fabric says *"Incompatible mods found … Emberlight … Sodium"*, your Sodium is the wrong
    version; swap Sodium, not Emberlight.
 4. Set *Video Settings → Graphics API* to *Prefer Vulkan* and restart. On OpenGL Emberlight stays inactive and tells you so.
 5. Put shader packs into `shaderpacks/`, press **O** and pick one.
@@ -281,9 +281,8 @@ or bundled in the mod jar. Replace the paragraph below with the real links. -->
 
 ## Credits
 
-- **Complementary Shaders** by EminGT: the ray tracing is built around Complementary Reimagined and Unbound.
-  <!-- TODO: EminGT's answer about the RT integration is still pending. Confirm the permission and adjust this
-  line (e.g. "with EminGT's permission") before publishing, or remove the RT claim for Complementary if he declines. -->
+- **Complementary Shaders** by EminGT: the ray tracing is built around Complementary Reimagined and Unbound, with
+  EminGT's permission. Ray tracing is optional and off by default; without it, Complementary looks as he designed it.
 - **Euphoria Patches** by SpacEagle17: RT integration with his approval.
 - **Iris**, used as the specification for the shader pack format. No Iris code is included apart from Iris's public API
   classes (LGPL-3.0).

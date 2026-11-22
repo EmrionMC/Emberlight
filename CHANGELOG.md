@@ -10,8 +10,8 @@ OptiFine/Iris shaderpacks on Minecraft's **Vulkan** renderer. Expect bugs and ke
 - Minecraft 26.3, Fabric Loader 0.20.1 or newer, Fabric API.
 - Graphics API set to Vulkan (*Options → Video Settings → Graphics API → Prefer Vulkan*). On OpenGL the mod stays inactive
   and says so.
-- Sodium **0.9.3-beta.5** exactly (required). Other Sodium versions are refused at startup on purpose, because the internals
-  Emberlight hooks change between betas.
+- Sodium **0.9.3** exactly (required). Other Sodium versions are refused at startup on purpose, because the internals
+  Emberlight hooks change between versions.
 - Ray tracing: a GPU with `VK_KHR_ray_query`. DLSS: an NVIDIA RTX GPU (frame generation: RTX 40 or newer); NVIDIA's model
   files are downloaded once on request (see below).
 
@@ -35,7 +35,7 @@ OptiFine/Iris shaderpacks on Minecraft's **Vulkan** renderer. Expect bugs and ke
 - Shadow culling that skips casters whose shadow can't land on anything visible (*Performance…* page).
 
 **Sodium**
-- Terrain is meshed and drawn by Sodium 0.9.3-beta.5, as under Iris.
+- Terrain is meshed and drawn by Sodium 0.9.3, as under Iris.
 
 **Hardware ray tracing (off by default)**
 - For Complementary Reimagined / Unbound r5 (including Euphoria Patches), traced with Vulkan ray queries on the RT cores.

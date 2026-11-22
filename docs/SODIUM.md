@@ -1,7 +1,7 @@
 # Emberlight on Sodium
 
-**Decision (2026-11-21): Sodium is required.** `fabric.mod.json` depends on Sodium `>=0.9.3-beta.5` (and breaks newer
-betas), terrain always goes through Sodium's chunk renderer (as under Iris), and the vanilla chunk path was deleted (removed: the SectionCompiler/Indigo/fluid meshing hooks, EMRION_BLOCK, the vanilla RT and shadow section
+**Decision (2026-11-21): Sodium is required.** `fabric.mod.json` depends on Sodium `>=0.9.3` (and breaks newer
+versions), terrain always goes through Sodium's chunk renderer (as under Iris), and the vanilla chunk path was deleted (removed: the SectionCompiler/Indigo/fluid meshing hooks, EMRION_BLOCK, the vanilla RT and shadow section
 paths, ForcedSections, HorizonCull, the converter's terrain_mdi/terrain_ubo variants and its `sodium` request flag).
 `runClient` always loads the Sodium jar from `-PirisModsDir`; `-Psodium` is gone.
 The earlier decision (2026-11-13: both chunk paths supported) is history; the sections below that compare or mention the
@@ -268,10 +268,15 @@ hacked in.
 
 ## 10. Sodium versions
 
-The Sodium integration targets **0.9.3-beta.5+mc26.3** exactly (before that, beta.1).
-`fabric.mod.json` declares `recommends: sodium 0.9.3-beta.5` and `breaks: sodium <0.9.3-beta.5 || >0.9.3-beta.5`. With any
+The Sodium integration targets **0.9.3+mc26.3** (the release) exactly (before that, beta.5 and beta.1).
+`fabric.mod.json` declares `depends: sodium >=0.9.3` and `breaks: sodium >0.9.3`; `neoforge.mods.toml` `[0.9.3,0.9.4)`. With any
 other Sodium, Fabric refuses to start and names the conflict ("Replace mod 'Emberlight' … compatible with sodium
 0.9.3-beta.1", checked in game), instead of crashing in a mixin or at the first frame. Without Sodium nothing changes.
+
+Changes between beta.5 and the release 0.9.3 (`javap` of both jars, Fabric and NeoForge): only `RenderSectionManager.prepareRenderTrees`
+(cull results consumed before deciding on a new cull task), `BufferArena` (debug texture created lazily) and
+`SharedBufferArena` (`close()` refactor). None of our mixin targets, accessors or called methods changed, so the port needed
+only the version pins.
 
 Changes between beta.1 and beta.5 that the port handles (`javap` of both jars, shader sources):
 
