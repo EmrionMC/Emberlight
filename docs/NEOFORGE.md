@@ -51,7 +51,7 @@ can be done later, once no branch from before the split is still open.
 | end of tick | `ClientTickEvents.END_CLIENT_TICK` | `ClientTickEvent.Post` |
 | client tags | `CommonLifecycleEvents.TAGS_LOADED` (client) | `TagsUpdatedEvent.ClientPacketReceived` |
 | mod list | `FabricLoader` | `FMLLoader.getCurrent().getLoadingModList()` (complete during mixin bootstrap) |
-| Sodium pin | `depends >=0.9.3`, `breaks >0.9.3` | `versionRange = "[0.9.3,0.9.4)"` (matches `0.9.3+mc26.3`, not the betas) |
+| Sodium pin | `depends >=0.9.4-beta.2`, `breaks >0.9.4-beta.2` | `versionRange = "[0.9.4-beta.2,0.9.4-beta.3)"` (matches `0.9.4-beta.2+mc26.3` only) |
 | Sodium options | `custom."sodium:options"` | `[mods."sodium:options"]` in the mod entry (where Sodium's `ForgeMixinOverrides` reads it) |
 | mixin configs | `fabric.mod.json` `mixins` | `[[mixins]]` (same four configs) |
 | Iris API copy for other mods | `IrisApiShim` puts `emberlight-irisapi.jar` on the class path | **not provided** (see below) |
@@ -97,7 +97,7 @@ NeoForge dev run (untested):
 
 - `<dir>` (default `neoforge/run-mods/`, untracked) must contain exactly one `sodium-neoforge-*.jar`, plus
   `bbe-neoforge-*.jar` for `-Pbbe`; they are copied into `neoforge/run/mods/`. Download only from Modrinth, e.g.
-  `sodium-neoforge-0.9.3+mc26.3.jar` and `bbe-neoforge-1.4.1+mc26.3.jar`.
+  `sodium-neoforge-0.9.4-beta.2+mc26.3.jar` and `bbe-neoforge-1.4.1+mc26.3.jar`.
 - Run dir: `neoforge/run/`. `--graphicsBackend vulkan` is passed (`-PgraphicsBackend=opengl` to check the inert path).
 - `-Pserver` sets `emrion.autotest.server` and `--username EmbTest` (`-PtestUsername`), as on Fabric.
 - Every `-Demberlight.*` / `-Demrion.*` goes to the game as `emrion.*`; `emrion.autotest.scenes` resolves against `mod/`.
@@ -125,7 +125,7 @@ NeoForge dev run (untested):
 One game at a time, through the test queue: `gamequeue.sh` only knows `:mod:runClient` and needs a NeoForge mode
 (run `:neoforge:runClient` with the same display, server and screenshot handling) before these runs.
 
-1. Build: `./gradlew :neoforge:build`. Put `sodium-neoforge-0.9.3+mc26.3.jar` (and later
+1. Build: `./gradlew :neoforge:build`. Put `sodium-neoforge-0.9.4-beta.2+mc26.3.jar` (and later
    `bbe-neoforge-1.4.1+mc26.3.jar`) into `neoforge/run-mods/`. Link `packs/emberlight-rtx` into `neoforge/run/shaderpacks/`
    and copy `mod/run/config/sodium-options.json` / `options.txt` settings if wanted.
 2. Start: `./gradlew :neoforge:runClient -Pserver=<test server>:25570 -Demrion.pack="Emberlight RTX (Preview)"

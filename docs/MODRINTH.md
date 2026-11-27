@@ -194,7 +194,7 @@ perf.shadowReceivers=all
 1. Install Fabric (Fabric Loader 0.20.1 or newer and Fabric API) or NeoForge for Minecraft Java 26.3.
 2. Put the Emberlight jar for your loader into `mods/`: `emberlight-fabric-<version>.jar` or
    `emberlight-neoforge-<version>.jar`.
-3. Add **Sodium 0.9.3** for the same loader, exactly that version: Emberlight hooks Sodium's internals, which
+3. Add **Sodium 0.9.4-beta.2** for the same loader, exactly that version: Emberlight hooks Sodium's internals, which
    change between versions. If Fabric says *"Incompatible mods found … Emberlight … Sodium"*, your Sodium is the wrong
    version; swap Sodium, not Emberlight.
 4. Set *Video Settings → Graphics API* to *Prefer Vulkan* and restart. On OpenGL Emberlight stays inactive and tells you so.

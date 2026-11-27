@@ -1,6 +1,6 @@
 # Emberlight on Sodium
 
-**Decision (2026-11-21): Sodium is required.** `fabric.mod.json` depends on Sodium `>=0.9.3` (and breaks newer
+**Decision (2026-11-21): Sodium is required.** `fabric.mod.json` depends on Sodium `>=0.9.4-beta.2` (and breaks newer
 versions), terrain always goes through Sodium's chunk renderer (as under Iris), and the vanilla chunk path was deleted (removed: the SectionCompiler/Indigo/fluid meshing hooks, EMRION_BLOCK, the vanilla RT and shadow section
 paths, ForcedSections, HorizonCull, the converter's terrain_mdi/terrain_ubo variants and its `sodium` request flag).
 `runClient` always loads the Sodium jar from `-PirisModsDir`; `-Psodium` is gone.
@@ -268,8 +268,9 @@ hacked in.
 
 ## 10. Sodium versions
 
-The Sodium integration targets **0.9.3+mc26.3** (the release) exactly (before that, beta.5 and beta.1).
-`fabric.mod.json` declares `depends: sodium >=0.9.3` and `breaks: sodium >0.9.3`; `neoforge.mods.toml` `[0.9.3,0.9.4)`. With any
+The Sodium integration targets **0.9.4-beta.2+mc26.3** exactly (before that, the 0.9.3 release, beta.5 and beta.1).
+`fabric.mod.json` declares `depends: sodium >=0.9.4-beta.2` and `breaks: sodium >0.9.4-beta.2`; `neoforge.mods.toml`
+`[0.9.4-beta.2,0.9.4-beta.3)`. With any
 other Sodium, Fabric refuses to start and names the conflict ("Replace mod 'Emberlight' … compatible with sodium
 0.9.3-beta.1", checked in game), instead of crashing in a mixin or at the first frame. Without Sodium nothing changes.
 
@@ -277,6 +278,12 @@ Changes between beta.5 and the release 0.9.3 (`javap` of both jars, Fabric and N
 (cull results consumed before deciding on a new cull task), `BufferArena` (debug texture created lazily) and
 `SharedBufferArena` (`close()` refactor). None of our mixin targets, accessors or called methods changed, so the port needed
 only the version pins.
+
+Changes between 0.9.3 and 0.9.4-beta.2 (`javap` of every Sodium class we reference, Fabric): `ShaderChunkRenderer.createShaderConstants`
+no longer adds `USE_FOG` (Sodium's own terrain shaders always fog now), `CameraTransform` lost an unused constant, plus
+`RemovableMultiForest` (the fix for missing terrain with spherical render distance in fast movement) and some of Sodium's
+own mixins. None of our mixin targets, accessors or called methods changed; only the version pins moved. Checked in game
+(2026-11-27): pack with RT, DLSS and frame generation, vanilla terrain with the pack off, pack reload.
 
 Changes between beta.1 and beta.5 that the port handles (`javap` of both jars, shader sources):
 
