@@ -4,8 +4,7 @@
 
 - Fast movement smears much less with DLSS: on RTX 40/50 cards DLSS now uses preset M instead of NVIDIA's default K for
   Super Resolution (about 3% FPS). Block edges no longer trail onto the sky and clouds while flying. Set
-  `upscale.dlssModel` in `config/emberlight.properties` to `auto` or a preset letter (`k`, `l`, `m`, ...). Windows keeps
-  NVIDIA's default until its DLSS bridge is rebuilt.
+  `upscale.dlssModel` in `config/emberlight.properties` to `auto` or a preset letter (`k`, `l`, `m`, ...).
 - Complementary's volumetric clouds move correctly in the upscalers' motion vectors and no longer smear radially in fast
   flight.
 
