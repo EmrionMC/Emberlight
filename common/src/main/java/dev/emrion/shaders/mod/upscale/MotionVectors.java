@@ -92,7 +92,7 @@ public final class MotionVectors {
 	 * @param behindView depth behind translucents (depthtex1), or depthView
 	 * @param compositionView the upscaler's composition mask (water / other translucents), or 0: then translucents move with
 	 *        their surface (also when RT refraction is off: then the pack shows them unbent)
-	 * @param distanceView a native pack's el_motionDistance (view-ray distance of what a pixel shows, 0 = the depth's), or 0
+	 * @param distanceView a native pack's el_motionDistance or Complementary's cloud distance (view-ray distance of what a pixel shows, 0 = the depth's), or 0
 	 */
 	public boolean dispatch(VkCommandBuffer cb, long depthView, long behindView, long compositionView, long distanceView, Matrix4fc projection,
 			Matrix4fc modelView) {

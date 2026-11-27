@@ -663,7 +663,7 @@ public final class FrameExecutor {
 		hazards.write(rt.upscaled, COMPUTE, STORAGE_WRITE);
 		hazards.flush(cb);
 		rt.upscaler.dispatch(cb, rt.upscaleInput.image, rt.upscaleInput.sampled, rt.upscaleInput.vkFormat, depth.image, depth.sampled, behind.sampled,
-				distance != null ? distance.sampled : 0, uniforms.gbufferModelView(), rt.masks == null ? null
+				distance != null ? distance.sampled : rt.masks != null ? rt.cloudDistance : 0, uniforms.gbufferModelView(), rt.masks == null ? null
 						: new dev.emrion.shaders.mod.upscale.Upscaler.Masks(rt.masks.image, rt.masks.vkFormat, rt.masks.sampled, rt.compositionMask),
 				!rt.upscaler.rayReconstruction() ? null : rt.rrNative != null
 						? new dev.emrion.shaders.mod.upscale.Upscaler.RrInputs(rt.atlasView(), rt.rrNative[2].sampled, rt.rrNative[0].sampled, false,

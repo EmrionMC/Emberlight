@@ -104,9 +104,11 @@ public final class PackRuntime {
 	/** Reactive and transparency/composition masks for the upscaler (views, 0 = none), see {@link #initMasks}. */
 	Img masks;
 	long compositionMask;
-	/** {@link #masks} and its view after the next {@link #swapFlippedTargets} (the same if colortex2 is not swapped). */
+	/** colortex2.b as r: the view-ray distance of the cloud a sky pixel shows (Complementary's upscale patch), 0 = none. */
+	long cloudDistance;
+	/** {@link #masks} and its views after the next {@link #swapFlippedTargets} (the same if colortex2 is not swapped). */
 	private Img otherMasks;
-	private long otherCompositionMask;
+	private long otherCompositionMask, otherCloudDistance;
 	/** DLSS Ray Reconstruction: final's flip state, to look up Complementary's normal and smoothness targets (null: from depth only). */
 	Manifest.FlipState rrFlip;
 	/** A native pack's RR guides (diffuse albedo, specular albedo, normal + roughness), or null. */
@@ -349,6 +351,9 @@ public final class PackRuntime {
 		long cm = compositionMask;
 		compositionMask = otherCompositionMask;
 		otherCompositionMask = cm;
+		long cd = cloudDistance;
+		cloudDistance = otherCloudDistance;
+		otherCloudDistance = cd;
 	}
 
 	/** The cut target, the upscaler and final's set that samples its output instead of the target. */
@@ -390,23 +395,25 @@ public final class PackRuntime {
 		Img masks = read("colortex2", flip);
 		if (masks == null) return;
 		this.masks = otherMasks = masks;
-		compositionMask = otherCompositionMask = compositionView(masks);
+		compositionMask = otherCompositionMask = channelView(masks, VK_COMPONENT_SWIZZLE_G);
+		cloudDistance = otherCloudDistance = channelView(masks, VK_COMPONENT_SWIZZLE_B);
 		if (swapped.contains("colortex2")) { // composite6 writes the other physical image every other frame
 			swapSides();
 			otherMasks = read("colortex2", flip);
 			swapSides();
-			otherCompositionMask = compositionView(otherMasks);
+			otherCompositionMask = channelView(otherMasks, VK_COMPONENT_SWIZZLE_G);
+			otherCloudDistance = channelView(otherMasks, VK_COMPONENT_SWIZZLE_B);
 		}
 		dev.emrion.shaders.mod.EmrionShadersClient.LOG.info("Upscaling masks from colortex2 (reactive r, transparency/composition g)");
 	}
 
-	private long compositionView(Img masks) {
+	private long channelView(Img masks, int channel) {
 		try (org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
 			var info = org.lwjgl.vulkan.VkImageViewCreateInfo.calloc(stack).sType$Default().image(masks.image).viewType(VK_IMAGE_VIEW_TYPE_2D).format(masks.vkFormat);
-			info.components().r(VK_COMPONENT_SWIZZLE_G).g(VK_COMPONENT_SWIZZLE_G).b(VK_COMPONENT_SWIZZLE_G).a(VK_COMPONENT_SWIZZLE_G);
+			info.components().r(channel).g(channel).b(channel).a(channel);
 			info.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).levelCount(1).layerCount(1);
 			var p = stack.mallocLong(1);
-			if (vkCreateImageView(ctx.vk, info, null, p) != VK_SUCCESS) throw new IllegalStateException("vkCreateImageView composition mask");
+			if (vkCreateImageView(ctx.vk, info, null, p) != VK_SUCCESS) throw new IllegalStateException("vkCreateImageView upscaler mask channel");
 			return p.get(0);
 		}
 	}
@@ -727,6 +734,9 @@ public final class PackRuntime {
 		long cm = compositionMask, ocm = otherCompositionMask;
 		if (cm != 0) ctx.destroyLater(() -> vkDestroyImageView(ctx.vk, cm, null));
 		if (ocm != 0 && ocm != cm) ctx.destroyLater(() -> vkDestroyImageView(ctx.vk, ocm, null));
+		long cd = cloudDistance, ocd = otherCloudDistance;
+		if (cd != 0) ctx.destroyLater(() -> vkDestroyImageView(ctx.vk, cd, null));
+		if (ocd != 0 && ocd != cd) ctx.destroyLater(() -> vkDestroyImageView(ctx.vk, ocd, null));
 		for (Img[] sides : images.values()) for (Img img : sides) if (img != null) release(img);
 		buffers.values().forEach(b -> b.buffer.destroyLater());
 		// the textures in sh stay for the next runtime: releaseShared()

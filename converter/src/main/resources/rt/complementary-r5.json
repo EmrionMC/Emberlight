@@ -387,12 +387,12 @@
       "library": false,
       "patches": [
         {"function": "vec2 TAAJitter(vec2,float)", "body": "rt/complementary/upscale_jitter.glsl", "bare": true},
-        {"function": "void DoTAA(inout vec3,inout vec3,float)", "body": "rt/complementary/upscale_masks.glsl", "needs": ["texelCoord", "colortex6", "depthtex0"]},
+        {"function": "void DoTAA(inout vec3,inout vec3,float)", "body": "rt/complementary/upscale_masks.glsl", "needs": ["texelCoord", "colortex6", "depthtex0", "colortex5", "viewWidth", "viewHeight", "renderDistance"]},
         {"function": "void FXAA311(inout vec3)", "body": "rt/complementary/upscale_off.glsl", "bare": true},
         {"function": "float InterleavedGradientNoiseForShadows()", "body": "rt/complementary/upscale_shadow_noise.glsl", "bare": true, "optional": true,
          "programs": ["gbuffers_entities", "gbuffers_entities_glowing", "gbuffers_entities_translucent", "gbuffers_hand", "gbuffers_hand_water"]},
         {"function": "vec3 SampleTAAFilteredShadow(vec3,float,int,bool,float,float)", "body": "rt/complementary/upscale_shadow_taa.glsl", "bare": true, "optional": true,
-         "needs": ["viewWidth", "viewHeight", "gbufferProjectionInverse", "gbufferModelViewInverse", "gbufferPreviousProjection", "gbufferPreviousModelView", "cameraPosition", "previousCameraPosition"],
+         "needs": ["viewWidth", "viewHeight", "gbufferProjectionInverse", "gbufferModelViewInverse", "gbufferPreviousProjection", "gbufferPreviousModelView"],
          "find": "for (int i = 0; i < shadowSamples; i++)", "statements": 1}
       ],
       "lifts": {

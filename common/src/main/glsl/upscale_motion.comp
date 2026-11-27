@@ -6,7 +6,7 @@ layout(set = 0, binding = 0) uniform sampler2D depthTex;
 layout(set = 0, binding = 1, rg16f) uniform writeonly image2D motion;
 layout(set = 0, binding = 2) uniform sampler2D behindTex; // depth behind translucents (depthtex1)
 layout(set = 0, binding = 3) uniform sampler2D compositionTex; // upscaler composition mask (r: 0.75 water, 0.45 other translucents)
-layout(set = 0, binding = 5) uniform sampler2D distanceTex; // the pack's el_motionDistance (0: use the depth)
+layout(set = 0, binding = 5) uniform sampler2D distanceTex; // the pack's el_motionDistance or Complementary's cloud distance (0: use the depth)
 layout(std140, set = 0, binding = 4) uniform Reprojection { // a UBO: 160 bytes is over the 128 bytes of push constants Vulkan guarantees
 	mat4 toPrev;    // current NDC -> previous clip (unjittered), including the camera translation
 	mat4 toPrevSky; // the same without the translation, for the sky (depth 1 = at infinity)
@@ -31,7 +31,6 @@ void main() {
 	// glass (a slab) at the depth behind; water on the view ray at path-in-water * eta past the surface (refraction.glsl traces
 	// the apparent-depth image: the world behind scaled by eta along the surface normal; eta 1/1.333 from above, 1.333 below).
 	float behind = texelFetch(behindTex, p, 0).r;
-	bool sky = depth >= 1.0;
 	// A mirror shows its reflected image, which sits behind it at the reflection's path length along the view ray: that is
 	// what moves (with the mirror's own motion DLSS smeared the image while walking, FSR rejected the history). The pack
 	// wrote the distance before its translucents: not where one covers the mirror
@@ -54,6 +53,7 @@ void main() {
 			}
 		} else if (c > 0.4 && pc.surface.w > 0.0) depth = behind; // refraction:glass=0: the pack's unbent glass moves with its surface
 	}
+	bool sky = depth >= 1.0; // after the distance: Complementary's clouds (a sky pixel with a distance) move with the translation
 	vec2 mv = vec2(0.0);
 	if (depth >= 0.56) { // below: Iris's hand depth range, it moves with the camera
 		// the depth was rasterised jittered: the surface at this pixel centre is at the unjittered NDC minus the jitter
