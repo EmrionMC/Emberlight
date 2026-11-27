@@ -41,7 +41,7 @@ public final class Dlss {
 	/** Why the last DLSS feature creation failed (VRAM full, ...); cleared by a settings change, so it is retried once then. */
 	private static volatile String createFailure;
 	private static SymbolLookup lib;
-	static MethodHandle init, available, create, evaluate, evaluateMask, release, log, rrAvailable, rrCreate, rrEvaluate;
+	static MethodHandle init, available, create, evaluate, evaluateMask, release, log, rrAvailable, rrCreate, rrEvaluate, setPreset;
 	/** Why Ray Reconstruction cannot run (null = not known to fail); cleared by a settings change like {@link #createFailure}. */
 	private static volatile String rrFailure;
 	/** NGX's answer whether this GPU/driver supports RR: null = not asked yet, "" = yes, else why not (never cleared). */
@@ -197,6 +197,8 @@ public final class Dlss {
 					ValueLayout.ADDRESS))).orElse(null);
 			rrEvaluate = lib.find("emrion_ngx_rr_evaluate").map(a -> LINKER.downcallHandle(a, FunctionDescriptor.of(INT, PTR, PTR, ValueLayout.ADDRESS,
 					ValueLayout.ADDRESS, INT, INT, INT, INT, FLOAT, FLOAT, FLOAT, FLOAT, INT, FLOAT, INT, ValueLayout.ADDRESS))).orElse(null);
+			// shims built before the preset choice lack it: NGX then picks the preset
+			setPreset = lib.find("emrion_ngx_set_preset").map(a -> LINKER.downcallHandle(a, FunctionDescriptor.ofVoid(INT))).orElse(null);
 			log = lib.find("emrion_ngx_log").map(a -> LINKER.downcallHandle(a, FunctionDescriptor.ofVoid(ValueLayout.ADDRESS, INT))).orElse(null);
 		}
 		return lib;

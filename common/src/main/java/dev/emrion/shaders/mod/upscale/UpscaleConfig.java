@@ -37,11 +37,16 @@ public final class UpscaleConfig {
 	public static volatile float sharpness = 0.5f;
 	/** DLSS Ray Reconstruction instead of DLSS Super Resolution (docs/UPSCALING.md §11); only with DLSS and RT on. */
 	public static volatile boolean rayReconstruction;
+	/** DLSS SR render preset: "auto" or a letter (K, L, M, ...). Auto = M on RTX 40/50 (FP8): in fast flight it trailed far less
+	 * than NGX's default K (block edges smearing onto sky and clouds), for about 0.2 ms on a 4070 Ti; NGX's default elsewhere,
+	 * where M costs more. */
+	public static volatile String dlssModel = "auto";
 
 	public static void load(Properties p) {
 		mode = parse(Mode.class, get(p, "mode", "off"), Mode.OFF);
 		preset = parse(Preset.class, get(p, "preset", "quality"), Preset.QUALITY);
 		rayReconstruction = Boolean.parseBoolean(get(p, "rr", "false").trim());
+		dlssModel = get(p, "dlssModel", "auto").trim().toLowerCase(Locale.ROOT);
 		try {
 			sharpness = Math.clamp(Float.parseFloat(get(p, "sharpness", "0.5").trim()), 0f, 1f);
 		} catch (NumberFormatException e) {
@@ -54,6 +59,16 @@ public final class UpscaleConfig {
 		p.setProperty("upscale.preset", preset.name().toLowerCase(Locale.ROOT));
 		p.setProperty("upscale.sharpness", Float.toString(sharpness));
 		p.setProperty("upscale.rr", Boolean.toString(rayReconstruction));
+		p.setProperty("upscale.dlssModel", dlssModel);
+	}
+
+	/** {@link #dlssModel} as NGX's render preset number (A = 1 ... Z = 26), 0 = NGX's default. */
+	public static int dlssPreset() {
+		String m = dlssModel;
+		if (m.length() == 1 && m.charAt(0) >= 'a' && m.charAt(0) <= 'z') return m.charAt(0) - 'a' + 1;
+		if (!m.equals("auto")) return 0;
+		String gpu = com.mojang.blaze3d.systems.RenderSystem.getDevice().getDeviceInfo().name();
+		return gpu.matches("(?i).*\\bRTX (PRO )?[45]0\\d\\d\\b.*|.*\\bRTX PRO \\d+ Blackwell\\b.*|.*\\bRTX \\d+ Ada\\b.*") ? 'm' - 'a' + 1 : 0;
 	}
 
 	/** The mode that really runs: DLSS or XeSS falls back to FSR (same render size and conversion, so no reload). */

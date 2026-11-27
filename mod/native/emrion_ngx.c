@@ -109,6 +109,13 @@ EXPORT int emrion_ngx_available(int *needsDriver) {
 }
 
 /* perfQuality: NVSDK_NGX_PerfQuality_Value; flags: NVSDK_NGX_DLSS_Feature_Flags. Records into cb. */
+static unsigned dlssPreset; /* NVSDK_NGX_DLSS_Hint_Render_Preset_*, 0 = NGX's default for the title */
+
+/* The render preset (A = 1 ... M = 13) for DLSS SR features created from now on; 0 = NGX's default. */
+EXPORT void emrion_ngx_set_preset(unsigned preset) {
+	dlssPreset = preset;
+}
+
 EXPORT int emrion_ngx_create(VkCommandBuffer cb, unsigned rw, unsigned rh, unsigned dw, unsigned dh, int perfQuality, int flags, void **handle) {
 	NVSDK_NGX_DLSS_Create_Params create;
 	memset(&create, 0, sizeof create);
@@ -118,6 +125,15 @@ EXPORT int emrion_ngx_create(VkCommandBuffer cb, unsigned rw, unsigned rh, unsig
 	create.Feature.InTargetHeight = dh;
 	create.Feature.InPerfQualityValue = (NVSDK_NGX_PerfQuality_Value) perfQuality;
 	create.InFeatureCreateFlags = flags;
+	/* EMRION_DLSS_PRESET=K|L|M...: overrides the preset for A/B tests. Always set: the parameters outlive a feature */
+	const char *env = getenv("EMRION_DLSS_PRESET");
+	unsigned v = env && env[0] >= 'A' && env[0] <= 'Z' ? (unsigned) (env[0] - 'A' + 1) : dlssPreset;
+	NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA, v);
+	NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality, v);
+	NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Balanced, v);
+	NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance, v);
+	NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance, v);
+	NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraQuality, v);
 	return (int) NGX_VULKAN_CREATE_DLSS_EXT(cb, 1, 1, (NVSDK_NGX_Handle **) handle, params, &create);
 }
 

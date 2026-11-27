@@ -55,6 +55,7 @@ final class DlssUpscaler extends Upscaler {
 			guides = rayReconstruction ? new RrGuides(ctx, rw, rh) : null;
 			MemorySegment out = arena.allocate(ValueLayout.ADDRESS);
 			VkCommandBuffer cb = RawCommands.begin(ctx);
+			if (!rayReconstruction && Dlss.setPreset != null) Dlss.setPreset.invokeExact(UpscaleConfig.dlssPreset());
 			int r = Dlss.onBigStack(() -> (int) (rayReconstruction ? Dlss.rrCreate : Dlss.create).invokeExact(cb.address(), rw, rh, dw, dh, quality,
 					FLAG_MV_LOW_RES, out));
 			RawCommands.submit(ctx, cb);
