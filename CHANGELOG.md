@@ -7,6 +7,12 @@
   `upscale.dlssModel` in `config/emberlight.properties` to `auto` or a preset letter (`k`, `l`, `m`, ...).
 - Complementary's volumetric clouds move correctly in the upscalers' motion vectors and no longer smear radially in fast
   flight.
+- The F3 screen shows Emberlight's state: version and pack, ray tracing (running effects, scene size), upscaler with render
+  and display size, frame generation and Reflex. Only what really runs shows as on. Works with vanilla F3, NeoForge and
+  BetterF3 (Misc module).
+- With frame generation the F3 FPS line counts the presented frames and the generated ones, e.g.
+  `207 fps (104 generated)`, also in BetterF3.
+- The FPS counter moved into the F7 overlay; there is no permanent counter in the corner any more.
 
 ## 0.1.0-alpha.1
 
