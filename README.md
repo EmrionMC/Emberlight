@@ -37,12 +37,12 @@ that it renders through Minecraft's own Vulkan backend, with every pipeline buil
 ## Installation
 
 1. Install Fabric Loader and Fabric API for Minecraft 26.3.
-2. Put `emberlight-fabric-0.1.0-alpha.2.jar` into `mods/`.
+2. Put `emberlight-fabric-0.1.0-alpha.3.jar` into `mods/`.
 3. Put Sodium `sodium-fabric-0.9.4-beta.2+mc26.3.jar` ([Modrinth](https://modrinth.com/mod/sodium)) into `mods/` too:
    terrain is meshed and drawn by Sodium, as under Iris. Without it Fabric refuses to start and names the missing mod. If
    Fabric says *"Incompatible mods found … Emberlight … Sodium"*, your Sodium is the wrong version: switch to 0.9.4-beta.2.
    Don't remove Emberlight; Fabric's suggestion is misleading here.
-   On NeoForge instead: `emberlight-neoforge-0.1.0-alpha.2.jar` and Sodium's NeoForge build
+   On NeoForge instead: `emberlight-neoforge-0.1.0-alpha.3.jar` and Sodium's NeoForge build
    (`sodium-neoforge-0.9.4-beta.2+mc26.3.jar`).
 4. Set the graphics API to Vulkan (see above) and restart.
 5. Put shaderpacks (zip or folder) into `shaderpacks/`, as for Iris. Iris settings files (`<pack>.txt`) next to them are

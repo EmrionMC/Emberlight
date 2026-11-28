@@ -1,12 +1,15 @@
 # Changelog
 
+## 0.1.0-alpha.3
+
+- Sodium **0.9.4-beta.2** exactly (required, was 0.9.3). It fixes missing terrain with spherical render distance when
+  moving very fast.
+
 ## 0.1.0-alpha.2
 
 - Fast movement smears much less with DLSS: on RTX 40/50 cards DLSS now uses preset M instead of NVIDIA's default K for
   Super Resolution (about 3% FPS). Block edges no longer trail onto the sky and clouds while flying. Set
   `upscale.dlssModel` in `config/emberlight.properties` to `auto` or a preset letter (`k`, `l`, `m`, ...).
-- Sodium **0.9.4-beta.2** exactly (required, was 0.9.3). It fixes missing terrain with spherical render distance when
-  moving very fast.
 - Complementary's volumetric clouds move correctly in the upscalers' motion vectors and no longer smear radially in fast
   flight.
 - The F3 screen shows Emberlight's state: version and pack, ray tracing (running effects, scene size), upscaler with render
